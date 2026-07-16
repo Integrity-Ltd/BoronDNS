@@ -300,7 +300,7 @@ run_case rrtype65535 65535 reserved "$reserved_error"
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-URR-009	retained-runtime	rrtype0; opt; tkey; tsig; ixfr; axfr; mailb; maila; any; rrtype65535	unknown-rr-bad-transfer-summary.tsv; cases/*/borondns.log; cases/*/metrics.txt; cases/*/readyz.txt	Each prohibited pseudo/meta/reserved RR type in SRS v0.9.1 URR-009 is injected into an initial AXFR; BoronDNS logs the AXFR validation failure, increments the AXFR failed counter, remains not-ready, and exposes zero active zones.
+BDS-FR-URR-009	retained-runtime	rrtype0; opt; tkey; tsig; ixfr; axfr; mailb; maila; any; rrtype65535	unknown-rr-bad-transfer-summary.tsv; cases/*/borondns.log; cases/*/metrics.txt; cases/*/readyz.txt	Each prohibited pseudo/meta/reserved RR type in SRS v0.9.1 URR-009 is injected into an initial AXFR; BoronDNS logs the AXFR validation failure, increments the AXFR failed counter, remains not-ready, and exposes zero active zones.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

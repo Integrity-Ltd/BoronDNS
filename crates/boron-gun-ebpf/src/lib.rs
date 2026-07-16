@@ -38,7 +38,7 @@ static DROPPED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 static REPLY_REDIRECT_CONFIG: Array<ReplyRedirectConfig> = Array::with_max_entries(1, 0);
 
 #[map]
-static OXIDE_GUN_XSKS: XskMap = XskMap::with_max_entries(128, 0);
+static BORON_GUN_XSKS: XskMap = XskMap::with_max_entries(128, 0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -84,14 +84,14 @@ struct UdpHdr {
 }
 
 #[xdp]
-pub fn oxide_gun_reply_redirect(ctx: XdpContext) -> u32 {
-    match try_oxide_gun_reply_redirect(&ctx) {
+pub fn boron_gun_reply_redirect(ctx: XdpContext) -> u32 {
+    match try_boron_gun_reply_redirect(&ctx) {
         Ok(action) => action,
         Err(()) => xdp_action::XDP_PASS,
     }
 }
 
-fn try_oxide_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
+fn try_boron_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     let udp_offset = udp_offset(ctx)?;
     let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
     let Some(config) = REPLY_REDIRECT_CONFIG.get(0) else {
@@ -109,20 +109,20 @@ fn try_oxide_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     }
 
     let queue_id = rx_queue_index(&ctx);
-    Ok(OXIDE_GUN_XSKS
+    Ok(BORON_GUN_XSKS
         .redirect(queue_id, xdp_action::XDP_PASS as u64)
         .unwrap_or(xdp_action::XDP_PASS))
 }
 
 #[xdp]
-pub fn oxide_gun_drop(ctx: XdpContext) -> u32 {
-    match try_oxide_gun_drop(&ctx) {
+pub fn boron_gun_drop(ctx: XdpContext) -> u32 {
+    match try_boron_gun_drop(&ctx) {
         Ok(action) => action,
         Err(()) => xdp_action::XDP_PASS,
     }
 }
 
-fn try_oxide_gun_drop(ctx: &XdpContext) -> Result<u32, ()> {
+fn try_boron_gun_drop(ctx: &XdpContext) -> Result<u32, ()> {
     let ip_offset = mem::size_of::<EthHdr>();
     let eth = read_at::<EthHdr>(ctx, 0)?;
     if u16::from_be(eth.eth_proto) != 0x0800 {

@@ -143,11 +143,11 @@ fi
 
 {
     printf 'requirement_id\tevidence_state\tartifact\treview_note\n'
-    printf 'ODS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; borondns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
-    printf 'ODS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; borondns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
-    printf 'ODS-NFR-PORT-003\tinventory\tcontainer-runtime-inventory.tsv\tOCI runtime availability is inventoried for the release host; runtime/container deployment tests remain separate artifacts.\n'
-    printf 'ODS-NFR-PORT-004\tcurrent-host-runtime\tnetwork-probes.tsv\tCurrent host IPv4/IPv6 TCP and UDP loopback capability is probed; full per-operation dual-stack tests remain acceptance work.\n'
-    printf 'ODS-NFR-PORT-005\tstatic-audit\tinit-package-runtime-scan.txt\tFirst-party runtime/config source is scanned for init-system, package-manager, and distribution-layout coupling.\n'
+    printf 'BDS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; borondns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
+    printf 'BDS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; borondns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
+    printf 'BDS-NFR-PORT-003\tinventory\tcontainer-runtime-inventory.tsv\tOCI runtime availability is inventoried for the release host; runtime/container deployment tests remain separate artifacts.\n'
+    printf 'BDS-NFR-PORT-004\tcurrent-host-runtime\tnetwork-probes.tsv\tCurrent host IPv4/IPv6 TCP and UDP loopback capability is probed; full per-operation dual-stack tests remain acceptance work.\n'
+    printf 'BDS-NFR-PORT-005\tstatic-audit\tinit-package-runtime-scan.txt\tFirst-party runtime/config source is scanned for init-system, package-manager, and distribution-layout coupling.\n'
 } >"$artifact_dir/portability-traceability.tsv"
 
 printf 'portability_evidence_dir=%s\n' "$artifact_dir"

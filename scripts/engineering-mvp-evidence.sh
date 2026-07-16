@@ -36,7 +36,7 @@ cat >"$snapshot_dir/README.md" <<EOF
 - Per-command timeout: ${command_timeout_seconds}s
 
 This snapshot captures the narrow Engineering MVP evidence profile. It is not
-the full SRS ODS-VER-008 acceptance matrix.
+the full SRS BDS-VER-008 acceptance matrix.
 
 The default profile runs only bounded local Engineering MVP evidence commands:
 security-policy, CLI, log, signal, health/metrics, malformed-query,

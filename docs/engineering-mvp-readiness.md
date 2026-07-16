@@ -2,7 +2,7 @@
 
 This document is the review entry point for the current release candidate. It
 summarizes the evidence that must be current before calling the release
-candidate ready, while keeping full SRS `ODS-VER-008` acceptance separate.
+candidate ready, while keeping full SRS `BDS-VER-008` acceptance separate.
 
 ## Readiness Criteria
 
@@ -40,7 +40,7 @@ instead of executing them.
 
 ## Explicit Non-Goals
 
-Release-candidate readiness is not full SRS `ODS-VER-008` release acceptance.
+Release-candidate readiness is not full SRS `BDS-VER-008` release acceptance.
 It does not claim completed 30-day soak execution, signed release artifact
 production, package/image reproducibility, external independent-builder
 sign-off, or external operator acceptance until those artifacts exist. The

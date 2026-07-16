@@ -10,19 +10,19 @@ running `scripts/check-release-notes.sh`.
 - Release date UTC: TBD
 - Evidence snapshot: TBD
 - Release artifacts: installer `.tar.xz`, static `borondns` binary, static
-  XDP-enabled `oxide-gun` binary, Alpine Docker image `.tar.xz`, CycloneDX
+  XDP-enabled `boron-gun` binary, Alpine Docker image `.tar.xz`, CycloneDX
   SBOMs for the binaries and Docker image, SBOM manifest, and SHA256 sidecars.
 
 ## Verification Summary
 
 | Requirement category | Verified | Deferred | Failed |
 | --- | ---: | ---: | ---: |
-| ODS-FR | TBD | TBD | TBD |
-| ODS-NFR | TBD | TBD | TBD |
-| ODS-IF | TBD | TBD | TBD |
-| ODS-INV | TBD | TBD | TBD |
-| ODS-NEG | TBD | TBD | TBD |
-| ODS-VER | TBD | TBD | TBD |
+| BDS-FR | TBD | TBD | TBD |
+| BDS-NFR | TBD | TBD | TBD |
+| BDS-IF | TBD | TBD | TBD |
+| BDS-INV | TBD | TBD | TBD |
+| BDS-NEG | TBD | TBD | TBD |
+| BDS-VER | TBD | TBD | TBD |
 
 ## Regression Delta
 
@@ -52,7 +52,7 @@ evidence snapshot.
 
 ## Failed Requirement Decisions
 
-If any ODS-FR, ODS-NFR, ODS-IF, ODS-INV, or ODS-NEG requirement is Failed,
+If any BDS-FR, BDS-NFR, BDS-IF, BDS-INV, or BDS-NEG requirement is Failed,
 record the explicit project decision, rationale, owner, and target remediation
 release here. If none failed, write `No Failed release-blocking requirements`.
 

@@ -2,25 +2,25 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out_dir="${OXIDE_GUN_PREFLIGHT_DIR:-$repo_root/target/oxide-gun-xdp-lab-preflight/$(date -u +%Y%m%dT%H%M%SZ)}"
+out_dir="${BORON_GUN_PREFLIGHT_DIR:-$repo_root/target/boron-gun-xdp-lab-preflight/$(date -u +%Y%m%dT%H%M%SZ)}"
 
 usage() {
     cat >&2 <<'EOF'
 Usage:
-  OXIDE_GUN_INTERFACE=ens6f0 scripts/oxide-gun-xdp-lab-preflight.sh
+  BORON_GUN_INTERFACE=ens6f0 scripts/boron-gun-xdp-lab-preflight.sh
 
 Optional environment:
-  OXIDE_GUN_TARGET                 target socket, recorded when set
-  OXIDE_GUN_TARGET_MAC             target MAC, warning when unset
-  OXIDE_GUN_SOURCE_MAC             source MAC, warning when it does not match interface MAC
-  OXIDE_GUN_TX_QUEUE               default 0
-  OXIDE_GUN_RX_QUEUE               default 0
-  OXIDE_GUN_XDP_MODE               default drv
-  OXIDE_GUN_XDP_ZEROCOPY           default auto
-  OXIDE_GUN_XDP_DROP_OBJECT        optional compiled eBPF drop object path
-  OXIDE_GUN_ALLOW_DEFAULT_ROUTE    allow default-route interface, default 0
-  OXIDE_GUN_REQUIRE_PHYSICAL       require physical-interface evidence, default 0
-  OXIDE_GUN_PREFLIGHT_DIR          evidence output directory
+  BORON_GUN_TARGET                 target socket, recorded when set
+  BORON_GUN_TARGET_MAC             target MAC, warning when unset
+  BORON_GUN_SOURCE_MAC             source MAC, warning when it does not match interface MAC
+  BORON_GUN_TX_QUEUE               default 0
+  BORON_GUN_RX_QUEUE               default 0
+  BORON_GUN_XDP_MODE               default drv
+  BORON_GUN_XDP_ZEROCOPY           default auto
+  BORON_GUN_XDP_DROP_OBJECT        optional compiled eBPF drop object path
+  BORON_GUN_ALLOW_DEFAULT_ROUTE    allow default-route interface, default 0
+  BORON_GUN_REQUIRE_PHYSICAL       require physical-interface evidence, default 0
+  BORON_GUN_PREFLIGHT_DIR          evidence output directory
 EOF
 }
 
@@ -33,13 +33,13 @@ require_env() {
     fi
 }
 
-require_env OXIDE_GUN_INTERFACE
+require_env BORON_GUN_INTERFACE
 
-interface="$OXIDE_GUN_INTERFACE"
-tx_queue="${OXIDE_GUN_TX_QUEUE:-0}"
-rx_queue="${OXIDE_GUN_RX_QUEUE:-0}"
-xdp_mode="${OXIDE_GUN_XDP_MODE:-drv}"
-xdp_zerocopy="${OXIDE_GUN_XDP_ZEROCOPY:-auto}"
+interface="$BORON_GUN_INTERFACE"
+tx_queue="${BORON_GUN_TX_QUEUE:-0}"
+rx_queue="${BORON_GUN_RX_QUEUE:-0}"
+xdp_mode="${BORON_GUN_XDP_MODE:-drv}"
+xdp_zerocopy="${BORON_GUN_XDP_ZEROCOPY:-auto}"
 
 command -v ip >/dev/null
 command -v python3 >/dev/null
@@ -73,16 +73,16 @@ fi
     printf 'utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'repo=%s\n' "$repo_root"
     printf 'interface=%s\n' "$interface"
-    printf 'target=%s\n' "${OXIDE_GUN_TARGET:-}"
-    printf 'target_mac=%s\n' "${OXIDE_GUN_TARGET_MAC:-}"
-    printf 'source_mac=%s\n' "${OXIDE_GUN_SOURCE_MAC:-}"
+    printf 'target=%s\n' "${BORON_GUN_TARGET:-}"
+    printf 'target_mac=%s\n' "${BORON_GUN_TARGET_MAC:-}"
+    printf 'source_mac=%s\n' "${BORON_GUN_SOURCE_MAC:-}"
     printf 'tx_queue=%s\n' "$tx_queue"
     printf 'rx_queue=%s\n' "$rx_queue"
     printf 'xdp_mode=%s\n' "$xdp_mode"
     printf 'xdp_zerocopy=%s\n' "$xdp_zerocopy"
-    printf 'xdp_drop_object=%s\n' "${OXIDE_GUN_XDP_DROP_OBJECT:-}"
-    printf 'allow_default_route=%s\n' "${OXIDE_GUN_ALLOW_DEFAULT_ROUTE:-0}"
-    printf 'require_physical=%s\n' "${OXIDE_GUN_REQUIRE_PHYSICAL:-0}"
+    printf 'xdp_drop_object=%s\n' "${BORON_GUN_XDP_DROP_OBJECT:-}"
+    printf 'allow_default_route=%s\n' "${BORON_GUN_ALLOW_DEFAULT_ROUTE:-0}"
+    printf 'require_physical=%s\n' "${BORON_GUN_REQUIRE_PHYSICAL:-0}"
     printf 'uid=%s\n' "$(id -u)"
     printf 'nproc=%s\n' "$(nproc 2>/dev/null || printf unknown)"
     uname -a
@@ -133,28 +133,28 @@ if link_type == "loopback":
     errors.append("loopback is not valid dedicated-interface XDP lab evidence")
 
 routes = read("ip-route.out")
-if os.environ.get("OXIDE_GUN_ALLOW_DEFAULT_ROUTE", "0") != "1":
+if os.environ.get("BORON_GUN_ALLOW_DEFAULT_ROUTE", "0") != "1":
     default_routes = [
         line for line in routes.splitlines()
         if line.split(maxsplit=1)[0:1] == ["default"]
     ]
     if default_routes:
         errors.append(
-            "interface has a default route; set OXIDE_GUN_ALLOW_DEFAULT_ROUTE=1 "
+            "interface has a default route; set BORON_GUN_ALLOW_DEFAULT_ROUTE=1 "
             "only for an intentionally isolated lab host"
         )
 
-source_mac = os.environ.get("OXIDE_GUN_SOURCE_MAC", "").lower()
+source_mac = os.environ.get("BORON_GUN_SOURCE_MAC", "").lower()
 iface_mac = str(link.get("address", "")).lower()
 if source_mac and iface_mac and source_mac != iface_mac:
     warnings.append(
         f"source MAC {source_mac} does not match interface MAC {iface_mac}; "
         "this is valid only when intentionally spoofing"
     )
-if not os.environ.get("OXIDE_GUN_TARGET_MAC"):
-    warnings.append("OXIDE_GUN_TARGET_MAC is unset; lab runner requires an explicit target MAC")
+if not os.environ.get("BORON_GUN_TARGET_MAC"):
+    warnings.append("BORON_GUN_TARGET_MAC is unset; lab runner requires an explicit target MAC")
 
-drop_object = os.environ.get("OXIDE_GUN_XDP_DROP_OBJECT", "")
+drop_object = os.environ.get("BORON_GUN_XDP_DROP_OBJECT", "")
 if drop_object and not os.path.isfile(drop_object):
     errors.append(f"XDP drop object does not exist: {drop_object}")
 
@@ -185,7 +185,7 @@ else:
 
 features = read("ethtool-features.out")
 if "tx-checksumming: off" in features:
-    warnings.append("TX checksum offload is disabled; OxideGun computes UDP checksums in software")
+    warnings.append("TX checksum offload is disabled; BoronGun computes UDP checksums in software")
 
 driver = read("ethtool-driver.out")
 driver_name = None
@@ -227,7 +227,7 @@ is_virtual_lab = (
     or link_kind in virtual_kinds
     or driver_name in {"veth", "tun", "dummy", "bridge"}
 )
-if os.environ.get("OXIDE_GUN_REQUIRE_PHYSICAL", "0") == "1" and is_virtual_lab:
+if os.environ.get("BORON_GUN_REQUIRE_PHYSICAL", "0") == "1" and is_virtual_lab:
     errors.append(
         "physical-interface evidence was required, but this interface appears "
         f"virtual: link_type={link_type!r} link_kind={link_kind!r} driver={driver_name!r}"
@@ -251,8 +251,8 @@ summary = {
     "queue_limit": queue_limit,
     "tx_queue": tx_queue,
     "rx_queue": rx_queue,
-    "xdp_mode": os.environ.get("OXIDE_GUN_XDP_MODE", "drv"),
-    "xdp_zerocopy": os.environ.get("OXIDE_GUN_XDP_ZEROCOPY", "auto"),
+    "xdp_mode": os.environ.get("BORON_GUN_XDP_MODE", "drv"),
+    "xdp_zerocopy": os.environ.get("BORON_GUN_XDP_ZEROCOPY", "auto"),
     "errors": errors,
     "warnings": warnings,
 }
@@ -265,4 +265,4 @@ if errors:
     raise SystemExit(1)
 PY
 
-printf 'oxide-gun XDP lab preflight written: %s\n' "$out_dir"
+printf 'boron-gun XDP lab preflight written: %s\n' "$out_dir"

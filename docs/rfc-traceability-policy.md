@@ -1,7 +1,7 @@
 # RFC Traceability Policy
 
-Status: companion policy for SRS Appendix A, ODS-VER-005, ODS-VER-006, and
-ODS-VER-014.
+Status: companion policy for SRS Appendix A, BDS-VER-005, BDS-VER-006, and
+BDS-VER-014.
 
 This document owns the maintenance rules for RFC traceability. The SRS owns
 normative BoronDNS requirements. `docs/rfc-compliance-assertions.md` owns the
@@ -26,8 +26,8 @@ Use these categories when adding or reviewing RFC mappings:
   operational guidance and is not an independent compliance claim.
 
 Partial and Informative rows must name the exclusion reason. Common exclusion
-reasons are ODS-INV-001 secondary-only behavior, ODS-NEG-002 no DNSSEC signing,
-ODS-NEG-005 no zone-transfer serving, ODS-NEG-006 no master-file serving
+reasons are BDS-INV-001 secondary-only behavior, BDS-NEG-002 no DNSSEC signing,
+BDS-NEG-005 no zone-transfer serving, BDS-NEG-006 no master-file serving
 interface, and Appendix C protocol exclusions.
 
 ## Mapping Rules
@@ -68,7 +68,7 @@ Structured status tables must use these columns:
 - **Target resolution milestone**
 - **Notes**
 
-For ODS-VER-014, `docs/rfc-compliance-assertions.md` is the current canonical
+For BDS-VER-014, `docs/rfc-compliance-assertions.md` is the current canonical
 structured primary-documentation register. Operator-facing guides should link
 to that register and summarize the current posture rather than maintaining a
 second copy of the table. Release notes must copy or generate that shape and

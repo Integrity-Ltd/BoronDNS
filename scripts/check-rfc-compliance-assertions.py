@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the RFC compliance assertion register shape.
 
-The register is the operator-facing ODS-VER-014 source. Keep the check narrow:
+The register is the operator-facing BDS-VER-014 source. Keep the check narrow:
 it verifies the table has the expected schema and that implemented
 post-review Engineering MVP protocol features are represented explicitly.
 """
@@ -137,7 +137,7 @@ def main() -> int:
         if "Target resolution milestone" not in text:
             raise SystemExit(
                 f"{path.relative_to(REPO_ROOT)} must use "
-                "'Target resolution milestone' for ODS-VER-014"
+                "'Target resolution milestone' for BDS-VER-014"
             )
         if "Target resolution release" in text:
             raise SystemExit(

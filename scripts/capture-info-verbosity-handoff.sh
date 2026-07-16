@@ -32,18 +32,18 @@ EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-ODS-IF-LOG-001	info-verbosity-report-template.md; log-volume-samples.tsv	setup-ready	record configured info-level runtime log stream and format
-ODS-IF-LOG-002	info-verbosity-report-template.md; log-volume-samples.tsv	setup-ready	record stderr/stdout routing and log collector source
-ODS-IF-LOG-005	structured-field-samples.tsv	setup-ready	record canonical structured fields under release traffic
-ODS-IF-LOG-006	log-volume-samples.tsv; operational-events.tsv	setup-ready	record warning/error visibility without excessive info noise
-ODS-IF-LOG-007	log-volume-samples.tsv; profile-summary.tsv	setup-ready	record bounded log volume and rate under production-representative traffic
-ODS-IF-LOG-008	profile-summary.tsv	setup-ready	attach lazy-formatting audit and profile timing/resource evidence
-ODS-NFR-OBS-001	profile-summary.tsv; metrics-samples.tsv	setup-ready	record observability under representative query/transfer/metrics load
-ODS-NFR-OBS-004	metrics-samples.tsv	setup-ready	record metrics availability while info logging is enabled
-ODS-NFR-OBS-005	info-verbosity-report-template.md	setup-ready	record operator-facing logging profile decision in release notes
-ODS-VER-008	operator-signoff.md	setup-ready	attach completed profile before final SRS acceptance when required
-ODS-VER-010	release-notes-snippet.md	setup-ready	publish completed profile or delegation path in release notes
-ODS-VER-015	operator-signoff.md	setup-ready	record release/operations owner and acceptance scope
+BDS-IF-LOG-001	info-verbosity-report-template.md; log-volume-samples.tsv	setup-ready	record configured info-level runtime log stream and format
+BDS-IF-LOG-002	info-verbosity-report-template.md; log-volume-samples.tsv	setup-ready	record stderr/stdout routing and log collector source
+BDS-IF-LOG-005	structured-field-samples.tsv	setup-ready	record canonical structured fields under release traffic
+BDS-IF-LOG-006	log-volume-samples.tsv; operational-events.tsv	setup-ready	record warning/error visibility without excessive info noise
+BDS-IF-LOG-007	log-volume-samples.tsv; profile-summary.tsv	setup-ready	record bounded log volume and rate under production-representative traffic
+BDS-IF-LOG-008	profile-summary.tsv	setup-ready	attach lazy-formatting audit and profile timing/resource evidence
+BDS-NFR-OBS-001	profile-summary.tsv; metrics-samples.tsv	setup-ready	record observability under representative query/transfer/metrics load
+BDS-NFR-OBS-004	metrics-samples.tsv	setup-ready	record metrics availability while info logging is enabled
+BDS-NFR-OBS-005	info-verbosity-report-template.md	setup-ready	record operator-facing logging profile decision in release notes
+BDS-VER-008	operator-signoff.md	setup-ready	attach completed profile before final SRS acceptance when required
+BDS-VER-010	release-notes-snippet.md	setup-ready	publish completed profile or delegation path in release notes
+BDS-VER-015	operator-signoff.md	setup-ready	record release/operations owner and acceptance scope
 EOF
 
 cat >"$evidence_dir/log-volume-samples.tsv" <<'EOF'

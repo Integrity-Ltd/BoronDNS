@@ -21,7 +21,7 @@ family-level requirement range.
 
 ## Cadence Classes
 
-The project uses the SRS v0.9.1 ODS-VER-011 cadence vocabulary exactly:
+The project uses the SRS v0.9.1 BDS-VER-011 cadence vocabulary exactly:
 
 - **Continuous**: build-blocking checks for every main-branch candidate.
 - **Periodic**: scheduled checks independent of a specific commit.
@@ -38,7 +38,7 @@ until their corresponding retained runs exist.
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
 | Static analysis | Continuous plus release review | `cargo fmt --all --check`; `cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check`; `scripts/check-shell-scripts.sh` (non-mutating `shfmt -d` plus `shellcheck`); `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings`; `scripts/check-github-actions.sh`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
-| Unit test | Continuous | Default-feature `cargo test --workspace -- --test-threads=1` plus `cargo test --workspace --all-targets --all-features -- --test-threads=1` so the feature-gated server AF_XDP and OxideGun XDP adapter suites remain blocking; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
+| Unit test | Continuous | Default-feature `cargo test --workspace -- --test-threads=1` plus `cargo test --workspace --all-targets --all-features -- --test-threads=1` so the feature-gated server AF_XDP and BoronGun XDP adapter suites remain blocking; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/borondns-cli/tests` | Rust test names and ledger rows |
 | Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
@@ -47,13 +47,13 @@ until their corresponding retained runs exist.
 | Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; `docs/two-host-fuzz-soak-campaign.md` and `scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400` prepare the local two-host split; Engineering MVP setup records `campaign-summary.tsv`, later release/operations execution retains the full campaign artifacts | retained fuzz campaign summary, logs, and artifacts |
 | Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the Engineering MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
-| Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/evidence-command-catalog.md`, with current gaps tracked in `docs/mvp-gap-register.md`; human-operated BIND smoke run documented in `docs/manual-bind-interop.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
+| Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/evidence-command-catalog.md`, with current gaps tracked in `docs/mvp-gap-register.md`; human-operated BIND smoke run documented in `docs/manual-bind-interop.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `BDS-VER-003`, `BDS-VER-004`, `BDS-VER-013` |
 | Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the Engineering MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
 | Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, external operator acceptance | release notes, interface compatibility evidence, info verbosity profile, and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
 | External operator acceptance | Gate | Production-representative external deployment and signed scope statement for formal SRS MVP release acceptance | formal SRS MVP release notes |
 
-The `scripts/audit-invariants.sh` ODS-INV-004 gate self-tests its filesystem
+The `scripts/audit-invariants.sh` BDS-INV-004 gate self-tests its filesystem
 mutation scanner before inspecting runtime source. Its fixtures cover Cargo
 dependency renames followed by source-level crate/module aliases, fixed-point
 type and function-value aliases, typed `Default::default()` `OpenOptions`,
@@ -155,7 +155,7 @@ The repository also contains a tag-push/workflow-dispatch release workflow. It
 runs `scripts/check.sh` as a blocking Continuous gate, then acts as artifact publication automation
 for a named release by building and smoking the
 `x86_64-unknown-linux-musl` installer archive, raw static `borondns` binary,
-raw static XDP-enabled `oxide-gun` binary, and Docker image archive; it is not
+raw static XDP-enabled `boron-gun` binary, and Docker image archive; it is not
 the standing Continuous gate unless the release
 process records its retained logs as the accepted release-gate automation
 evidence.
@@ -237,7 +237,7 @@ setup exists; it does not prove that production-depth profiling has been
 executed.
 
 `scripts/capture-interface-compatibility-evidence.sh` records the current
-interface baseline and policy for ODS-NFR-MAINT-006. When a previous accepted
+interface baseline and policy for BDS-NFR-MAINT-006. When a previous accepted
 baseline is provided, it also runs the release-to-release compatibility diff.
 Without that previous baseline it is setup evidence only and must not be treated
 as a completed compatibility-diff review.
@@ -251,7 +251,7 @@ not prove that production benchmarks have been executed.
 
 `scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
 the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
-traceability map, and operator sign-off template for the later ODS-NFR-REL-003
+traceability map, and operator sign-off template for the later BDS-NFR-REL-003
 30-day soak. A generated handoff directory proves the Engineering MVP setup
 exists; it does not prove that the long-running soak has been executed.
 
@@ -271,12 +271,12 @@ overrides the default 10 percent threshold.
 
 ## Regression Policy
 
-This policy implements ODS-VER-012.
+This policy implements BDS-VER-012.
 
 - A functional regression exists when a requirement previously marked
   **Verified** in the traceability matrix fails its current verification.
-- A performance/resource regression exists when an `ODS-NFR-PERF-*` or
-  `ODS-NFR-RES-*` metric that previously met target degrades by more than
+- A performance/resource regression exists when a `BDS-NFR-PERF-*` or
+  `BDS-NFR-RES-*` metric that previously met target degrades by more than
   `regression.performance_threshold_pct`.
 - `regression.performance_threshold_pct` defaults to **10**.
 - The performance/resource comparison baseline is the median of the last five
@@ -297,7 +297,7 @@ regression must not proceed.
 release-note gate checks that the release notes include:
 
 - per-requirement-category counts for Verified, Deferred, and Failed, including
-  the `ODS-VER` verification-requirement category;
+  the `BDS-VER` verification-requirement category;
 - new Failed and Deferred results compared to the previous same-major release;
 - retained primary version/configuration artifact paths for interop evidence;
 - failed-requirement project decisions and remediation targets;

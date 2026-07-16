@@ -294,13 +294,13 @@ stop_borondns() {
 printf 'transport\tcase\tqname\tqtype\tqclass\trcode\taa\ttext\n' >"$summary_tsv"
 {
     printf 'requirement_id\tevidence\n'
-    printf 'ODS-FR-CHAS-001\tconfigured-version UDP/TCP NOERROR CH/TXT value plus missing-version REFUSED default\n'
-    printf 'ODS-FR-CHAS-002\tconfigured-hostname UDP/TCP and nsid-fallback UDP/TCP\n'
-    printf 'ODS-FR-CHAS-003\tunrecognized-name UDP/TCP REFUSED with no answers\n'
-    printf 'ODS-FR-CHAS-004\tnon-txt-a, non-txt-any, and non-txt-axfr UDP/TCP REFUSED with no authority SOA\n'
-    printf 'ODS-FR-CHAS-005\tin-class-orthogonal UDP/TCP follows ordinary IN-class REFUSED path\n'
-    printf 'ODS-FR-CHAS-006\tmetrics counters checked for answered, missing_value, unrecognized_name, and non_txt outcomes\n'
-    printf 'ODS-IF-CONF-018\t[chaos] version and hostname exercised through runtime config\n'
+    printf 'BDS-FR-CHAS-001\tconfigured-version UDP/TCP NOERROR CH/TXT value plus missing-version REFUSED default\n'
+    printf 'BDS-FR-CHAS-002\tconfigured-hostname UDP/TCP and nsid-fallback UDP/TCP\n'
+    printf 'BDS-FR-CHAS-003\tunrecognized-name UDP/TCP REFUSED with no answers\n'
+    printf 'BDS-FR-CHAS-004\tnon-txt-a, non-txt-any, and non-txt-axfr UDP/TCP REFUSED with no authority SOA\n'
+    printf 'BDS-FR-CHAS-005\tin-class-orthogonal UDP/TCP follows ordinary IN-class REFUSED path\n'
+    printf 'BDS-FR-CHAS-006\tmetrics counters checked for answered, missing_value, unrecognized_name, and non_txt outcomes\n'
+    printf 'BDS-IF-CONF-018\t[chaos] version and hostname exercised through runtime config\n'
 } >"$traceability_tsv"
 
 write_config "" ""

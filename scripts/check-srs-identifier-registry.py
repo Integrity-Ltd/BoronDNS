@@ -25,7 +25,7 @@ STALE_TEXT = [
     "the next SRS revision should incorporate VER",
 ]
 
-SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
+SUFFIXED_ID_RE = re.compile(r"\bBDS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
 
 
 def fail(message: str) -> None:

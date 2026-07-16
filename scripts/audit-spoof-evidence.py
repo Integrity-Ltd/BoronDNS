@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static evidence audit for SRS ODS-FR-SPOOF-001..007."""
+"""Static evidence audit for SRS BDS-FR-SPOOF-001..007."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CHECKS = [
     (
-        "ODS-FR-SPOOF-001",
+        "BDS-FR-SPOOF-001",
         [
             REPO_ROOT / "crates/borondns-server/src/transfer.rs",
             REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
@@ -25,7 +25,7 @@ CHECKS = [
         ],
     ),
     (
-        "ODS-FR-SPOOF-002",
+        "BDS-FR-SPOOF-002",
         [
             REPO_ROOT / "crates/borondns-server/src/transfer.rs",
             REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
@@ -40,7 +40,7 @@ CHECKS = [
         ],
     ),
     (
-        "ODS-FR-SPOOF-003..004",
+        "BDS-FR-SPOOF-003..004",
         [
             REPO_ROOT / "crates/borondns-server/src/transfer.rs",
             REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
@@ -53,7 +53,7 @@ CHECKS = [
         ],
     ),
     (
-        "ODS-FR-SPOOF-005",
+        "BDS-FR-SPOOF-005",
         [REPO_ROOT / "crates/borondns-core/src/axfr.rs"],
         [
             "if header.id != qid",
@@ -63,7 +63,7 @@ CHECKS = [
         ],
     ),
     (
-        "ODS-FR-SPOOF-006",
+        "BDS-FR-SPOOF-006",
         [REPO_ROOT / "crates/borondns-core/src/axfr.rs"],
         [
             "fn validate_response_question(",
@@ -74,7 +74,7 @@ CHECKS = [
         ],
     ),
     (
-        "ODS-FR-SPOOF-007",
+        "BDS-FR-SPOOF-007",
         [
             REPO_ROOT / "crates/borondns-server/src/transfer.rs",
             REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",

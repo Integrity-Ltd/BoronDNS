@@ -34,13 +34,13 @@ EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-ODS-NFR-REL-003	soak-report-template.md; rss-samples.tsv; weekly-summary-template.md	setup-ready	run 30-day soak, record 24-hour baseline and day-30 RSS, compute growth percentage
-ODS-NFR-REL-006	soak-report-template.md; operational-events.tsv	setup-ready	record overload, recovery, restart, and primary-failure observations during soak
-ODS-NFR-RES-001	rss-samples.tsv; fd-samples.tsv	setup-ready	record process RSS and file-descriptor samples throughout the soak
-ODS-NFR-OBS-001	metrics-samples.tsv; weekly-summary-template.md	setup-ready	record readiness, zone-state, transfer, query, RCODE, and latency metrics
-ODS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach completed soak report to formal SRS MVP release evidence before final SRS acceptance
-ODS-VER-010	soak-report-template.md	setup-ready	publish completed soak result and evidence paths in release notes
-ODS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
+BDS-NFR-REL-003	soak-report-template.md; rss-samples.tsv; weekly-summary-template.md	setup-ready	run 30-day soak, record 24-hour baseline and day-30 RSS, compute growth percentage
+BDS-NFR-REL-006	soak-report-template.md; operational-events.tsv	setup-ready	record overload, recovery, restart, and primary-failure observations during soak
+BDS-NFR-RES-001	rss-samples.tsv; fd-samples.tsv	setup-ready	record process RSS and file-descriptor samples throughout the soak
+BDS-NFR-OBS-001	metrics-samples.tsv; weekly-summary-template.md	setup-ready	record readiness, zone-state, transfer, query, RCODE, and latency metrics
+BDS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach completed soak report to formal SRS MVP release evidence before final SRS acceptance
+BDS-VER-010	soak-report-template.md	setup-ready	publish completed soak result and evidence paths in release notes
+BDS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
 EOF
 
 cat >"$evidence_dir/rss-samples.tsv" <<'EOF'
@@ -90,13 +90,13 @@ cat >"$evidence_dir/operator-signoff.md" <<'EOF'
 - External operator, if applicable:
 - Accepted scope:
 - Requirements covered:
-  - ODS-NFR-REL-003
-  - ODS-NFR-REL-006
-  - ODS-NFR-RES-001
-  - ODS-NFR-OBS-001
-  - ODS-VER-008
-  - ODS-VER-010
-  - ODS-VER-015
+  - BDS-NFR-REL-003
+  - BDS-NFR-REL-006
+  - BDS-NFR-RES-001
+  - BDS-NFR-OBS-001
+  - BDS-VER-008
+  - BDS-VER-010
+  - BDS-VER-015
 - Result:
 - Exceptions or accepted deviations:
 - Signature:
@@ -140,7 +140,7 @@ the values with Prometheus, systemd/cgroup accounting, container runtime stats,
 or host tools, but the completed report must name the source used for each
 metric.
 
-For ODS-NFR-REL-003, compute:
+For BDS-NFR-REL-003, compute:
 
 \`\`\`
 growth_pct = ((rss_day_30_bytes - rss_hour_${baseline_hour}_bytes) / rss_hour_${baseline_hour}_bytes) * 100
@@ -149,7 +149,7 @@ growth_pct = ((rss_day_30_bytes - rss_hour_${baseline_hour}_bytes) / rss_hour_${
 The acceptance threshold is \`growth_pct <= $memory_growth_threshold_pct\` for
 stable zone size and stable client-source-prefix distribution. If the workload
 or zone corpus changes materially during the soak, record the deviation and do
-not claim unqualified ODS-NFR-REL-003 evidence.
+not claim unqualified BDS-NFR-REL-003 evidence.
 
 ## Results
 
@@ -187,7 +187,7 @@ This directory is the release-candidate setup artifact for later
 release/operations execution of the long-duration soak. It does not claim that
 the 30-day soak has run. It provides the report template, sample TSV schemas,
 requirement traceability, environment values, and sign-off template needed for
-the later ODS-VER-008 acceptance run.
+the later BDS-VER-008 acceptance run.
 
 Run configuration:
 

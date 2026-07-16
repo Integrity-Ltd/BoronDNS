@@ -6,16 +6,16 @@ use serde as _;
 use time as _;
 use toml as _;
 
-fn oxide_gun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_oxide-gun"))
+fn boron_gun() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_boron-gun"))
 }
 
 #[test]
 fn version_flag_prints_package_version() {
-    let output = oxide_gun()
+    let output = boron_gun()
         .arg("--version")
         .output()
-        .expect("oxide-gun --version runs");
+        .expect("boron-gun --version runs");
 
     assert!(
         output.status.success(),
@@ -25,13 +25,13 @@ fn version_flag_prints_package_version() {
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     assert_eq!(
         stdout.trim(),
-        concat!("oxide-gun ", env!("CARGO_PKG_VERSION"))
+        concat!("boron-gun ", env!("CARGO_PKG_VERSION"))
     );
 }
 
 #[test]
 fn self_test_outputs_summary_json() {
-    let output = oxide_gun()
+    let output = boron_gun()
         .args([
             "--self-test",
             "--max-packets",
@@ -42,7 +42,7 @@ fn self_test_outputs_summary_json() {
             "0",
         ])
         .output()
-        .expect("oxide-gun self-test runs");
+        .expect("boron-gun self-test runs");
 
     assert!(
         output.status.success(),
@@ -67,10 +67,10 @@ fn self_test_outputs_summary_json() {
 
 #[test]
 fn print_config_accepts_raw_query_payload() {
-    let output = oxide_gun()
+    let output = boron_gun()
         .args(["--print-config", "--query-payload-hex", "12340100"])
         .output()
-        .expect("oxide-gun print-config runs");
+        .expect("boron-gun print-config runs");
 
     assert!(
         output.status.success(),
@@ -83,7 +83,7 @@ fn print_config_accepts_raw_query_payload() {
 
 #[test]
 fn print_config_accepts_cli_overrides() {
-    let output = oxide_gun()
+    let output = boron_gun()
         .args([
             "--print-config",
             "--target",
@@ -109,7 +109,7 @@ fn print_config_accepts_cli_overrides() {
             "--xdp-worker-cpu-affinity",
             "4,5,6,7",
             "--xdp-redirect-object",
-            "/tmp/oxide-gun-xdp.bpf.o",
+            "/tmp/boron-gun-xdp.bpf.o",
             "--xdp-reply-tracking",
             "packet-count",
             "--xdp-port-accounting",
@@ -138,7 +138,7 @@ fn print_config_accepts_cli_overrides() {
             "4096",
         ])
         .output()
-        .expect("oxide-gun print-config runs");
+        .expect("boron-gun print-config runs");
 
     assert!(
         output.status.success(),
@@ -159,7 +159,7 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("    7,"));
     assert!(stdout.contains("worker_cpu_affinity = ["));
     assert!(stdout.contains("    7,"));
-    assert!(stdout.contains("redirect_object = \"/tmp/oxide-gun-xdp.bpf.o\""));
+    assert!(stdout.contains("redirect_object = \"/tmp/boron-gun-xdp.bpf.o\""));
     assert!(stdout.contains("reply_tracking = \"packet_count\""));
     assert!(stdout.contains("port_accounting = \"none\""));
     assert!(stdout.contains("batch_size = 1024"));

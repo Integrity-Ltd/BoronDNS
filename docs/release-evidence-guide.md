@@ -128,7 +128,7 @@ wall-clock soak window. Its evidence complements the single resident-process
 RSS/file-descriptor soak represented by `scripts/capture-soak-handoff.sh`: the
 large-surface soak maximizes protocol and primary-interop churn, while the
 resident-process soak remains the stricter memory-growth lane for
-ODS-NFR-REL-003.
+BDS-NFR-REL-003.
 
 See `docs/large-surface-soak.md` for launch, status, collection, and evidence
 schema details.
@@ -136,7 +136,7 @@ schema details.
 ## Reproducible Build Evidence
 
 Use `scripts/reproducible-build-compare.sh` to run the local static-binary
-comparison. The script builds `borondns` and `oxide-gun` twice in separate clean
+comparison. The script builds `borondns` and `boron-gun` twice in separate clean
 target directories for `x86_64-unknown-linux-musl`, fixes the embedded
 `BORONDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
 `artifact-manifest.tsv`, `comparison.tsv`, and `reproducible-build-summary.env`
@@ -155,7 +155,7 @@ commit before preparing the signing handoff. It validates the two matching
 binary pairs with `scripts/verify-release-reproducibility.py`; a missing,
 ineligible, commit-mismatched, size-mismatched, or digest-mismatched record is a
 hard failure before the privileged signing job can start. The independently
-packaged raw `borondns` and `oxide-gun` binaries must then compare byte-for-byte
+packaged raw `borondns` and `boron-gun` binaries must then compare byte-for-byte
 with both retained builds, so the result authenticates the bytes sent for
 signing rather than an unrelated successful comparison.
 
@@ -168,10 +168,10 @@ reproducibility.
 ## Package and Docker Smoke Evidence
 
 Use `scripts/package-installer.sh` to build the release installer archive,
-standalone `borondns` and `oxide-gun` binaries, package manifest, static-link
+standalone `borondns` and `boron-gun` binaries, package manifest, static-link
 reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the
 installer in Ubuntu, including install, update, config validation,
-`oxide-gun --self-test`, and startup.
+`boron-gun --self-test`, and startup.
 
 Both installer and Docker packaging fail closed when Git reports any modified
 or untracked, non-ignored source. They revalidate the exact commit and complete
@@ -255,7 +255,7 @@ digest mismatches, and archives exceeding any bound fail closed.
 Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
 files for the two shipped release binaries. The Cargo SBOM pass uses
 `cargo-cyclonedx` against the workspace lockfile, the musl release target, and
-the shipped feature set `borondns-cli/af-xdp,oxide-gun/xdp`. It also writes
+the shipped feature set `borondns-cli/af-xdp,boron-gun/xdp`. It also writes
 `target/dist/borondns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
 with the source, feature set, tool version, path, and hash for each SBOM.
 
@@ -335,7 +335,7 @@ and independent-builder sign-off remain separate release-governance work.
 
 For the formal SRS MVP release gate, release notes must also include the
 external operator acceptance signature, accepting operator identity, and
-accepted scope statement required by `ODS-VER-008` and `ODS-VER-015`.
+accepted scope statement required by `BDS-VER-008` and `BDS-VER-015`.
 
 ## Primary Interop Evidence
 

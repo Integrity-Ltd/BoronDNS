@@ -14,7 +14,7 @@ The project tracks two related but separate targets:
   smoke/runtime evidence, checked traceability, retained benchmark and fuzz
   evidence where available, and the implemented post-Alpha feature slices
   retained by `docs/implemented-feature-scope.md`.
-- **SRS acceptance execution**: the later `ODS-VER-008` compliance gate run,
+- **SRS acceptance execution**: the later `BDS-VER-008` compliance gate run,
   including long-duration campaigns, full release evidence, and external
   operator acceptance.
 
@@ -50,12 +50,12 @@ formal-acceptance gaps are owned by `docs/verification-ledger.md`,
 
 Release-candidate runtime scope excludes eBPF/XDP, BoronDNS server AF_XDP,
 io_uring, NSD-style packed arena storage, and a hot response-cache backend.
-Those remain post-MVP optimization tracks. The current `oxide-gun` AF_XDP
+Those remain post-MVP optimization tracks. The current `boron-gun` AF_XDP
 backend is load-generator scope only.
 
 ## SRS Acceptance Execution Target
 
-The later `ODS-VER-008` acceptance execution target is owned by the SRS,
+The later `BDS-VER-008` acceptance execution target is owned by the SRS,
 `docs/mvp-gap-register.md`, `docs/test-plan.md`, and
 `docs/release-evidence-guide.md`. This plan does not duplicate the acceptance
 checklist. At this level the implementation-plan rule is that formal acceptance
@@ -68,7 +68,7 @@ The SRS Alpha gate remains useful as historical context, but it is no longer the
 active feature boundary. The release candidate includes implemented post-Alpha
 slices listed in `docs/implemented-feature-scope.md`.
 
-SRS `ODS-VER-007` still records the historical Alpha-vs-formal-SRS-MVP split.
+SRS `BDS-VER-007` still records the historical Alpha-vs-formal-SRS-MVP split.
 That split must not be read as the current implementation boundary. Several
 items that were historically outside the Alpha gate are now implemented
 release-candidate slices; their current status and remaining release-acceptance

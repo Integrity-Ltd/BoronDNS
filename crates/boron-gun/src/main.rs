@@ -27,7 +27,7 @@ const DEFAULT_SOURCE_PORT: u16 = 53000;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "oxide-gun",
+    name = "boron-gun",
     version,
     about = "BoronDNS UDP DNS load generator and CI-safe self-test harness"
 )]
@@ -1623,7 +1623,7 @@ fn run_xdp_load(config: &FileConfig) -> Result<()> {
     #[cfg(not(feature = "xdp"))]
     {
         let _ = config;
-        bail!("backend xdp requires building oxide-gun with --features xdp");
+        bail!("backend xdp requires building boron-gun with --features xdp");
     }
 }
 
@@ -2049,7 +2049,7 @@ fn encode_qname(qname: &str) -> Result<Vec<u8>> {
             bail!("DNS label exceeds 63 octets in {qname}");
         }
         if !label.is_ascii() {
-            bail!("oxide-gun MVP accepts ASCII qnames only: {qname}");
+            bail!("boron-gun MVP accepts ASCII qnames only: {qname}");
         }
         out.push(label.len() as u8);
         out.extend_from_slice(label.as_bytes());
@@ -2239,7 +2239,7 @@ mod tests {
     #[test]
     fn query_pool_loads_file_and_selects_deterministically() {
         let path = std::env::temp_dir().join(format!(
-            "oxide-gun-query-pool-{}-{}.txt",
+            "boron-gun-query-pool-{}-{}.txt",
             std::process::id(),
             1
         ));

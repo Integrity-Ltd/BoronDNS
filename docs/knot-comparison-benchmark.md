@@ -152,7 +152,7 @@ Hardware XDP comparison defaults are intentionally different from the veth and
 generic smoke profiles. `scripts/physical-udp-knot-comparison.sh` defaults
 `BORONDNS_PHYSICAL_KXDPGUN_MODE=auto` so kxdpgun can select native driver XDP
 and zero-copy when the NIC supports it, and defaults
-`BORONDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY=auto` for the project-owned requester.
+`BORONDNS_PHYSICAL_BORON_GUN_XDP_ZERO_COPY=auto` for the project-owned requester.
 Use `copy` or `generic` only as an explicit compatibility or driver-debug
 fallback; do not use those modes for a headline hardware XDP claim. Packaged
 Knot 3.5.3 exposes XDP support but rejects the newer server-side
@@ -186,9 +186,9 @@ For an BoronDNS kxdpgun run on the dedicated hardware, use the same `querydb`,
 the BoronDNS service port, and the same `-t`, `-b`, `-Q`, source-address, and
 affinity settings as the Knot reference run. The generated `runbook.sh` local
 load-client path is useful for local and preflight evidence. The physical
-wrapper can also run the project-owned `oxide-gun` requester for AF_XDP
+wrapper can also run the project-owned `boron-gun` requester for AF_XDP
 diagnostic and promotion-adjacent rows; keep kxdpgun rows in retained promotion
-sweeps until repeated `oxide-gun` runs cover the same rate range and host roles.
+sweeps until repeated `boron-gun` runs cover the same rate range and host roles.
 
 For repeatable BoronDNS socket-path sweeps on the two physical hosts, use the
 checked-in wrapper instead of ad-hoc SSH commands:
@@ -399,7 +399,7 @@ experiments:
   XDP attach.
   The summary rows retain `server_udp_backend`, `xdp_mode`, `xdp_zero_copy`,
   `xdp_rx_drain_passes`, `xdp_tx_wakeup_interval`, and
-  `oxide_gun_response_timeout_ms` so standard, Knot-XDP, BoronDNS-AF_XDP, and
+  `boron_gun_response_timeout_ms` so standard, Knot-XDP, BoronDNS-AF_XDP, and
   requester-drain timeout rows cannot be confused.
 - The requester-side XDP mode is controlled with
   `BORONDNS_PHYSICAL_KXDPGUN_MODE=auto|copy|generic` and defaults to `auto` for
@@ -423,37 +423,37 @@ experiments:
   `BORONDNS_SOURCE_KNOT_REPEATS=N` and, when needed,
   `BORONDNS_SOURCE_KNOT_ORDERS="borondns-first knot-first"` to capture variance
   before changing transport code.
-- `BORONDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|oxide-gun` selects the requester. The
-  default remains `kxdpgun` for promotion rows. `oxide-gun` runs the
+- `BORONDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|boron-gun` selects the requester. The
+  default remains `kxdpgun` for promotion rows. `boron-gun` runs the
   project-owned AF_XDP requester with the staged `querydb` as `--query-list`,
-  `BORONDNS_PHYSICAL_OXIDE_GUN_BIN` or the default
-  `$player_workdir/xdp-template-slice/oxide-gun`, and
-  `BORONDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT` or the default
-  `$player_workdir/xdp-template-slice/oxide-gun-xdp.bpf.o`. The dedicated-host
-  defaults use `BORONDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT=__auto__`, which
+  `BORONDNS_PHYSICAL_BORON_GUN_BIN` or the default
+  `$player_workdir/xdp-template-slice/boron-gun`, and
+  `BORONDNS_PHYSICAL_BORON_GUN_XDP_REDIRECT_OBJECT` or the default
+  `$player_workdir/xdp-template-slice/boron-gun-xdp.bpf.o`. The dedicated-host
+  defaults use `BORONDNS_PHYSICAL_BORON_GUN_QUEUE_COUNT=__auto__`, which
   detects the requester interface RX queue count so forward and reversed host
   roles do not reuse the wrong 63-queue assumption. The default source MAC is
   `b8:59:9f:4b:73:2c`, target MAC is `1c:34:da:60:67:00`, XDP copy mode is
-  used, `BORONDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE=64` is used to avoid
+  used, `BORONDNS_PHYSICAL_BORON_GUN_XDP_BATCH_SIZE=64` is used to avoid
   zero-copy requester bursts when copy mode is overridden, one source port is
   auto-assigned per queue starting at 53000, and summary parsing comes from the
   JSON `summary` record. The effective requester queue count is retained in
   `host/player-link-tuning.txt`.
-  `BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST=port,port,...` passes an
-  explicit per-worker source-port list to `oxide-gun`; use it after queue
+  `BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT_LIST=port,port,...` passes an
+  explicit per-worker source-port list to `boron-gun`; use it after queue
   calibration when contiguous source ports do not hash back to their owning
   AF_XDP RX queues. RSS includes the UDP destination port on the dedicated
   hosts, so source-port lists should be calibrated per server target port:
-  `BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST=...` for Knot rows and
-  `BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_SOURCE_PORT_LIST=...` for BoronDNS
+  `BORONDNS_PHYSICAL_BORON_GUN_KNOT_SOURCE_PORT_LIST=...` for Knot rows and
+  `BORONDNS_PHYSICAL_BORON_GUN_BORONDNS_SOURCE_PORT_LIST=...` for BoronDNS
   rows. After a reduced AF_XDP calibration row, run
-  `scripts/select-oxide-gun-source-ports.py <row-artifact> --existing-list ...`
-  on the row that contains `metrics-after.prom` and the oxide-gun
+  `scripts/select-boron-gun-source-ports.py <row-artifact> --existing-list ...`
+  on the row that contains `metrics-after.prom` and the boron-gun
   `kxdpgun.log` JSON summary. The helper emits both `queue_list=...` and
-  `source_port_list=...`; pass both to OxideGun when the selected requester
+  `source_port_list=...`; pass both to BoronGun when the selected requester
   queues are sparse. The physical wrapper accepts
-  `BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST=...` and
-  `BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_QUEUE_LIST=...` alongside the
+  `BORONDNS_PHYSICAL_BORON_GUN_KNOT_QUEUE_LIST=...` and
+  `BORONDNS_PHYSICAL_BORON_GUN_BORONDNS_QUEUE_LIST=...` alongside the
   target-specific source-port list variables. The selected source-port list
   keeps one reply stream per requester RX queue while also balancing requests
   across server AF_XDP workers.
@@ -471,11 +471,11 @@ experiments:
   `--existing-list`; this preserves the list shape and emits targeted
   source-port repair candidates, but the repaired list still needs physical
   A/B validation because better balance is not always better QPS.
-  `BORONDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
-  `--xdp-pace-wait-fraction` to a new enough `oxide-gun` requester. Leave it
+  `BORONDNS_PHYSICAL_BORON_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
+  `--xdp-pace-wait-fraction` to a new enough `boron-gun` requester. Leave it
   unset for promotion rows unless a local probe shows that shortening the
   paced-wait window preserves the reply-percentage gate.
-  `BORONDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
+  `BORONDNS_PHYSICAL_BORON_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
   reply-drain timeout after the offered send window; raising it is useful when
   separating late requester RX drain from true packet loss.
 
@@ -703,7 +703,7 @@ treat idle sleeping/yielding as the reverse-role fix; the next substantial
 receive-path step should be a different packet-I/O design, most likely AF_XDP,
 unless a more targeted nonblocking poll/backoff design can be proven without
 losing responsiveness.
-The first reverse-role `oxide-gun` requester pass exposed two harness/profile
+The first reverse-role `boron-gun` requester pass exposed two harness/profile
 issues before it produced comparable AF_XDP evidence. With the forward
 requester default of 63 queues, `physical-udp-knot-comparison-20260606T022927Z`
 failed on `borondns-1` because AF_XDP queue 48 did not exist. With the
@@ -719,7 +719,7 @@ replies/s and 100.000000%, while BoronDNS AF_XDP measured 1185281 replies/s and
 `physical-udp-knot-comparison-20260606T023606Z` measured 1186135 replies/s at
 100.000000%, and the auto-queue proof row
 `physical-udp-knot-comparison-20260606T024404Z` retained
-`oxide_gun_effective_queue_count=48`.
+`boron_gun_effective_queue_count=48`.
 The same reverse profile is still not a clean retained-QPS win at higher rates.
 At requested 1.5M, `physical-udp-knot-comparison-20260606T023643Z` measured
 Knot XDP at 1478476 replies/s and 99.992577%, while BoronDNS AF_XDP measured
@@ -749,7 +749,7 @@ batch latency rather than continue blind IRQ/RSS or MTU tuning.
 A later requester-drain probe kept both reverse-role NICs at effective MTU 1500
 during native XDP and restored them to 9000 after cleanup, which makes MTU an
 unlikely explanation for the remaining small loss tail. With
-`BORONDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=3000`,
+`BORONDNS_PHYSICAL_BORON_GUN_RESPONSE_TIMEOUT_MS=3000`,
 `physical-udp-knot-comparison-20260606T030335Z` measured BoronDNS AF_XDP at
 2454002 replies/s and 99.995237% at requested 2.5M, leaving 353 unanswered
 queries out of 7410688. Extending the same timeout to 5000 ms in
@@ -933,7 +933,7 @@ showing elevated softnet time-squeeze. Keep the caller-owned inbound batch
 layout until a receive change also improves packet-loss behavior.
 AF_XDP server TX wakeup cadence is now a retained tuning axis. Before the
 server stopped polling for TX writability ahead of every AF_XDP ring send, it
-was not a stable win by itself. In the OxideGun AF_XDP requester comparison at 630k
+was not a stable win by itself. In the BoronGun AF_XDP requester comparison at 630k
 packets with requester `--xdp-tx-wakeup-interval 4`, the prior Knot XDP row
 `knot-xdp-oxidegun-wakeup4-630k-20260606T011511Z` measured 591585 positive
 replies. BoronDNS with server `xdp.tx_wakeup_interval = 4` at
@@ -946,7 +946,7 @@ to 570479 replies. Server interval 8 at
 `oxidegun-xdp-serverwakeup1-shortknot-latency-630k-20260606T012946Z` measured
 574223.
 Removing unused per-packet redirect counters from the BoronDNS server redirect
-object and the OxideGun reply redirect object reduces shared XDP fast-path work,
+object and the BoronGun reply redirect object reduces shared XDP fast-path work,
 but it does not close the server gap. With the counter-free objects, BoronDNS
 interval 1 at `oxidegun-xdp-nocounters-serverwakeup1-630k-20260606T013355Z`
 measured 579837 positive replies, up from the same-binary countered interval-1
@@ -988,7 +988,7 @@ replies/s and BoronDNS AF_XDP at 1199624 replies/s with equal 99.998417% reply
 rate. Use `xdp.tx_wakeup_interval = 8` for the current AF_XDP comparison
 profile, but keep treating the margin as narrow until a broader rate/repeat
 sweep shows a larger saturation-knee lead.
-The physical wrapper can now run `oxide-gun` as the requester. The first
+The physical wrapper can now run `boron-gun` as the requester. The first
 retained rows exposed two requester bugs before it became useful: an explicit
 53000-53062 source-port range disabled per-queue prebuilt packet templates and
 capped the requester at one 4096-descriptor TX-ring fill per queue, and then the
@@ -998,7 +998,7 @@ whole paced batch window without draining RX; `physical-udp-knot-comparison-
 20260606T021325Z` retained only 13.255288% replies against Knot XDP, and
 `physical-udp-knot-comparison-20260606T021449Z` retained only 12.183415% against
 Knot with requester `xdp.rx_drain_passes = 64`. Draining requester RX during
-paced waits fixed the loss gate, and `oxide-gun` now emits
+paced waits fixed the loss gate, and `boron-gun` now emits
 `send_duration_seconds` so the harness reports rates over the offered send
 window rather than the final drain timeout. In
 `physical-udp-knot-comparison-20260606T022205Z` at requested 900k, Knot XDP
@@ -1007,7 +1007,7 @@ replies/s at 99.999114%. In
 `physical-udp-knot-comparison-20260606T022319Z` at requested 1.2M, Knot XDP
 measured 1183863 replies/s at 100.000000%, while BoronDNS AF_XDP measured
 1184869 replies/s at 100.000000%. Keep retaining kxdpgun rows for historical
-promotion continuity, but `BORONDNS_PHYSICAL_PLAYER_TOOL=oxide-gun` is now
+promotion continuity, but `BORONDNS_PHYSICAL_PLAYER_TOOL=boron-gun` is now
 usable for project-owned requester comparisons.
 Reverse-role 25G testing showed that source-port steering is target-port
 specific and must also cover the server NIC queue count. The first fair
@@ -1058,11 +1058,11 @@ replies/s and 100.000000%, while BoronDNS AF_XDP measured 2457000 replies/s and
 `rx_out_of_buffer` delta matched the 736 unanswered queries. Capacity knobs
 were mixed: `BORONDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=32768` alone regressed to
 99.979601% in `physical-udp-knot-comparison-20260606T043655Z`;
-`BORONDNS_PHYSICAL_XDP_RING_SIZE=8192` alone produced a 100.000000% Oxide-only
+`BORONDNS_PHYSICAL_XDP_RING_SIZE=8192` alone produced a 100.000000% BoronDNS-only
 row in `physical-udp-knot-comparison-20260606T043819Z` but failed the fair
 Knot-XDP row at 99.988168% in `physical-udp-knot-comparison-20260606T043912Z`.
 Combining ring size 8192 with UMEM frame count 32768 nearly cleared an
-Oxide-only row at 99.999951% in
+BoronDNS-only row at 99.999951% in
 `physical-udp-knot-comparison-20260606T044042Z`, but still failed in both fair
 orders: Knot-first `physical-udp-knot-comparison-20260606T044138Z` measured
 BoronDNS at 99.932622%, and BoronDNS-first
@@ -1108,7 +1108,7 @@ AF_XDP, at 2456094 replies/s and 99.972494%, while Knot XDP again reached
 100.000000%. Further wakeup-cadence probes did not promote a stable win:
 `physical-udp-knot-comparison-20260606T051129Z` with interval 4 fell to
 99.932661%; `physical-udp-knot-comparison-20260606T051211Z` with interval 16
-cleared an Oxide-only row at 100.000000%, but the fair Knot-first row
+cleared an BoronDNS-only row at 100.000000%, but the fair Knot-first row
 `physical-udp-knot-comparison-20260606T051259Z` measured BoronDNS at
 99.974414% versus Knot XDP at 99.997892%. Keep `xdp.tx_wakeup_interval` as a
 tuning axis, but do not treat wakeup cadence alone as the remaining fix.
@@ -1127,7 +1127,7 @@ as negative evidence for the saturation profile unless a later XDP socket API
 can use kernel need-wakeup state instead of blind wakeup cadence.
 A reduced calibration row then found a reverse-role source list that balanced
 both sides of the packet path instead of only the requester. Running
-`scripts/select-oxide-gun-source-ports.py` on
+`scripts/select-boron-gun-source-ports.py` on
 `physical-udp-knot-comparison-20260606T041857Z` selected 48 ports with
 48 active requester RX queues, one source port per requester queue, 48 active
 server AF_XDP workers, and one calibrated source port per active server worker:
@@ -1135,7 +1135,7 @@ server AF_XDP workers, and one calibrated source port per active server worker:
 The previous reverse list was already balanced on requester ingress
 (48 requester queues active, max one port per requester queue), but only hit
 27 server workers and placed up to three ports on a single server worker.
-With the balanced list, an Oxide-only reverse-role row,
+With the balanced list, an BoronDNS-only reverse-role row,
 `physical-udp-knot-comparison-20260606T052658Z`, measured BoronDNS AF_XDP at
 2456483 replies/s and 100.000000%; the server reported 48 active AF_XDP
 workers with received and sent packet ranges of 256000 to 258048 packets.
@@ -1182,7 +1182,7 @@ reached 1767983, and interval 16 reached 1769979. At requested 2.5M in
 2002643 replies/s at 99.344390%, while BoronDNS AF_XDP measured
 1915610 replies/s at 98.907538%; the requester only transmitted about
 2.02M qps to Knot and about 1.94M qps to BoronDNS, so the high-rate row is also
-limited by oxide-gun AF_XDP requester service, not only by server DNS work.
+limited by boron-gun AF_XDP requester service, not only by server DNS work.
 Two negative counterprobes should not be repeated as fixes: a 48-port list with
 requester `queue_count=48` gave perfect 48-worker server balance but only
 76.973998% replies in `physical-udp-knot-comparison-20260606T054357Z`, and an
@@ -1218,7 +1218,7 @@ and instead reduce per-queue AF_XDP service cost or improve requester TX/RX
 co-scheduling without starving reply drain. Weighted source-list selection is
 useful but not sufficient by itself. Weighting the `053738Z` calibration with
 the original 2.5M `054110Z` requester TX counts selected a list with modeled
-server weight max 299008 instead of 344064; the Oxide-only row
+server weight max 299008 instead of 344064; the BoronDNS-only row
 `physical-udp-knot-comparison-20260606T061301Z` improved to 1984720 replies/s
 and 99.161520%, but still did not clear the retained Knot-XDP row. Reweighting
 again from `061301Z` did not promote a win:
@@ -1237,7 +1237,7 @@ requester-TX-minus-physical gap matched the 92100 unanswered queries, while
 requester/server PHY counters showed zero discards and no oversize packets.
 That rules out MTU, fragmentation, and server receive loss for this row; the
 lost denominator is before or inside the requester AF_XDP TX path.
-`oxide-gun` now also reports AF_XDP TX completion counters. Repeating the same
+`boron-gun` now also reports AF_XDP TX completion counters. Repeating the same
 row with the completion-instrumented requester in
 `physical-udp-knot-comparison-20260606T062634Z` measured 1956164 replies/s at
 99.205756%; the requester reported 9912320 submitted TX packets, 9577445 TX
@@ -1245,7 +1245,7 @@ completions dequeued by summary time, 334875 outstanding completions, and
 9833596 requester PHY TX packets. Completion dequeue lag is therefore larger
 than the unanswered gap and should be treated as a frame-reclamation pressure
 signal, not as a direct physical-TX counter. Continue forward 2.5M work in
-oxide-gun's AF_XDP TX service/pacing path before spending time on additional
+boron-gun's AF_XDP TX service/pacing path before spending time on additional
 MTU tuning.
 The requester now performs a bounded final AF_XDP TX kick/dequeue pass after
 the active send window and before the final reply drain. With the original
@@ -1259,7 +1259,7 @@ Under a same-requester Knot-XDP comparison in
 `physical-udp-knot-comparison-20260606T063825Z`, Knot XDP measured
 1998934 replies/s at 100.000000%, while BoronDNS AF_XDP measured
 1970490 replies/s at 100.000000%. Server `xdp.tx_wakeup_interval = 16`
-improved the cleaned Oxide-only row in
+improved the cleaned BoronDNS-only row in
 `physical-udp-knot-comparison-20260606T063946Z` to 1997976 replies/s at
 100.000000%, but interval 32 regressed in
 `physical-udp-knot-comparison-20260606T064033Z` to 1980765 replies/s.
@@ -1303,7 +1303,7 @@ while the worker builds responses for the current full batch, addressing the
 single-batch `rx_out_of_buffer` signature without changing partial-batch return
 paths. With the same reverse 8192/32768, interval-16 profile,
 `physical-udp-knot-comparison-20260606T071132Z` measured BoronDNS AF_XDP at
-2456286 replies/s and 100.000000% in an Oxide-only row. The fair Knot-first
+2456286 replies/s and 100.000000% in an BoronDNS-only row. The fair Knot-first
 row, `physical-udp-knot-comparison-20260606T071226Z`, measured Knot XDP at
 2458300 replies/s and 99.998444%, while BoronDNS AF_XDP measured
 2456011 replies/s and 100.000000%. This improves the reverse reply-percentage
@@ -1335,7 +1335,7 @@ on the Intel reverse server with `Illegal instruction`, and an explicit
 `target-cpu=skylake-avx512` binary was compatible but regressed to 2453199
 replies/s at 99.969088%. The follow-up reverse work should focus on reducing
 userspace AF_XDP packet cost or changing the requester/server batching model,
-not more MTU or RSS port-list tuning. A forward Oxide-only replay with the
+not more MTU or RSS port-list tuning. A forward BoronDNS-only replay with the
 actual `064300Z` calibrated port list and the full-batch refill binary,
 `physical-udp-knot-comparison-20260606T071525Z`, measured 2015954 replies/s at
 100.000000%, so this receive-path slice does not invalidate the existing
@@ -1343,7 +1343,7 @@ forward-role proof.
 
 The requester zero-copy follow-up confirmed that burst shape, not MTU, explains
 the next reverse-role failure mode. With both hosts forced to temporary MTU
-1500, `BORONDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY=force`, and the previous
+1500, `BORONDNS_PHYSICAL_BORON_GUN_XDP_ZERO_COPY=force`, and the previous
 requester batch size 1024, `physical-udp-knot-comparison-20260606T073704Z`
 measured Knot XDP at 2447952 replies/s and 99.813565%, but BoronDNS AF_XDP fell
 to 1946130 replies/s and 79.431881%. The BoronDNS row still completed all
@@ -1362,7 +1362,7 @@ BoronDNS AF_XDP at 2369246 replies/s and 99.999460%, while Knot XDP reached
 100.000000%. Keep requester batch 64 as the least-bad zero-copy reverse setting
 for the older requester binary, but do not treat that binary as a retained
 both-order reverse win. Rebuilding and deploying the current committed
-`oxide-gun` requester, while keeping the same source list and server profile,
+`boron-gun` requester, while keeping the same source list and server profile,
 made the reverse zero-copy row gate-clean in both orders:
 `physical-udp-knot-comparison-20260606T090123Z` measured BoronDNS-first at
 2363658 replies/s and 100.000000%, while Knot XDP reached 2362726 replies/s and
@@ -1374,7 +1374,7 @@ because both wins are narrow.
 
 Forward-role zero-copy steering checks on 2026-06-06 did not identify MTU as
 the active limiter. `physical-udp-knot-comparison-20260606T080632Z` used
-OxideGun sparse queue binding with 48 calibrated requester queues and one source
+BoronGun sparse queue binding with 48 calibrated requester queues and one source
 port per server AF_XDP worker at XDP MTU 1500; it reached 2288619 replies/s at
 100.000000%, with AF_XDP worker packet counts tightly spread from 236224 to
 241984. Increasing requester fanout while keeping calibrated queue/source-port
@@ -1390,7 +1390,7 @@ change rather than MTU or multi-buffer work for these small DNS packets.
 
 Keeping the earlier 63-flow high-rate BoronDNS source list while moving the
 server AF_XDP capacity profile to ring size 8192 and UMEM frame count 32768
-restored forward-role headroom. The Oxide-only probe
+restored forward-role headroom. The BoronDNS-only probe
 `physical-udp-knot-comparison-20260606T082354Z` reached 2404179 replies/s at
 100.000000%. The fair Knot-first comparison
 `physical-udp-knot-comparison-20260606T082449Z` measured Knot XDP at 2341327
@@ -1427,7 +1427,7 @@ packaging caveat. Ubuntu-packaged Knot 3.5.3 reports `XDP support: libxdp` and
 starts XDP in native mode, but rejects the newer `xdp.zero-copy` configuration
 item; keep `BORONDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=__omit__` for that package and
 use `knot-version.txt` plus `server-bpftool-net-*-benchmark.txt` to retain the
-actual mode evidence. With BoronDNS commit `acd8c7fb`, current `oxide-gun`, the
+actual mode evidence. With BoronDNS commit `acd8c7fb`, current `boron-gun`, the
 extracted high-rate source-port list, requester zero-copy forced, server
 ring-size 8192, UMEM frame count 32768, server batch 1024, and
 `xdp.tx_wakeup_interval = 16`, both run orders passed at requested 2.5M:
@@ -1493,7 +1493,7 @@ received/sent counters matched, so the next slice first tested transport
 cadence and requester drain knobs rather than changing DNS layout.
 
 The no-code source-built sweep found a gate-clean profile. Raising
-`BORONDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS` from 1000 to 2000 cleared the
+`BORONDNS_PHYSICAL_BORON_GUN_RESPONSE_TIMEOUT_MS` from 1000 to 2000 cleared the
 reply gate in `physical-udp-knot-comparison-20260606T201657Z`, but BoronDNS
 still trailed source-built Knot narrowly. Keeping the 2000 ms drain and lowering
 server `xdp.tx_wakeup_interval` from 16 to 8 cleared the gate and improved the
@@ -1649,7 +1649,7 @@ Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
 `borondns_udp_worker_source_port_datagrams_total{worker,source_port}`, which is
 intended for low-rate AF_XDP source-port/RSS calibration: combine it with
-oxide-gun reply queue counts to select ports that both return to the intended
+boron-gun reply queue counts to select ports that both return to the intended
 requester queue and distribute requests across server RX queues. Do not use that
 profile for final saturation rows.
 Use `"off"` only for saturation profiling where per-query counters would distort

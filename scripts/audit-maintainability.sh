@@ -118,9 +118,9 @@ module_map = [
     ("crates/borondns-server/src/resource_limits.rs", "audited POSIX file-descriptor limit FFI boundary"),
     ("crates/borondns-server/build.rs", "build metadata embedding for version and metrics labels"),
     ("crates/borondns-cli/src/main.rs", "command-line entrypoints"),
-    ("crates/oxide-gun/src/main.rs", "OxideGun load-generator CLI and portable UDP backend"),
-    ("crates/oxide-gun/src/xdp_backend.rs", "OxideGun lab-only AF_XDP backend"),
-    ("crates/oxide-gun-ebpf/src/lib.rs", "OxideGun lab-only XDP drop program"),
+    ("crates/boron-gun/src/main.rs", "BoronGun load-generator CLI and portable UDP backend"),
+    ("crates/boron-gun/src/xdp_backend.rs", "BoronGun lab-only AF_XDP backend"),
+    ("crates/boron-gun-ebpf/src/lib.rs", "BoronGun lab-only XDP drop program"),
     ("crates/borondns-server-ebpf/src/lib.rs", "feature-gated BoronDNS XDP redirect program"),
 ]
 for path, purpose in module_map:
@@ -129,7 +129,7 @@ for path, purpose in module_map:
 print()
 print(f"module_count={len(module_map)}")
 if not 8 <= len(module_map) <= 40:
-    print("error=ODS-NFR-MAINT-002 module count outside 8-40 target")
+    print("error=BDS-NFR-MAINT-002 module count outside 8-40 target")
     raise SystemExit(1)
 
 architecture = (repo_root / "docs" / "architecture.md").read_text(encoding="utf-8")
@@ -146,15 +146,15 @@ if missing_architecture_entries:
 if status != "within_target":
     print()
     print(
-        "warning=ODS-NFR-MAINT-001 line count is outside the 5,000-15,000 "
+        "warning=BDS-NFR-MAINT-001 line count is outside the 5,000-15,000 "
         "target; release review needs an architecture/release-note "
         "justification or a refactor plan"
     )
-    required_rationale = "Current ODS-NFR-MAINT-001 over-target rationale"
+    required_rationale = "Current BDS-NFR-MAINT-001 over-target rationale"
     if required_rationale not in architecture:
         print()
         print(
-            "error=architecture missing current ODS-NFR-MAINT-001 "
+            "error=architecture missing current BDS-NFR-MAINT-001 "
             "over-target rationale"
         )
         raise SystemExit(1)

@@ -469,7 +469,7 @@
             secret_file.display()
         );
         ServerConfig::from_toml_str(&config_text)
-            .expect("group-readable TSIG secret remains compatible with ODS-IF-CONF-004");
+            .expect("group-readable TSIG secret remains compatible with BDS-IF-CONF-004");
 
         std::fs::set_permissions(&secret_file, std::fs::Permissions::from_mode(0o604))
             .expect("world-readable TSIG secret mode");

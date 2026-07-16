@@ -214,17 +214,17 @@ with (artifact_dir / "geiger-summary.env").open("w", encoding="utf-8") as out:
 with (artifact_dir / "unsafe-dependency-traceability.tsv").open("w", encoding="utf-8") as out:
     out.write("requirement_id\tevidence\tartifact\tnote\n")
     out.write(
-        "ODS-INV-006\tcargo-geiger retained enumeration\tgeiger-packages.tsv\t"
+        "BDS-INV-006\tcargo-geiger retained enumeration\tgeiger-packages.tsv\t"
         "Transitive dependency unsafe counts are retained for release review; "
         "geiger-summary.env records whether the scanner completed without caveats.\n"
     )
     out.write(
-        "ODS-NFR-SEC-001\tfirst-party safe-Rust posture\tfirst-party-geiger.tsv\t"
+        "BDS-NFR-SEC-001\tfirst-party safe-Rust posture\tfirst-party-geiger.tsv\t"
         "First-party package-level unsafe counts are checked against the current audited "
         "POSIX adapter posture; scripts/audit-safe-rust.sh remains the source-level gate.\n"
     )
     out.write(
-        "ODS-NFR-MAINT-003\tunsafe review inputs\tgeiger-warnings.tsv; geiger-not-scanned.tsv\t"
+        "BDS-NFR-MAINT-003\tunsafe review inputs\tgeiger-warnings.tsv; geiger-not-scanned.tsv\t"
         "Scanner warnings and unscanned files are retained so release review can avoid "
         "overclaiming cargo-geiger completeness.\n"
     )

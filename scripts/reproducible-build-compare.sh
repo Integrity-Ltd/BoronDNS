@@ -145,7 +145,7 @@ run_build() {
         printf 'target_dir=%s\n' "$target_dir"
         printf 'target_dir_for_cargo=%s\n' "$target_dir_for_cargo"
         printf '%q build --locked --release --target-dir %q --target %q -p borondns-cli --features af-xdp\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
-        printf '%q build --locked --release --target-dir %q --target %q -p oxide-gun --features xdp\n\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
+        printf '%q build --locked --release --target-dir %q --target %q -p boron-gun --features xdp\n\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
     } >"$log"
 
     (
@@ -165,7 +165,7 @@ run_build() {
             BORONDNS_BUILD_RUST_VERSION="$rust_version" \
             BORONDNS_BUILD_TIMESTAMP="$commit_timestamp" \
             "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
-            --target "$target_triple" -p oxide-gun --features xdp
+            --target "$target_triple" -p boron-gun --features xdp
     ) >>"$log" 2>&1
     verify_source_identity "after build $label"
 }
@@ -176,12 +176,12 @@ copy_artifacts() {
     local out_dir="$evidence_dir/artifacts/$label"
 
     install -m 0755 "$target_dir/$target_triple/release/borondns" "$out_dir/borondns"
-    install -m 0755 "$target_dir/$target_triple/release/oxide-gun" "$out_dir/oxide-gun"
+    install -m 0755 "$target_dir/$target_triple/release/boron-gun" "$out_dir/boron-gun"
     file "$out_dir/borondns" >"$out_dir/file-borondns.txt"
-    file "$out_dir/oxide-gun" >"$out_dir/file-oxide-gun.txt"
+    file "$out_dir/boron-gun" >"$out_dir/file-boron-gun.txt"
     if command -v ldd >/dev/null 2>&1; then
         ldd "$out_dir/borondns" >"$out_dir/ldd-borondns.txt" 2>&1 || true
-        ldd "$out_dir/oxide-gun" >"$out_dir/ldd-oxide-gun.txt" 2>&1 || true
+        ldd "$out_dir/boron-gun" >"$out_dir/ldd-boron-gun.txt" 2>&1 || true
     fi
 }
 
@@ -198,7 +198,7 @@ write_manifest_and_compare() {
     local comparison="$evidence_dir/comparison.tsv"
     printf 'artifact\tbuilder\ttarget\tprofile\tfeatures\tcommit\trust_version\tbuild_command\tsha256\tsize_bytes\tevidence_path\n' >"$manifest"
     for builder in a b; do
-        for artifact in borondns oxide-gun; do
+        for artifact in borondns boron-gun; do
             local features
             local command
             if [[ "$artifact" == "borondns" ]]; then
@@ -206,7 +206,7 @@ write_manifest_and_compare() {
                 command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli --features af-xdp"
             else
                 features="xdp"
-                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p oxide-gun --features xdp"
+                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p boron-gun --features xdp"
             fi
             local path="$evidence_dir/artifacts/$builder/$artifact"
             printf '%s\t%s\t%s\trelease\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -226,7 +226,7 @@ write_manifest_and_compare() {
 
     printf 'artifact\ttarget\tprofile\tbuilder_a_sha256\tbuilder_b_sha256\tbuilder_a_size_bytes\tbuilder_b_size_bytes\tmatch\tevidence_path_a\tevidence_path_b\n' >"$comparison"
     local artifact_match="true"
-    for artifact in borondns oxide-gun; do
+    for artifact in borondns boron-gun; do
         local path_a="$evidence_dir/artifacts/a/$artifact"
         local path_b="$evidence_dir/artifacts/b/$artifact"
         local sha_a sha_b size_a size_b match
@@ -276,10 +276,10 @@ EOF
 write_traceability() {
     cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_state	artifact	note
-ODS-NFR-MAINT-005	retained-local-comparison	artifact-manifest.tsv; comparison.tsv; reproducible-build-summary.env	Two builds in separate target directories are compared; reproducible-build-summary.env is authoritative for artifact match, source cleanliness, and release eligibility.
-ODS-NFR-OBS-006	retained-local-comparison	reproducible-build-env.env	The build fixed BORONDNS_BUILD_COMMIT, BORONDNS_BUILD_RUST_VERSION, BORONDNS_BUILD_TIMESTAMP, and SOURCE_DATE_EPOCH so embedded build-info labels are deterministic.
-ODS-INV-009	retained-local-comparison	cargo-metadata.locked.json; reproducible-build-env.env	The comparison used locked Cargo metadata and static source-tree inputs.
-ODS-VER-010	retained-local-comparison	README.md; reproducible-build-summary.env	The retained evidence directory records command, environment, digests, and comparison result for release-note publication.
+BDS-NFR-MAINT-005	retained-local-comparison	artifact-manifest.tsv; comparison.tsv; reproducible-build-summary.env	Two builds in separate target directories are compared; reproducible-build-summary.env is authoritative for artifact match, source cleanliness, and release eligibility.
+BDS-NFR-OBS-006	retained-local-comparison	reproducible-build-env.env	The build fixed BORONDNS_BUILD_COMMIT, BORONDNS_BUILD_RUST_VERSION, BORONDNS_BUILD_TIMESTAMP, and SOURCE_DATE_EPOCH so embedded build-info labels are deterministic.
+BDS-INV-009	retained-local-comparison	cargo-metadata.locked.json; reproducible-build-env.env	The comparison used locked Cargo metadata and static source-tree inputs.
+BDS-VER-010	retained-local-comparison	README.md; reproducible-build-summary.env	The retained evidence directory records command, environment, digests, and comparison result for release-note publication.
 EOF
 }
 
@@ -298,7 +298,7 @@ the produced static musl binaries.
 Verified artifacts:
 
 - \`borondns\`, built from package \`borondns-cli\` with feature \`af-xdp\`.
-- \`oxide-gun\`, built from package \`oxide-gun\` with feature \`xdp\`.
+- \`boron-gun\`, built from package \`boron-gun\` with feature \`xdp\`.
 
 Target: \`$target_triple\`
 Commit: \`$commit\`

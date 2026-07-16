@@ -68,7 +68,7 @@ and slowly diverging.
   partial, and remaining `ZoneImage` work, including retirement of the old
   query-time memory layout.
 - `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
-  header, gzip, and rate-limit contract for `ODS-IF-HEALTH`.
+  header, gzip, and rate-limit contract for `BDS-IF-HEALTH`.
 - `observability-api.md`: optional in-process JSON observability API for richer
   read-only runtime, zone, transfer, catalog, resource, time-sync, and
   certificate status.
@@ -95,11 +95,11 @@ and slowly diverging.
   benchmark guide.
 - `reference-verification-profile.md`: formal release benchmark hardware,
   query-mix, and artifact-retention profile referenced by SRS Appendix E.
-- `OxideGun-SRS-v0.1.md`: normative requirements for the OxideGun support
+- `BoronGun-SRS-v0.1.md`: normative requirements for the BoronGun support
   tool (RRL-focused load generator with AF_XDP backend).
-- `oxide-gun-mvp-plan.md`: phased path from the current prototype toward a
+- `boron-gun-mvp-plan.md`: phased path from the current prototype toward a
   useful MVP aligned with the SRS.
-- `oxide-gun.md`: OxideGun load-generator and XDP lab notes (operational usage).
+- `boron-gun.md`: BoronGun load-generator and XDP lab notes (operational usage).
 - `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
   and XDP evidence campaign runbook for the local physical hosts.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
@@ -134,7 +134,7 @@ and slowly diverging.
 - `dnssec-conformance-matrix.tsv`: passive DNSSEC conformance matrix.
 - `zsm-engineering-mvp-matrix.tsv`: checked short-evidence matrix for Zone State
   Machine requirements.
-- `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance
+- `rfc-compliance-assertions.md`: BDS-VER-014 structured RFC compliance
   assertion register.
 - `project-decision-register.md`: project decision audit trail consumed by
   release handoff for Appendix C.5 decision review.

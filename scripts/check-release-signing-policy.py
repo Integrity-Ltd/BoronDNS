@@ -33,7 +33,7 @@ RELEASE_REPRODUCIBILITY_VERIFIER = (
 DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 EXPECTED_RELEASE_HELPER_SHA256 = {
     RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
-    RELEASE_REPRODUCIBILITY_VERIFIER: "a7c8d2b2a12c5a0db5744da253158c572248627a8db8d3a5449aa81e97389969",
+    RELEASE_REPRODUCIBILITY_VERIFIER: "08aff22afc106a84646aa25b7af684de9e30580ab4c757a8abd641c26607993b",
     DOCKER_ARCHIVE_VERIFIER: "296a393810f4dbd4f5dbb5f7fedeaa0f94b3f788f62b8701aa8b1a85d8dbaf2d",
 }
 DOCKERFILE = ROOT / "packaging" / "docker" / "Dockerfile"
@@ -188,22 +188,22 @@ PACKAGE_STEP_SHA256 = {
     "Install packaging tools": "97f5ea4d323ca6cd52f68bf08ce1988a75a39823eace930f3a71b8ba78bd5dd1",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
     "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
-    "Build installer": "85fd2b0830a9ca52aba45ea45bebe1401f79ad8edc60b6d7ff534432d019923c",
+    "Build installer": "a19e5a8a4448a1af99905d319d426c80d80ed01d864764f6f350fbf71125565b",
     "Docker installer smoke": "68a9c54f99158c2f5113d94c9fb49ae666a239bd2e609e054e567b047dd02aff",
     "Build Docker image archive": "d2ac592c0f3558bd33984484af24ec4a10ca59090211d01d613839f12b005440",
     "Docker image smoke": "ccc458342967f6faafeec9490118cfd80dab5d74d1f5922193327596e7c1dce7",
     "Generate release SBOMs": "ae56cdfcbd898d778cd3eb1d0260607dbb9934434b79e93e81166d5c95d845e9",
-    "Verify static binaries": "d319a6e05624e378b0550d2ee01a14e873915b9a37526269f6b01f229b1168fa",
+    "Verify static binaries": "fea7d7f36c7e4caf00f1872ecadca06ae46f4955e81b4a314ae61e025b041c52",
     "Verify packaged source remained clean": "9dfb112f73616187228d34cea7c993bc3eb919cceafe26a55927cc006e7c25cc",
-    "Prepare authenticated release handoff": "07d1c7d7c530314d4fd9b95496efacebfce5aecd6c0ad42d7f558d7670aa0abb",
+    "Prepare authenticated release handoff": "8f8d25ec7f7a470a19384aed83ca07fe1a5e34b4e78b3218b7e30df7d9339236",
     "Upload authenticated release handoff": "034888e5028cbbd3c8c53a62fd919f820c75ae9231d920671db88b1b46c114da",
 }
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
-    "Create GitHub release": "98858400f4fdea5226a131288f4241f8c03f2b3d87cccae40169d11ca03bb3e9",
+    "Create GitHub release": "e40cc264364b4df30e46359b286780882393f89e5db2c08c667ef813e71520f5",
 }
-PACKAGE_TARGET_CONTRACT_SHA256 = "f839e53c9f3fa6d7b5de6e29c9e90d850d4d2841027748ecb6d5dbf4e90c2c21"
+PACKAGE_TARGET_CONTRACT_SHA256 = "2eea31986280b4088e17a4695c69a5948cc9b71f26cb2ba6a71f7ef67889c3a9"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -578,8 +578,8 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '--require-artifacts "$evidence" "${{ needs.verify-source.outputs.source_commit }}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"',
         "test \"${#assets[@]}\" -eq 16",
         'LC_ALL=C /usr/bin/sha256sum -- "${assets[@]##*/}" > release-handoff.sha256',
         'LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256',
@@ -591,7 +591,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         "/usr/bin/sha256sum -c --strict signing-inputs.sha256",
         'python3 verify-release-reproducibility.py --require-artifacts \\\n'
         '              --release-borondns "${release_borondns[0]}" \\\n'
-        '              --release-oxide-gun "${release_oxide_gun[0]}" \\\n'
+        '              --release-boron-gun "${release_boron_gun[0]}" \\\n'
         '              . "$GITHUB_SHA"',
         '/usr/bin/sha256sum -c --strict "$checksum"',
         'cosign_path="$authenticated_tools/cosign"',
@@ -801,7 +801,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
 def package_policy_errors(text: str) -> list[str]:
     """Require checksum preflight and both binaries from a private run target."""
     contract = re.search(
-        r'^run_build_target=.*?^install -m 0755 "\$oxide_gun_binary" "\$run_staging/bin/oxide-gun"$',
+        r'^run_build_target=.*?^install -m 0755 "\$boron_gun_binary" "\$run_staging/bin/boron-gun"$',
         text,
         re.MULTILINE | re.DOTALL,
     )
@@ -1312,24 +1312,24 @@ raise SystemExit(64)
             prefix = f"borondns-{release_version}-{target}"
             tarball = f"{prefix}.tar.xz"
             binary = f"{prefix}.bin"
-            oxide_gun = f"{prefix}-oxide-gun.bin"
+            boron_gun = f"{prefix}-boron-gun.bin"
             docker_image = f"{prefix}-docker-image.tar.xz"
             docker_manifest = f"{prefix}-docker-image.manifest.txt"
             borondns_sbom = f"{prefix}-borondns.cdx.json"
-            oxide_gun_sbom = f"{prefix}-oxide-gun.cdx.json"
+            boron_gun_sbom = f"{prefix}-boron-gun.cdx.json"
             docker_sbom = f"{prefix}-docker-image.cdx.json"
             sbom_manifest = f"{prefix}-sbom-manifest.tsv"
             primary_assets = (
-                tarball, binary, oxide_gun, docker_image, docker_manifest,
-                borondns_sbom, oxide_gun_sbom, docker_sbom, sbom_manifest,
+                tarball, binary, boron_gun, docker_image, docker_manifest,
+                borondns_sbom, boron_gun_sbom, docker_sbom, sbom_manifest,
             )
             for asset in primary_assets:
                 (handoff / asset).write_bytes(f"fixture {asset}\n".encode())
             (handoff / binary).write_bytes(b"reproducible-borondns\n")
-            (handoff / oxide_gun).write_bytes(b"reproducible-oxide-gun\n")
+            (handoff / boron_gun).write_bytes(b"reproducible-boron-gun\n")
             checksummed = (
-                tarball, binary, oxide_gun, docker_image,
-                borondns_sbom, oxide_gun_sbom, docker_sbom,
+                tarball, binary, boron_gun, docker_image,
+                borondns_sbom, boron_gun_sbom, docker_sbom,
             )
             for asset in checksummed:
                 digest = hashlib.sha256((handoff / asset).read_bytes()).hexdigest()
@@ -1338,10 +1338,10 @@ raise SystemExit(64)
                 )
             handoff_assets = [
                 tarball, f"{tarball}.sha256", binary, f"{binary}.sha256",
-                oxide_gun, f"{oxide_gun}.sha256", docker_image,
+                boron_gun, f"{boron_gun}.sha256", docker_image,
                 f"{docker_image}.sha256", docker_manifest, borondns_sbom,
-                f"{borondns_sbom}.sha256", oxide_gun_sbom,
-                f"{oxide_gun_sbom}.sha256", docker_sbom,
+                f"{borondns_sbom}.sha256", boron_gun_sbom,
+                f"{boron_gun_sbom}.sha256", docker_sbom,
                 f"{docker_sbom}.sha256", sbom_manifest,
             ]
             handoff_manifest = "".join(
@@ -1355,8 +1355,8 @@ raise SystemExit(64)
                 "release-api-supervisor.py", "verify-release-reproducibility.py",
                 "reproducible-build-summary.env", "comparison.tsv",
                 "artifact-manifest.tsv", "artifacts/a/borondns",
-                "artifacts/a/oxide-gun", "artifacts/b/borondns",
-                "artifacts/b/oxide-gun",
+                "artifacts/a/boron-gun", "artifacts/b/borondns",
+                "artifacts/b/boron-gun",
             )
             signing_manifest = "".join(
                 f"{hashlib.sha256((handoff / asset).read_bytes()).hexdigest()}  {asset}\n"
@@ -1366,13 +1366,13 @@ raise SystemExit(64)
                 signing_manifest, encoding="ascii"
             )
             release_assets: list[str] = []
-            for asset in (tarball, binary, oxide_gun, docker_image):
+            for asset in (tarball, binary, boron_gun, docker_image):
                 release_assets.extend(
                     (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
                      f"{asset}.sha256.sigstore.json")
                 )
             release_assets.extend((docker_manifest, f"{docker_manifest}.sigstore.json"))
-            for asset in (borondns_sbom, oxide_gun_sbom, docker_sbom):
+            for asset in (borondns_sbom, boron_gun_sbom, docker_sbom):
                 release_assets.extend(
                     (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
                      f"{asset}.sha256.sigstore.json")
@@ -2204,17 +2204,17 @@ def run_package_mutation_regressions(text: str) -> None:
             'binary="$run_build_target/$target_triple/release/borondns"',
             'binary="$repo_root/target/$target_triple/release/borondns"',
         ),
-        "OxideGun target reuse": (
-            'oxide_gun_binary="$run_build_target/$target_triple/release/oxide-gun"',
-            'oxide_gun_binary="$repo_root/target/$target_triple/release/oxide-gun"',
+        "BoronGun target reuse": (
+            'boron_gun_binary="$run_build_target/$target_triple/release/boron-gun"',
+            'boron_gun_binary="$repo_root/target/$target_triple/release/boron-gun"',
         ),
         "normal binary staging removal": (
             'install -m 0755 "$binary" "$run_staging/bin/borondns"',
             ': # omitted normal binary staging',
         ),
-        "OxideGun staging removal": (
-            'install -m 0755 "$oxide_gun_binary" "$run_staging/bin/oxide-gun"',
-            ': # omitted OxideGun staging',
+        "BoronGun staging removal": (
+            'install -m 0755 "$boron_gun_binary" "$run_staging/bin/boron-gun"',
+            ': # omitted BoronGun staging',
         ),
     }
     for label, (expected, weakened) in target_mutations.items():
@@ -2735,7 +2735,7 @@ def run_release_api_supervisor_regressions() -> None:
 
 def write_reproducibility_fixture(root: Path, commit: str) -> None:
     artifacts: dict[str, tuple[str, int]] = {}
-    for artifact in ("borondns", "oxide-gun"):
+    for artifact in ("borondns", "boron-gun"):
         payload = f"reproducible-{artifact}\n".encode()
         digest = hashlib.sha256(payload).hexdigest()
         artifacts[artifact] = (digest, len(payload))
@@ -2764,7 +2764,7 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
         "artifact\tbuilder\ttarget\tprofile\tfeatures\tcommit\trust_version\t"
         "build_command\tsha256\tsize_bytes\tevidence_path"
     ]
-    for artifact in ("borondns", "oxide-gun"):
+    for artifact in ("borondns", "boron-gun"):
         digest, size = artifacts[artifact]
         comparison_rows.append(
             f"{artifact}\tx86_64-unknown-linux-musl\trelease\t{digest}\t{digest}\t"
@@ -2777,7 +2777,7 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
                 f"{features}\t{commit}\trustc 1.96.1 (fixture 1970-01-01)\t"
                 f"/fixture/cargo build --locked --release --target-dir "
                 f"<builder-target-dir> --target x86_64-unknown-linux-musl -p "
-                f"{'borondns-cli' if artifact == 'borondns' else 'oxide-gun'} "
+                f"{'borondns-cli' if artifact == 'borondns' else 'boron-gun'} "
                 f"--features {features}\t{digest}\t"
                 f"{size}\tartifacts/{builder}/{artifact}"
             )
@@ -2793,14 +2793,14 @@ def run_release_reproducibility_regressions() -> None:
         root = Path(temporary)
         write_reproducibility_fixture(root, commit)
         release_borondns = root / "release-borondns"
-        release_oxide_gun = root / "release-oxide-gun"
+        release_boron_gun = root / "release-boron-gun"
         shutil.copyfile(root / "artifacts" / "a" / "borondns", release_borondns)
-        shutil.copyfile(root / "artifacts" / "a" / "oxide-gun", release_oxide_gun)
+        shutil.copyfile(root / "artifacts" / "a" / "boron-gun", release_boron_gun)
         command = [
             sys.executable, str(RELEASE_REPRODUCIBILITY_VERIFIER),
             "--require-artifacts",
             "--release-borondns", str(release_borondns),
-            "--release-oxide-gun", str(release_oxide_gun),
+            "--release-boron-gun", str(release_boron_gun),
             str(root), commit,
         ]
         valid = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -2808,7 +2808,7 @@ def run_release_reproducibility_regressions() -> None:
             raise RuntimeError(
                 f"valid release reproducibility fixture failed: {valid.stdout}{valid.stderr}"
             )
-        artifact = root / "artifacts" / "b" / "oxide-gun"
+        artifact = root / "artifacts" / "b" / "boron-gun"
         original = artifact.read_bytes()
         artifact.write_bytes(original + b"tamper")
         tampered = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -2853,8 +2853,8 @@ def run_release_binary_binding_regressions(text: str) -> None:
     bindings = (
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"',
     )
     for binding in bindings:
         if text.count(binding) != 2:

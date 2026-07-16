@@ -34,7 +34,7 @@ package_names = re.findall(r'^name = "([^"]+)"$', lock_text, flags=re.MULTILINE)
 failures: list[str] = []
 
 print("dnssec_passive_audit=started")
-print("requirement=ODS-FR-DNSSEC-013")
+print("requirement=BDS-FR-DNSSEC-013")
 print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")

@@ -186,7 +186,7 @@ The useful mental model is:
   reference.
 
 Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
-10,000 per `ODS-NFR-SEC-013`. If a catalog lists more member zones than the
+10,000 per `BDS-NFR-SEC-013`. If a catalog lists more member zones than the
 configured cap, BoronDNS accepts the deterministic first `N` members after
 canonical ordering, drops the excess, and emits
 `event=catalog_member_limit_exceeded` with the configured limit, observed member

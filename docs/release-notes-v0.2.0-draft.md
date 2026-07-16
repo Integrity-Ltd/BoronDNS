@@ -2,7 +2,7 @@
 
 Status: draft release material for the v0.2.0 preparation branch. This is not
 the final release-acceptance note and does not claim that the formal SRS
-`ODS-VER-008` gate is complete.
+`BDS-VER-008` gate is complete.
 
 ## Version Posture
 
@@ -12,7 +12,7 @@ the final release-acceptance note and does not claim that the formal SRS
   support-crate versions, and package entries across all four checked-in
   lockfiles have been bumped to `0.2.0`: `./Cargo.lock`, `./fuzz/Cargo.lock`,
   `./crates/borondns-server-ebpf/Cargo.lock`, and
-  `./crates/oxide-gun-ebpf/Cargo.lock`.
+  `./crates/boron-gun-ebpf/Cargo.lock`.
 - SRS document version remains `v0.9.1`; the v0.2.0 work is source-alignment,
   documentation, evidence, and release-readiness cleanup against that SRS.
 
@@ -33,7 +33,7 @@ release-candidate shape now present in source and docs:
 - strict transfer publication behavior after malformed or out-of-zone transfer
   data; bad transfer data must fail cleanly rather than panic the AXFR path;
 - UDP and AF_XDP tuning controls plus retained benchmark documentation for the
-  tuned server and OxideGun paths;
+  tuned server and BoronGun paths;
 - first 24-hour ASan-backed two-host fuzz campaign evidence for the current
   parser-oriented fuzz targets.
 

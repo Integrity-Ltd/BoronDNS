@@ -17,7 +17,7 @@ CLI_MAIN = ROOT / "crates" / "borondns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
     "## Service Level Objectives",
-    "ODS-NFR-MAINT-009",
+    "BDS-NFR-MAINT-009",
     "native process",
     "OCI-compatible container",
     "VM image",
@@ -37,7 +37,7 @@ REQUIRED_TEXT = [
     "deferred release/operations work",
     "privilege",
     "security@integrity.hu",
-    "ODS-FR-XOT-012",
+    "BDS-FR-XOT-012",
     "docs/operational-slos.md",
     "debian12-beta-vm-profile.md",
     "retained_removal_quarantine_N_parent_identity",
@@ -59,8 +59,8 @@ RELEASE_GUIDE_TEXT = [
     "BORONDNS_EVIDENCE_RUN_INTEROP",
     "BORONDNS_RELEASE_NOTES",
     "BORONDNS_PERF_BASELINE",
-    "ODS-VER-008",
-    "ODS-VER-015",
+    "BDS-VER-008",
+    "BDS-VER-015",
     "`device:inode:owner:type`",
     "unverified parent namespace",
     "A later invocation never imports a prior",
@@ -70,12 +70,12 @@ RELEASE_GUIDE_TEXT = [
 
 SLO_TEXT = [
     "informative operator SLO publication",
-    "ODS-NFR-PERF-001",
-    "ODS-NFR-PERF-002",
-    "ODS-NFR-PERF-003",
-    "ODS-NFR-REL-003",
-    "ODS-NFR-REL-005",
-    "ODS-NFR-REL-007",
+    "BDS-NFR-PERF-001",
+    "BDS-NFR-PERF-002",
+    "BDS-NFR-PERF-003",
+    "BDS-NFR-REL-003",
+    "BDS-NFR-REL-005",
+    "BDS-NFR-REL-007",
     "Suggested Operational SLOs",
     "formal release/operations targets",
     "bounded local Engineering MVP has completed those long-running runs",
@@ -127,7 +127,7 @@ def main() -> None:
         if needle not in release_text:
             fail(f"{RELEASE_GUIDE} missing required text: {needle}")
     cli_text = CLI_MAIN.read_text(encoding="utf-8")
-    for env_name in sorted(set(re.findall(r'"(ODS_[A-Z0-9_]+)"\s*=>', cli_text))):
+    for env_name in sorted(set(re.findall(r'"(BORONDNS_[A-Z0-9_]+)"\s*=>', cli_text))):
         if env_name not in text:
             fail(f"{GUIDE} missing documented environment override: {env_name}")
     print(f"Operator guide check passed: {GUIDE}")

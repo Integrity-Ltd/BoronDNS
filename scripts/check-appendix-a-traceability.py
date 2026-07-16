@@ -13,11 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SRS_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
 APPENDIX_PATH = ROOT / "docs" / "appendix-a-traceability-matrix.md"
 
-ID_PATTERN = r"ODS-[A-Z]+(?:-[A-Z0-9]+)?-\d{3}"
+ID_PATTERN = r"BDS-[A-Z]+(?:-[A-Z0-9]+)?-\d{3}"
 SRS_DEF_RE = re.compile(rf"^\*\*({ID_PATTERN})\b", re.MULTILINE)
 ID_RE = re.compile(ID_PATTERN)
 FULL_RANGE_RE = re.compile(rf"({ID_PATTERN})\.\.({ID_PATTERN})")
-SHORT_RANGE_RE = re.compile(r"(ODS-[A-Z]+(?:-[A-Z0-9]+)?)-(\d{3})\.\.-?(\d{3})")
+SHORT_RANGE_RE = re.compile(r"(BDS-[A-Z]+(?:-[A-Z0-9]+)?)-(\d{3})\.\.-?(\d{3})")
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED REQUIREMENT COVERAGE -->"
 END_MARKER = "<!-- END GENERATED REQUIREMENT COVERAGE -->"

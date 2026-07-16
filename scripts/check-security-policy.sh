@@ -25,8 +25,8 @@ require_file "$security_policy"
 require_file "$architecture_doc"
 
 for needle in \
-    "ODS-NFR-SEC-007" \
-    "ODS-NFR-MAINT-008" \
+    "BDS-NFR-SEC-007" \
+    "BDS-NFR-MAINT-008" \
     "security@integrity.hu" \
     "72 hours" \
     "30 days" \
@@ -38,7 +38,7 @@ for needle in \
     "Sigstore/Cosign" \
     "Formal SRS MVP and public release artifacts must be signed" \
     "unsigned/internal" \
-    "not evidence for \`ODS-NFR-MAINT-008\`" \
+    "not evidence for \`BDS-NFR-MAINT-008\`" \
     "cosign verify-blob" \
     "OpenPGP" \
     "public signing" \
@@ -48,8 +48,8 @@ for needle in \
 done
 
 for needle in \
-    "ODS-NFR-MAINT-008" \
-    "ODS-VER-015" \
+    "BDS-NFR-MAINT-008" \
+    "BDS-VER-015" \
     "Sigstore/Cosign" \
     "Architecture Owner" \
     "Release engineer" \

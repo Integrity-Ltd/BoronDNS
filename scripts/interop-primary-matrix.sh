@@ -15,18 +15,18 @@ EOF
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_family	primary	capability	evidence
-ODS-FR-AXFR	BIND	axfr	bind-axfr/primary-version.txt; bind-axfr/axfr-traceability.tsv
-ODS-FR-TSIG	BIND	tsig_axfr	bind-tsig-axfr/primary-version.txt; bind-tsig-axfr/bind-tsig-axfr-summary.env
-ODS-FR-NOTIFY	BIND	notify_refresh	bind-notify-refresh/primary-version.txt; bind-notify-refresh/bind-notify-traceability.tsv
-ODS-FR-IXFR	BIND	ixfr_refresh	bind-ixfr-refresh/primary-version.txt; bind-ixfr-refresh/bind-ixfr-refresh-summary.env
-ODS-FR-AXFR	NSD	axfr	nsd-axfr/primary-version.txt; nsd-axfr/axfr-traceability.tsv
-ODS-FR-TSIG	NSD	tsig_axfr	nsd-tsig-axfr/primary-version.txt; nsd-tsig-axfr/nsd-tsig-axfr-summary.env
-ODS-FR-NOTIFY	NSD	notify_refresh	nsd-notify-refresh/primary-version.txt; nsd-notify-refresh/nsd-notify-traceability.tsv
-ODS-FR-AXFR	Knot	axfr	knot-axfr/primary-version.txt; knot-axfr/axfr-traceability.tsv
-ODS-FR-TSIG	Knot	tsig_axfr	knot-tsig-axfr/primary-version.txt; knot-tsig-axfr/knot-tsig-axfr-summary.env
-ODS-FR-NOTIFY	Knot	notify_refresh	knot-notify-refresh/primary-version.txt; knot-notify-refresh/knot-notify-traceability.tsv
-ODS-FR-IXFR	Knot	ixfr_refresh	knot-ixfr-refresh/primary-version.txt; knot-ixfr-refresh/knot-ixfr-refresh-summary.env
-ODS-FR-PROV	PowerDNS	catalog_tsig	powerdns-postgres-catalog-tsig/primary-version.txt; powerdns-postgres-catalog-tsig/powerdns-postgres-catalog-tsig-traceability.tsv
+BDS-FR-AXFR	BIND	axfr	bind-axfr/primary-version.txt; bind-axfr/axfr-traceability.tsv
+BDS-FR-TSIG	BIND	tsig_axfr	bind-tsig-axfr/primary-version.txt; bind-tsig-axfr/bind-tsig-axfr-summary.env
+BDS-FR-NOTIFY	BIND	notify_refresh	bind-notify-refresh/primary-version.txt; bind-notify-refresh/bind-notify-traceability.tsv
+BDS-FR-IXFR	BIND	ixfr_refresh	bind-ixfr-refresh/primary-version.txt; bind-ixfr-refresh/bind-ixfr-refresh-summary.env
+BDS-FR-AXFR	NSD	axfr	nsd-axfr/primary-version.txt; nsd-axfr/axfr-traceability.tsv
+BDS-FR-TSIG	NSD	tsig_axfr	nsd-tsig-axfr/primary-version.txt; nsd-tsig-axfr/nsd-tsig-axfr-summary.env
+BDS-FR-NOTIFY	NSD	notify_refresh	nsd-notify-refresh/primary-version.txt; nsd-notify-refresh/nsd-notify-traceability.tsv
+BDS-FR-AXFR	Knot	axfr	knot-axfr/primary-version.txt; knot-axfr/axfr-traceability.tsv
+BDS-FR-TSIG	Knot	tsig_axfr	knot-tsig-axfr/primary-version.txt; knot-tsig-axfr/knot-tsig-axfr-summary.env
+BDS-FR-NOTIFY	Knot	notify_refresh	knot-notify-refresh/primary-version.txt; knot-notify-refresh/knot-notify-traceability.tsv
+BDS-FR-IXFR	Knot	ixfr_refresh	knot-ixfr-refresh/primary-version.txt; knot-ixfr-refresh/knot-ixfr-refresh-summary.env
+BDS-FR-PROV	PowerDNS	catalog_tsig	powerdns-postgres-catalog-tsig/primary-version.txt; powerdns-postgres-catalog-tsig/powerdns-postgres-catalog-tsig-traceability.tsv
 EOF
 
 failures=0

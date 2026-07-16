@@ -400,9 +400,9 @@ done
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<EOF
-ODS-VER-CATEXT-001	retained-real-primary	powerdns_catalog_bind_member_extension	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from BIND.
-ODS-VER-CATEXT-002	retained-real-primary	powerdns_catalog_knot_member_extension	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from Knot.
-ODS-VER-CATEXT-003	retained-real-primary	powerdns_catalog_nsd_member_extension	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from NSD.
+BDS-VER-CATEXT-001	retained-real-primary	powerdns_catalog_bind_member_extension	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from BIND.
+BDS-VER-CATEXT-002	retained-real-primary	powerdns_catalog_knot_member_extension	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from Knot.
+BDS-VER-CATEXT-003	retained-real-primary	powerdns_catalog_nsd_member_extension	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves one RFC 9432 catalog with per-member transfer metadata while BoronDNS transfers the member zone from NSD.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

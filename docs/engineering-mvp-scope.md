@@ -1,7 +1,7 @@
 # Release Candidate Scope
 
 This document defines the current release-candidate scope for BoronDNS. It is
-not the SRS `ODS-VER-008` release-acceptance gate.
+not the SRS `BDS-VER-008` release-acceptance gate.
 
 ## In Scope
 

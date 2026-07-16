@@ -463,10 +463,10 @@ impl KernelDropGuard {
         }
 
         let program: &mut Xdp = bpf
-            .program_mut("oxide_gun_drop")
-            .ok_or_else(|| anyhow!("oxide_gun_drop program missing from XDP drop object"))?
+            .program_mut("boron_gun_drop")
+            .ok_or_else(|| anyhow!("boron_gun_drop program missing from XDP drop object"))?
             .try_into()
-            .context("oxide_gun_drop is not an XDP program")?;
+            .context("boron_gun_drop is not an XDP program")?;
         program.load().context("failed to load XDP drop program")?;
         program
             .attach(interface, xdp_flags(mode))
@@ -528,10 +528,10 @@ impl ReplyRedirectGuard {
                 .context("failed to configure XDP reply redirect selector")?;
         }
         {
-            let map = bpf.map_mut("OXIDE_GUN_XSKS").ok_or_else(|| {
-                anyhow!("OXIDE_GUN_XSKS map missing from XDP reply redirect object")
+            let map = bpf.map_mut("BORON_GUN_XSKS").ok_or_else(|| {
+                anyhow!("BORON_GUN_XSKS map missing from XDP reply redirect object")
             })?;
-            let mut xsk_map = XskMap::try_from(map).context("failed to open OXIDE_GUN_XSKS map")?;
+            let mut xsk_map = XskMap::try_from(map).context("failed to open BORON_GUN_XSKS map")?;
             for (queue_id, socket_fd) in xsk_entries {
                 xsk_map
                     .set(*queue_id, *socket_fd, 0)
@@ -540,14 +540,14 @@ impl ReplyRedirectGuard {
         }
         {
             let program: &mut Xdp = bpf
-                .program_mut("oxide_gun_reply_redirect")
+                .program_mut("boron_gun_reply_redirect")
                 .ok_or_else(|| {
                     anyhow!(
-                        "oxide_gun_reply_redirect program missing from XDP reply redirect object"
+                        "boron_gun_reply_redirect program missing from XDP reply redirect object"
                     )
                 })?
                 .try_into()
-                .context("oxide_gun_reply_redirect is not an XDP program")?;
+                .context("boron_gun_reply_redirect is not an XDP program")?;
             program
                 .load()
                 .context("failed to load XDP reply redirect program")?;

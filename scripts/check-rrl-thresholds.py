@@ -29,17 +29,17 @@ EXPECTED = {
 }
 
 DOC_NEEDLES = {
-    "enabled": "| RRL enabled | `true` | ODS-FR-RRL-001 |",
-    "ipv4_prefix_len": "| IPv4 source prefix length | `24` | ODS-FR-RRL-002 |",
-    "ipv6_prefix_len": "| IPv6 source prefix length | `56` | ODS-FR-RRL-002 |",
-    "positive_per_second": "| Positive response rate | `20/s` | ODS-FR-RRL-003 |",
-    "nxdomain_per_second": "| NXDOMAIN response rate | `5/s` | ODS-FR-RRL-003 |",
-    "nodata_per_second": "| NODATA response rate | `10/s` | ODS-FR-RRL-003 |",
-    "referral_per_second": "| Referral response rate | `10/s` | ODS-FR-RRL-003 |",
-    "error_per_second": "| Error response rate | `5/s` | ODS-FR-RRL-003 |",
-    "slip": "| Slip | `2` | ODS-FR-RRL-005 |",
-    "max_keys": "| Maximum tracked keys | `100000` | ODS-FR-RRL-010 |",
-    "summary_log_interval_secs": "| Summary log interval | `60s` | ODS-FR-RRL-011 |",
+    "enabled": "| RRL enabled | `true` | BDS-FR-RRL-001 |",
+    "ipv4_prefix_len": "| IPv4 source prefix length | `24` | BDS-FR-RRL-002 |",
+    "ipv6_prefix_len": "| IPv6 source prefix length | `56` | BDS-FR-RRL-002 |",
+    "positive_per_second": "| Positive response rate | `20/s` | BDS-FR-RRL-003 |",
+    "nxdomain_per_second": "| NXDOMAIN response rate | `5/s` | BDS-FR-RRL-003 |",
+    "nodata_per_second": "| NODATA response rate | `10/s` | BDS-FR-RRL-003 |",
+    "referral_per_second": "| Referral response rate | `10/s` | BDS-FR-RRL-003 |",
+    "error_per_second": "| Error response rate | `5/s` | BDS-FR-RRL-003 |",
+    "slip": "| Slip | `2` | BDS-FR-RRL-005 |",
+    "max_keys": "| Maximum tracked keys | `100000` | BDS-FR-RRL-010 |",
+    "summary_log_interval_secs": "| Summary log interval | `60s` | BDS-FR-RRL-011 |",
 }
 
 SRS_NEEDLES = {

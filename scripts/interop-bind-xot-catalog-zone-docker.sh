@@ -494,9 +494,9 @@ docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
-ODS-VER-003	retained-real-primary	bind_xot_catalog_zone	alpn-probe.txt; tls-signed-catalog-axfr.out; bind-xot-catalog-zone-summary.tsv	BIND 9 serves an RFC 9432 catalog over XoT with ALPN dot and TSIG, and BoronDNS consumes it as a secondary.
-ODS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; borondns.toml.redacted	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and BoronDNS configures both protections.
-ODS-FR-PROV-006	retained-real-primary	bind_xot_catalog_live_update	catalog-added.zone; catalog-removed.zone; member-added.out; member-removed.out	Live catalog updates from BIND are reconciled while BoronDNS remains running.
+BDS-VER-003	retained-real-primary	bind_xot_catalog_zone	alpn-probe.txt; tls-signed-catalog-axfr.out; bind-xot-catalog-zone-summary.tsv	BIND 9 serves an RFC 9432 catalog over XoT with ALPN dot and TSIG, and BoronDNS consumes it as a secondary.
+BDS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; borondns.toml.redacted	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and BoronDNS configures both protections.
+BDS-FR-PROV-006	retained-real-primary	bind_xot_catalog_live_update	catalog-added.zone; catalog-removed.zone; member-added.out; member-removed.out	Live catalog updates from BIND are reconciled while BoronDNS remains running.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

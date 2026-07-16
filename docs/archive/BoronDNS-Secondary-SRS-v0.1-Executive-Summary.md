@@ -34,7 +34,7 @@ Three considerations motivate this project, expanding on the PID's strategic int
 
 The SRS establishes six architectural invariants — properties the system must hold at all times during operation, distinct from the behaviours it performs. These constrain every functional and non-functional requirement and represent the design's foundational commitments:
 
-The server is **secondary-only**: zone data is acquired exclusively through authenticated zone transfer from configured primaries (ODS-INV-001). All zone data is **memory-resident**; the query-serving path performs no disk I/O (ODS-INV-002). Zone refresh is **atomic**: every query is answered from a single internally consistent zone version (ODS-INV-003). The server holds **no persistent operational state**; every process start is a cold start (ODS-INV-004). Configuration is **static** for the process lifetime; changes are applied only by restart (ODS-INV-005). The implementation uses **Rust's safe subset** for all network-input processing, with `unsafe` blocks confined to documented and justified exceptions (ODS-INV-006).
+The server is **secondary-only**: zone data is acquired exclusively through authenticated zone transfer from configured primaries (BDS-INV-001). All zone data is **memory-resident**; the query-serving path performs no disk I/O (BDS-INV-002). Zone refresh is **atomic**: every query is answered from a single internally consistent zone version (BDS-INV-003). The server holds **no persistent operational state**; every process start is a cold start (BDS-INV-004). Configuration is **static** for the process lifetime; changes are applied only by restart (BDS-INV-005). The implementation uses **Rust's safe subset** for all network-input processing, with `unsafe` blocks confined to documented and justified exceptions (BDS-INV-006).
 
 These invariants are not behaviour to be performed but constraints on the space of possible behaviours. They are the SRS's primary commitment, and the rest of the document — 244 functional requirements, 36 non-functional requirements, 23 interface requirements — describes how the system operates within the envelope they define.
 
@@ -150,11 +150,11 @@ Following review and approval of this SRS v0.1, the project's planned next activ
 
 3. **Test Plan.** A sibling document specifying concrete test cases derived from the SRS *Verification* fields. The Test Plan's cases reference SRS requirement identifiers, completing the bidirectional traceability through Appendix A.
 
-4. **Implementation Phase 1 — Alpha.** Implementation against the Alpha milestone criteria of SRS ODS-VER-007, leading to first interop demonstration against a single primary.
+4. **Implementation Phase 1 — Alpha.** Implementation against the Alpha milestone criteria of SRS BDS-VER-007, leading to first interop demonstration against a single primary.
 
-5. **Implementation Phase 2 — MVP.** Implementation of the deferred features (IXFR, XoT, DNSSEC, RRL, full TSIG, expanded RR catalogue) and execution of the comprehensive MVP acceptance per SRS ODS-VER-008.
+5. **Implementation Phase 2 — MVP.** Implementation of the deferred features (IXFR, XoT, DNSSEC, RRL, full TSIG, expanded RR catalogue) and execution of the comprehensive MVP acceptance per SRS BDS-VER-008.
 
-6. **External Operator Acceptance.** Independent deployment and validation by at least one production-representative external operator, as a hard MVP gate per SRS ODS-VER-008.
+6. **External Operator Acceptance.** Independent deployment and validation by at least one production-representative external operator, as a hard MVP gate per SRS BDS-VER-008.
 
 ---
 

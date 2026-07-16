@@ -1,7 +1,7 @@
 # Health and Metrics Interface
 
-Status: current interface contract for `ODS-IF-HEALTH-001..006` and
-`ODS-NFR-OBS-003..009`.
+Status: current interface contract for `BDS-IF-HEALTH-001..006` and
+`BDS-NFR-OBS-003..009`.
 
 This document owns the concrete HTTP shape of the BoronDNS health and metrics
 endpoint. The SRS owns the normative requirement IDs; this document keeps the

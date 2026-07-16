@@ -16,7 +16,7 @@ HEADER = [
 ]
 
 REQUIRED_IDS = {
-    *(f"ODS-FR-ZSM-{index:03d}" for index in range(1, 15)),
+    *(f"BDS-FR-ZSM-{index:03d}" for index in range(1, 15)),
 }
 VALID_PHASES = {"Engineering-MVP"}
 VALID_STATUSES = {"partial"}
@@ -97,7 +97,7 @@ def main() -> None:
         gap = row["remaining_release_gap"].lower()
         if "release" not in gap:
             fail(f"{context}: remaining_release_gap must name release work")
-        if requirement_id in {"ODS-FR-ZSM-002", "ODS-FR-ZSM-009", "ODS-FR-ZSM-010"}:
+        if requirement_id in {"BDS-FR-ZSM-002", "BDS-FR-ZSM-009", "BDS-FR-ZSM-010"}:
             if "engineering mvp" not in gap:
                 fail(f"{context}: long-running rows must name Engineering MVP boundary")
         seen[requirement_id] = row

@@ -599,7 +599,7 @@ fn validate_config_rejects_missing_secret_store_xot_profile() {
 }
 
 #[test]
-fn dump_config_includes_ods_environment_overrides() {
+fn dump_config_includes_borondns_environment_overrides() {
     let config = write_config(
         "dump-env",
         r#"
@@ -620,14 +620,14 @@ fn dump_config_includes_ods_environment_overrides() {
     let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
         .arg("--dump-config")
         .arg(&config)
-        .env("ODS_SERVER_NSID", "env-nsid")
-        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120")
-        .env("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45")
-        .env("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192")
-        .env("ODS_TSIG_FUDGE_SECONDS", "30")
-        .env("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600")
-        .env("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200")
-        .env("ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200")
+        .env("BORONDNS_SERVER_NSID", "env-nsid")
+        .env("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120")
+        .env("BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45")
+        .env("BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192")
+        .env("BORONDNS_TSIG_FUDGE_SECONDS", "30")
+        .env("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600")
+        .env("BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200")
+        .env("BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200")
         .output()
         .expect("run borondns --dump-config");
 
@@ -650,7 +650,7 @@ fn dump_config_includes_ods_environment_overrides() {
 }
 
 #[test]
-fn invalid_ods_environment_override_exits_with_config_invalid() {
+fn invalid_borondns_environment_override_exits_with_config_invalid() {
     let config = write_config(
         "invalid-env",
         r#"
@@ -667,21 +667,24 @@ fn invalid_ods_environment_override_exits_with_config_invalid() {
     let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
         .arg("--validate-config")
         .arg(&config)
-        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "not-a-number")
+        .env(
+            "BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE",
+            "not-a-number",
+        )
         .output()
         .expect("run borondns --validate-config");
 
     assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
+            .contains("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
     );
 
     let _ = fs::remove_file(config);
 }
 
 #[test]
-fn ods_environment_override_revalidation_rejects_cross_field_violation() {
+fn borondns_environment_override_revalidation_rejects_cross_field_violation() {
     let config = write_config(
         "invalid-env-cross-field",
         r#"
@@ -698,14 +701,14 @@ fn ods_environment_override_revalidation_rejects_cross_field_violation() {
     let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
         .arg("--validate-config")
         .arg(&config)
-        .env("ODS_TRANSFER_REQUIRE_TSIG", "true")
+        .env("BORONDNS_TRANSFER_REQUIRE_TSIG", "true")
         .output()
         .expect("run borondns --validate-config");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
     assert!(
-        stderr.contains("ODS_TRANSFER_REQUIRE_TSIG"),
+        stderr.contains("BORONDNS_TRANSFER_REQUIRE_TSIG"),
         "stderr={stderr}"
     );
     assert!(stderr.contains("requires tsig_key"), "stderr={stderr}");
@@ -714,7 +717,7 @@ fn ods_environment_override_revalidation_rejects_cross_field_violation() {
 }
 
 #[test]
-fn unrecognized_ods_environment_override_warns_without_failing() {
+fn unrecognized_borondns_environment_override_warns_without_failing() {
     let config = write_config(
         "unknown-env",
         r#"
@@ -731,8 +734,8 @@ fn unrecognized_ods_environment_override_warns_without_failing() {
     let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
         .arg("--validate-config")
         .arg(&config)
-        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT", "120")
-        .env("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "240")
+        .env("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT", "120")
+        .env("NOT_BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "240")
         .output()
         .expect("run borondns --validate-config");
 
@@ -743,8 +746,8 @@ fn unrecognized_ods_environment_override_warns_without_failing() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("category=configuration_warning"));
-    assert!(stderr.contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"));
-    assert!(!stderr.contains("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"));
+    assert!(stderr.contains("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"));
+    assert!(!stderr.contains("NOT_BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"));
 
     let _ = fs::remove_file(config);
 }

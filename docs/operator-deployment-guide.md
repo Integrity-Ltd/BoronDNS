@@ -97,7 +97,7 @@ sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
 
 The tag-push release workflow publishes local-use artifacts for
 `x86_64-unknown-linux-musl`: the installer archive, the raw static `borondns`
-binary, the raw static XDP-enabled `oxide-gun` binary, and an Alpine-based
+binary, the raw static XDP-enabled `boron-gun` binary, and an Alpine-based
 Docker image archive. Each public artifact has a sibling `.sha256` file, and
 the release also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
 binaries and Docker image. The Docker image is attached as
@@ -227,30 +227,30 @@ When `--config` is omitted, BoronDNS reads
 `serve --config /path/to/config.toml`, remain supported and take precedence
 over the top-level path.
 
-BoronDNS also supports an SRS v0.9.1-style `ODS_<SECTION>_<KEY>` environment override
+BoronDNS also supports an SRS v0.9.1-style `BORONDNS_<SECTION>_<KEY>` environment override
 subset for scalar process settings. These values take precedence over the file
 and are included in `--dump-config` output:
 
-- `ODS_SERVER_HEALTH`
-- `ODS_SERVER_LOG_LEVEL`
-- `ODS_SERVER_LOG_FORMAT`
-- `ODS_SERVER_NSID`
-- `ODS_CHAOS_VERSION`
-- `ODS_CHAOS_HOSTNAME`
-- `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
-- `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
-- `ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES`
-- `ODS_TSIG_FUDGE_SECONDS`
-- `ODS_TRANSFER_REQUIRE_TSIG`
-- `ODS_EDNS_EXTENDED_DNS_ERRORS`
-- `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
-- `ODS_LIMITS_ZSM_MAX_INTERVAL_SECS`
-- `ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS`
-- `ODS_DNSSEC_NSEC3_MAX_ITERATIONS`
+- `BORONDNS_SERVER_HEALTH`
+- `BORONDNS_SERVER_LOG_LEVEL`
+- `BORONDNS_SERVER_LOG_FORMAT`
+- `BORONDNS_SERVER_NSID`
+- `BORONDNS_CHAOS_VERSION`
+- `BORONDNS_CHAOS_HOSTNAME`
+- `BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
+- `BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
+- `BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES`
+- `BORONDNS_TSIG_FUDGE_SECONDS`
+- `BORONDNS_TRANSFER_REQUIRE_TSIG`
+- `BORONDNS_EDNS_EXTENDED_DNS_ERRORS`
+- `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
+- `BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS`
+- `BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS`
+- `BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS`
 
-Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
+Unrecognised variables matching `BORONDNS_*` are emitted to stderr as non-fatal
 `category=configuration_warning` messages and ignored. Variables outside the
-`ODS_*` namespace are ignored silently.
+`BORONDNS_*` namespace are ignored silently.
 
 Suspicious but valid configuration warnings are also non-fatal. The current
 implemented warning catalogue is:
@@ -750,7 +750,7 @@ external operator acceptance can review them.
 ## Service Level Objectives
 
 `docs/operational-slos.md` is the informative SLO publication required by the
-current project decision register for `ODS-NFR-MAINT-009`. Treat those SLOs as
+current project decision register for `BDS-NFR-MAINT-009`. Treat those SLOs as
 an operator starting point, not a full SRS acceptance claim. Engineering MVP
 sets up the evidence commands and handoff path; release acceptance still
 depends on later performance, reliability, soak, and external-operator evidence
@@ -864,7 +864,7 @@ TSIG:
   Secret-store reload builds and validates a complete new snapshot before
   replacing the live one; failed reloads retain the previous snapshot.
 - System time must be synchronized within the TSIG fudge window; this is the
-  clock synchronisation requirement of `ODS-NFR-REL-007`, and signed
+  clock synchronisation requirement of `BDS-NFR-REL-007`, and signed
   transfers and NOTIFY messages can fail authentication.
 
 XoT:
@@ -923,7 +923,7 @@ Network and process hardening:
   permissions on the same open handle it reads; secret-store paths additionally
   reject intermediate symlinks beneath the captured generation root.
 - Prefer read-only filesystems and minimal service capabilities.
-- `ODS-FR-XOT-012` means BoronDNS does not perform real-time XoT revocation
+- `BDS-FR-XOT-012` means BoronDNS does not perform real-time XoT revocation
   checking; use short-lived certificates and automated trust-anchor rotation
   where that risk matters.
 - Report vulnerabilities to `security@integrity.hu` using the process in
@@ -1115,7 +1115,7 @@ mode-and-ACL proof is not namespace authority.
 The canonical structured RFC compliance assertion list for the current
 Engineering MVP posture is maintained in `docs/rfc-compliance-assertions.md`.
 This guide links to that file and summarizes the operator-facing posture for
-SRS v0.9.1 `ODS-VER-014`; it intentionally does not duplicate the table.
+SRS v0.9.1 `BDS-VER-014`; it intentionally does not duplicate the table.
 Release notes must copy or generate the structured list from the canonical
 register, update evidence pointers to the release snapshot, and retain this
 primary-documentation sync pointer.
@@ -1145,13 +1145,13 @@ current operator-relevant limitations are:
   recorded in the documents above.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts, and external operator deployment evidence is still
-  required before ODS-VER-008 acceptance.
+  required before BDS-VER-008 acceptance.
 - Full performance target runs, 30-day soak execution, and 24-hour fuzz
   campaigns per parser target are later SRS acceptance execution items; the
   Engineering MVP only needs their setup, artifact formats, and handoff path.
 - Container image size and static-binary release packaging are covered by the
   tag-push release workflow through the installer archive, static `borondns`
-  binary, static XDP-enabled `oxide-gun` binary, Alpine Docker image archive,
+  binary, static XDP-enabled `boron-gun` binary, Alpine Docker image archive,
   and SHA256 sidecars. Registry publication remains intentionally out of scope
   for the current private-repository phase.
 - Health and metrics are plain HTTP and unauthenticated. They should not be

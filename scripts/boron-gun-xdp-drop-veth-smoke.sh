@@ -2,9 +2,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-binary="${1:-$repo_root/target/debug/oxide-gun}"
-drop_object="${2:-${OXIDE_GUN_XDP_DROP_OBJECT:-}}"
-out_dir="$repo_root/target/oxide-gun-xdp-drop-veth-smoke"
+binary="${1:-$repo_root/target/debug/boron-gun}"
+drop_object="${2:-${BORON_GUN_XDP_DROP_OBJECT:-}}"
+out_dir="$repo_root/target/boron-gun-xdp-drop-veth-smoke"
 config="$out_dir/smoke.toml"
 src_ns="oxg-drop-src-$$"
 dst_ns="oxg-drop-dst-$$"
@@ -18,16 +18,16 @@ drop_count=4
 pass_port=54000
 
 if [[ "$(id -u)" -ne 0 ]]; then
-    echo "oxide-gun XDP drop smoke requires root; run with pkexec or sudo" >&2
+    echo "boron-gun XDP drop smoke requires root; run with pkexec or sudo" >&2
     exit 77
 fi
 if [[ ! -x "$binary" ]]; then
-    echo "oxide-gun binary is not executable: $binary" >&2
+    echo "boron-gun binary is not executable: $binary" >&2
     exit 1
 fi
 if [[ -z "$drop_object" || ! -f "$drop_object" ]]; then
     echo "compiled eBPF drop object is required" >&2
-    echo "build it with: ./scripts/oxide-gun-build-ebpf.sh" >&2
+    echo "build it with: ./scripts/boron-gun-build-ebpf.sh" >&2
     exit 1
 fi
 
@@ -37,7 +37,7 @@ command -v tcpdump >/dev/null
 
 mkdir -p "$out_dir"
 summary="$out_dir/summary.json"
-stderr_log="$out_dir/oxide-gun.stderr"
+stderr_log="$out_dir/boron-gun.stderr"
 pass_pcap="$out_dir/pass-traffic.pcap"
 pass_text="$out_dir/pass-traffic.txt"
 pass_tcpdump_log="$out_dir/pass-tcpdump.log"
@@ -55,8 +55,8 @@ completion_ring_size = 256
 TOML
 
 cleanup() {
-    if [[ -n "${oxide_pid:-}" ]]; then
-        kill "$oxide_pid" 2>/dev/null || true
+    if [[ -n "${boron_pid:-}" ]]; then
+        kill "$boron_pid" 2>/dev/null || true
     fi
     if [[ -n "${pass_tcpdump_pid:-}" ]]; then
         kill "$pass_tcpdump_pid" 2>/dev/null || true
@@ -96,14 +96,14 @@ ip netns exec "$src_ns" timeout 8 "$binary" \
     --source-mac "$src_mac" \
     --target "$dst_ip:53" \
     --target-mac "$dst_mac" \
-    --qname drop.oxide.test. \
+    --qname drop.boron.test. \
     --qtype A \
     --recv-mode drop \
     --duration-seconds 2 \
     --max-packets 1000000 \
     --target-qps 1000 \
     --flush-interval-ms 0 >"$summary" 2>"$stderr_log" &
-oxide_pid=$!
+boron_pid=$!
 
 sleep 0.5
 ip netns exec "$src_ns" timeout 8 tcpdump -i "$src_if" -U -c 1 -w "$pass_pcap" \
@@ -120,7 +120,7 @@ printf "pass" >"/dev/udp/198.18.0.1/'"$pass_port"'"
 '
 
 wait "$pass_tcpdump_pid"
-wait "$oxide_pid"
+wait "$boron_pid"
 
 python3 - "$summary" "$drop_count" <<'PY'
 import json
@@ -154,4 +154,4 @@ PY
 tcpdump -nn -r "$pass_pcap" >"$pass_text" 2>/dev/null
 grep -q "$dst_ip\\.[0-9][0-9]* > $src_ip\\.$pass_port" "$pass_text"
 
-printf 'oxide-gun XDP drop veth smoke passed: %s\n' "$out_dir"
+printf 'boron-gun XDP drop veth smoke passed: %s\n' "$out_dir"

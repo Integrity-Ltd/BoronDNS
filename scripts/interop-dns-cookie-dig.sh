@@ -503,16 +503,16 @@ EOF
 
 cat >"$traceability_tsv" <<EOF
 requirement	artifact	evidence
-ODS-FR-COOKIE-003	no-cookie-dig.out	no COOKIE option emitted when client omits COOKIE
-ODS-FR-COOKIE-004	first-dig.out	client-cookie-only query receives RFC9018 server cookie
-ODS-FR-COOKIE-005	second-dig.out	valid server-cookie retry receives authoritative answer
-ODS-FR-COOKIE-004	strict-shared-previous-cookie-dig.out	staged rollover instance accepts a Server Cookie produced by another instance with the previous configured shared secret and refreshes it with the current secret
-ODS-FR-COOKIE-006	invalid-cookie-dig.out	lenient invalid-server-cookie query receives answer plus refreshed cookie
-ODS-FR-COOKIE-006	strict-client-only-badcookie-dig.out	strict client-cookie-only query receives BADCOOKIE plus retry cookie
-ODS-FR-COOKIE-006	strict-invalid-server-cookie-badcookie-dig.out	strict invalid-server-cookie query receives BADCOOKIE plus retry cookie
-ODS-FR-COOKIE-008	borondns.toml; strict-borondns.toml	lenient and strict cookie policies configured through static TOML
-ODS-FR-COOKIE-010	borondns.log; strict-borondns.log	startup fingerprint and BADCOOKIE emission logs retained
-ODS-FR-COOKIE-011	metrics.txt; strict-metrics.txt	global and source-prefix cookie metrics retained
+BDS-FR-COOKIE-003	no-cookie-dig.out	no COOKIE option emitted when client omits COOKIE
+BDS-FR-COOKIE-004	first-dig.out	client-cookie-only query receives RFC9018 server cookie
+BDS-FR-COOKIE-005	second-dig.out	valid server-cookie retry receives authoritative answer
+BDS-FR-COOKIE-004	strict-shared-previous-cookie-dig.out	staged rollover instance accepts a Server Cookie produced by another instance with the previous configured shared secret and refreshes it with the current secret
+BDS-FR-COOKIE-006	invalid-cookie-dig.out	lenient invalid-server-cookie query receives answer plus refreshed cookie
+BDS-FR-COOKIE-006	strict-client-only-badcookie-dig.out	strict client-cookie-only query receives BADCOOKIE plus retry cookie
+BDS-FR-COOKIE-006	strict-invalid-server-cookie-badcookie-dig.out	strict invalid-server-cookie query receives BADCOOKIE plus retry cookie
+BDS-FR-COOKIE-008	borondns.toml; strict-borondns.toml	lenient and strict cookie policies configured through static TOML
+BDS-FR-COOKIE-010	borondns.log; strict-borondns.log	startup fingerprint and BADCOOKIE emission logs retained
+BDS-FR-COOKIE-011	metrics.txt; strict-metrics.txt	global and source-prefix cookie metrics retained
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

@@ -26,7 +26,7 @@ exists for local structure and smoke testing, but it is not part of the default
 runtime path, not formal MVP acceptance evidence, and not a production
 performance claim.
 
-The `oxide-gun` crate has an AF_XDP backend for Linux lab load generation. That
+The `boron-gun` crate has an AF_XDP backend for Linux lab load generation. That
 backend remains test-tool scope only; server-side AF_XDP evidence must come
 from the BoronDNS server backend and its own smoke or physical-NIC runs.
 
@@ -44,7 +44,7 @@ Architectural constraints for any future implementation:
 - Cover packet-size and path-MTU behavior explicitly for the bypass path instead
   of relying on the ordinary kernel UDP socket behavior.
 - Runtime loading of operator-supplied eBPF programs remains prohibited by
-  ODS-INV-009. Any kernel-side program must be a versioned project artifact.
+  BDS-INV-009. Any kernel-side program must be a versioned project artifact.
 - First-party unsafe code and unsafe-prone dependencies must remain confined to
   the registry-listed packet-I/O adapter boundary and carry `/// # Safety` /
   `// SAFETY:` rationale plus backend fault evidence before production use.
@@ -64,7 +64,7 @@ complete arena plus index snapshot atomically.
 
 Entry condition for re-evaluation: Engineering MVP benchmarking shows that
 cache misses on zone lookup are a significant fraction of query latency at
-target load, or that per-record memory overhead exceeds the ODS-NFR-RES-002
+target load, or that per-record memory overhead exceeds the BDS-NFR-RES-002
 target.
 
 Architectural constraints for any future implementation:
@@ -75,7 +75,7 @@ Architectural constraints for any future implementation:
 - Separate AXFR/IXFR ingestion from query serving. Ingestion builds a complete
   replacement store instance; query serving reads only published immutable
   snapshots.
-- Preserve ODS-INV-003 atomic publication: no query may observe partially built
+- Preserve BDS-INV-003 atomic publication: no query may observe partially built
   or mixed-generation zone data.
 - Keep per-record memory overhead in benchmark output so the entry condition can
   be evaluated against measured data.

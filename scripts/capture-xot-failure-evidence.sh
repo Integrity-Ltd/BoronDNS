@@ -85,61 +85,61 @@ run_case() {
 
 run_case \
     "handshake-no-cleartext-fallback" \
-    "ODS-FR-XOT-005;ODS-NEG-016" \
+    "BDS-FR-XOT-005;BDS-NEG-016" \
     "TLS handshake failure is reported as XoT failure and does not retry the primary over cleartext TCP." \
     "refresh_xot_handshake_failure_does_not_retry_cleartext"
 
 run_case \
     "certificate-name-mismatch" \
-    "ODS-FR-XOT-003;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-003;BDS-FR-XOT-005" \
     "Certificate name mismatch aborts before any DNS transfer query is sent." \
     "refresh_xot_rejects_certificate_name_mismatch_before_query"
 
 run_case \
     "missing-dot-alpn" \
-    "ODS-FR-XOT-002;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-002;BDS-FR-XOT-005" \
     "Missing negotiated dot ALPN aborts before any DNS transfer query is sent and emits the ALPN failure log event." \
     "refresh_xot_rejects_missing_dot_alpn_before_query"
 
 run_case \
     "tls12-only-primary" \
-    "ODS-FR-XOT-001;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-001;BDS-FR-XOT-005" \
     "TLS 1.2-only primaries fail the TLS profile before AXFR is sent." \
     "refresh_xot_rejects_tls12_only_primary_before_query"
 
 run_case \
     "untrusted-certificate" \
-    "ODS-FR-XOT-003;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-003;BDS-FR-XOT-005" \
     "Untrusted XoT certificate aborts before any DNS transfer query is sent." \
     "refresh_xot_rejects_untrusted_certificate_before_query"
 
 run_case \
     "expired-certificate" \
-    "ODS-FR-XOT-003;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-003;BDS-FR-XOT-005" \
     "Expired XoT certificate aborts before any DNS transfer query is sent." \
     "refresh_xot_rejects_expired_certificate_before_query"
 
 run_case \
     "mtls-client-certificate" \
-    "ODS-FR-XOT-004" \
+    "BDS-FR-XOT-004" \
     "Configured client certificate is presented and mTLS XoT AXFR publishes the transferred serial." \
     "refresh_xot_uses_configured_client_certificate"
 
 run_case \
     "missing-mtls-client-certificate" \
-    "ODS-FR-XOT-004;ODS-FR-XOT-005" \
+    "BDS-FR-XOT-004;BDS-FR-XOT-005" \
     "mTLS primary requiring a client certificate rejects the transfer before any DNS query is sent." \
     "refresh_xot_rejects_missing_client_certificate_before_query"
 
 run_case \
     "missing-trust-anchor-file" \
-    "ODS-FR-XOT-003;ODS-CFG-001" \
+    "BDS-FR-XOT-003;BDS-CFG-001" \
     "Runtime validation rejects XoT trust anchor paths that cannot be read." \
     "runtime_config_validation_rejects_missing_xot_trust_anchor_file"
 
 run_case \
     "malformed-trust-anchor-file" \
-    "ODS-FR-XOT-003;ODS-CFG-001" \
+    "BDS-FR-XOT-003;BDS-CFG-001" \
     "Runtime validation rejects malformed XoT trust anchor PEM files." \
     "runtime_config_validation_rejects_malformed_xot_trust_anchor_file"
 

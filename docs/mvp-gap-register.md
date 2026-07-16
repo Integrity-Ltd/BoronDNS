@@ -2,7 +2,7 @@
 
 This register is the short active queue for release-candidate closeout. It
 tracks the remaining implementation decisions, release blockers, and formal SRS
-acceptance evidence gaps that must be closed before claiming `ODS-VER-008`.
+acceptance evidence gaps that must be closed before claiming `BDS-VER-008`.
 It is not the detailed evidence ledger.
 
 Detailed evidence ownership:
@@ -28,7 +28,7 @@ Terminology:
 - **Release candidate** is the current source and documentation state: the
   server behavior is implemented and locally checked, but formal acceptance
   still depends on retained release artifacts and sign-off.
-- **Formal SRS acceptance execution** is the `ODS-VER-008` gate run. It needs
+- **Formal SRS acceptance execution** is the `BDS-VER-008` gate run. It needs
   release-specific evidence, role sign-off, and acceptance decisions rather
   than only local development checks.
 - **Retained release evidence** means artifacts that can be cited from release
@@ -68,7 +68,7 @@ No open product implementation decisions are currently tracked here.
 | --- | --- | --- |
 | Selected real-primary and current-version interop | `docs/primary-interop-matrix-v0.2.0.md` records a 12 of 12 local matrix pass for BIND 9.20.23, NSD 4.14.2, Knot DNS 3.5.3, and PowerDNS Authoritative 5.0.5, with retained primary-version/config artifacts under `target/evidence/primary-matrix-20260614T010049Z`. | Broader XoT acceptance, DNSSEC breadth, DNS Cookie deployment, production operator acceptance, reference-hardware performance, and long-running soak evidence are intentionally tracked as separate closeout rows. |
 | Selected XoT release breadth | `docs/xot-release-evidence-v0.2.0.md` records a 3 of 3 local retained XoT pass for Knot DNS 3.5.3 XoT AXFR, Knot DNS 3.5.3 XoT+TSIG AXFR, and BIND 9.20.23 catalog-zone transfer over XoT+TSIG, plus 10 of 10 local XoT failure-class cases, with redacted retained artifacts under `target/evidence/xot-release-20260614T014700Z` and `target/evidence/xot-failure-20260616T170617Z`. | Formal XoT acceptance still needs real-primary mTLS, default-port, prohibited-suite, and optional NSD XoT evidence. |
-| Reproducible static binaries | `docs/reproducible-build-v0.2.0.md` records a clean two-build comparison for `x86_64-unknown-linux-musl` `borondns` and `oxide-gun`; both builder digests matched bit-for-bit under `target/evidence/reproducible-build-20260614T013236Z`. | Installer/archive normalization, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
+| Reproducible static binaries | `docs/reproducible-build-v0.2.0.md` records a clean two-build comparison for `x86_64-unknown-linux-musl` `borondns` and `boron-gun`; both builder digests matched bit-for-bit under `target/evidence/reproducible-build-20260614T013236Z`. | Installer/archive normalization, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
 | Package and Docker smoke | `docs/package-docker-smoke-v0.2.0.md` records a 4 of 4 retained package/image pass for installer creation, Ubuntu installer smoke, Docker image archive creation, and read-only Docker runtime smoke under `target/evidence/package-docker-smoke-20260616T173146Z`. | Archive reproducibility, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
 
 ## Pending Project Decision Overlay
@@ -89,7 +89,7 @@ readable:
 | Decision item | Current classification | Handling |
 | --- | --- | --- |
 | Property-based testing in Alpha scope | Non-normative quality candidate | Tracked in the Test Plan; not a release blocker unless promoted to a requirement. |
-| Server module decomposition (`server/lib.rs` monolith) | Non-normative maintainability candidate | Tracked in the Architecture Document; not a release blocker unless module growth makes `ODS-NFR-MAINT-002` evidence weak. |
+| Server module decomposition (`server/lib.rs` monolith) | Non-normative maintainability candidate | Tracked in the Architecture Document; not a release blocker unless module growth makes `BDS-NFR-MAINT-002` evidence weak. |
 | 1% idle CPU bound for 1000 zones | Formal release evidence target | Covered by the performance/resources row above; requires Reference Hardware/Profile measurement or SRS target revision. |
 
 ## Current Verification Commands

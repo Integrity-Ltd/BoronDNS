@@ -450,7 +450,7 @@ cp -a -- "$private_installer_dist_dir/." "$installer_publish_root/"
 for installer_name in \
     "$archive_root" "$archive_root.tar.xz" "$archive_root.tar.xz.sha256" \
     "$archive_root.bin" "$archive_root.bin.sha256" \
-    "$archive_root-oxide-gun.bin" "$archive_root-oxide-gun.bin.sha256"; do
+    "$archive_root-boron-gun.bin" "$archive_root-boron-gun.bin.sha256"; do
     package_publish_candidate "$installer_publish_root/$installer_name" \
         "$docker_installer_dist_dir/$installer_name" "$docker_installer_dist_dir" 'Docker installer input'
 done

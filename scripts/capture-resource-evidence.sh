@@ -158,7 +158,7 @@ print(f"sample_seconds={sample_seconds}")
 print(f"elapsed_seconds={elapsed:.6f}")
 print(f"cpu_seconds={cpu_seconds:.6f}")
 print(f"cpu_pct_one_core={cpu_pct_one_core:.6f}")
-print("note=short zero-query smoke sample; not the full 1000-zone 5-minute ODS-NFR-RES-006 benchmark")
+print("note=short zero-query smoke sample; not the full 1000-zone 5-minute BDS-NFR-RES-006 benchmark")
 PY
 
 cp "/proc/$borondns_pid/status" "$evidence_dir/proc-status-after.txt"
@@ -168,9 +168,9 @@ cpu_pct="$(awk -F= '$1 == "cpu_pct_one_core" { print $2 }' "$evidence_dir/idle-c
 
 {
     printf 'evidence\tstatus\tartifact\treview_note\n'
-    printf 'ODS-NFR-RES-001\tsmoke\tbinary-size.tsv\tRelease binary size is retained as a proxy input; published OCI image size still requires release packaging evidence.\n'
-    printf 'ODS-NFR-RES-004\tbounded-runtime\tfd-count.env; proc-limits.txt\tRuntime file-descriptor count %s is below the configured formula bound %s for this smoke profile.\n' "$fd_count" "$fd_bound"
-    printf 'ODS-NFR-RES-006\tsmoke\tidle-cpu.env; proc-status-before.txt; proc-status-after.txt\tShort zero-query CPU sample recorded %.6f percent of one core with RSS %s KiB; full 1000-zone 5-minute acceptance benchmark remains open.\n' "$cpu_pct" "$rss_kib"
+    printf 'BDS-NFR-RES-001\tsmoke\tbinary-size.tsv\tRelease binary size is retained as a proxy input; published OCI image size still requires release packaging evidence.\n'
+    printf 'BDS-NFR-RES-004\tbounded-runtime\tfd-count.env; proc-limits.txt\tRuntime file-descriptor count %s is below the configured formula bound %s for this smoke profile.\n' "$fd_count" "$fd_bound"
+    printf 'BDS-NFR-RES-006\tsmoke\tidle-cpu.env; proc-status-before.txt; proc-status-after.txt\tShort zero-query CPU sample recorded %.6f percent of one core with RSS %s KiB; full 1000-zone 5-minute acceptance benchmark remains open.\n' "$cpu_pct" "$rss_kib"
 } >"$evidence_dir/resource-traceability.tsv"
 
 {

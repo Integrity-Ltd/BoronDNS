@@ -20,8 +20,8 @@ Verified artifacts:
 
 - `borondns`, target `x86_64-unknown-linux-musl`, release profile, package
   `borondns-cli`, feature `af-xdp`.
-- `oxide-gun`, target `x86_64-unknown-linux-musl`, release profile, package
-  `oxide-gun`, feature `xdp`.
+- `boron-gun`, target `x86_64-unknown-linux-musl`, release profile, package
+  `boron-gun`, feature `xdp`.
 
 The comparison performs two clean builds in separate target directories from the
 same clean source commit, lockfile, target, and toolchain. It fixes
@@ -47,7 +47,7 @@ same clean source commit, lockfile, target, and toolchain. It fixes
 | Artifact | SHA256 builder A | SHA256 builder B | Size bytes | Match |
 | --- | --- | --- | --- | --- |
 | `borondns` | `bf5f02929c08eb3cb5c3b9cb6bc68915599ee1686931477768aadfb375f0d113` | `bf5f02929c08eb3cb5c3b9cb6bc68915599ee1686931477768aadfb375f0d113` | `7899880` | yes |
-| `oxide-gun` | `c0f3913562f87012699826da925b8dd671ae8fa1e013958ff2f58d69959bc010` | `c0f3913562f87012699826da925b8dd671ae8fa1e013958ff2f58d69959bc010` | `2175752` | yes |
+| `boron-gun` | `c0f3913562f87012699826da925b8dd671ae8fa1e013958ff2f58d69959bc010` | `c0f3913562f87012699826da925b8dd671ae8fa1e013958ff2f58d69959bc010` | `2175752` | yes |
 
 ## Retained Artifacts
 

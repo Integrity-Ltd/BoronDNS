@@ -70,15 +70,15 @@ fi
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-ODS-NFR-MAINT-005	reproducible-build-runbook.md; artifact-manifest-template.tsv; comparison-template.tsv	setup-ready	run at least two independent clean builds from the same commit/toolchain and record bit-identical artifact comparison
-ODS-NFR-MAINT-008	artifact-manifest-template.tsv; release-engineer-signoff.md	setup-ready	sign accepted artifacts after the reproducible-build comparison is complete
-ODS-NFR-OBS-006	reproducible-build-env.env	setup-ready	build with fixed BORONDNS_BUILD_* values so embedded build-info labels remain deterministic
-ODS-INV-009	reproducible-build-runbook.md; cargo-metadata.locked.json	setup-ready	confirm all executable release inputs come from the static source tree, lockfile, and build workflow
-ODS-VER-002	requirements-traceability.tsv	setup-ready	retain completed build evidence against the requirement IDs in release evidence
-ODS-VER-009	requirements-traceability.tsv	setup-ready	carry completed reproducible-build artifact paths into the traceability matrix or release ledger
-ODS-VER-008	release-engineer-signoff.md	setup-ready	attach completed reproducible-build comparison before final formal SRS acceptance
-ODS-VER-010	release-notes-snippet.md	setup-ready	publish build command, artifact digests, comparison result, and evidence paths in release notes
-ODS-VER-015	release-engineer-signoff.md	setup-ready	record responsible release engineer and independent builder scopes/signatures
+BDS-NFR-MAINT-005	reproducible-build-runbook.md; artifact-manifest-template.tsv; comparison-template.tsv	setup-ready	run at least two independent clean builds from the same commit/toolchain and record bit-identical artifact comparison
+BDS-NFR-MAINT-008	artifact-manifest-template.tsv; release-engineer-signoff.md	setup-ready	sign accepted artifacts after the reproducible-build comparison is complete
+BDS-NFR-OBS-006	reproducible-build-env.env	setup-ready	build with fixed BORONDNS_BUILD_* values so embedded build-info labels remain deterministic
+BDS-INV-009	reproducible-build-runbook.md; cargo-metadata.locked.json	setup-ready	confirm all executable release inputs come from the static source tree, lockfile, and build workflow
+BDS-VER-002	requirements-traceability.tsv	setup-ready	retain completed build evidence against the requirement IDs in release evidence
+BDS-VER-009	requirements-traceability.tsv	setup-ready	carry completed reproducible-build artifact paths into the traceability matrix or release ledger
+BDS-VER-008	release-engineer-signoff.md	setup-ready	attach completed reproducible-build comparison before final formal SRS acceptance
+BDS-VER-010	release-notes-snippet.md	setup-ready	publish build command, artifact digests, comparison result, and evidence paths in release notes
+BDS-VER-015	release-engineer-signoff.md	setup-ready	record responsible release engineer and independent builder scopes/signatures
 EOF
 
 cat >"$evidence_dir/artifact-manifest-template.tsv" <<'EOF'
@@ -127,7 +127,7 @@ EOF
 cat >"$evidence_dir/reproducible-build-runbook.md" <<EOF
 # BoronDNS Reproducible Build Runbook
 
-This is the release-candidate setup artifact for ODS-NFR-MAINT-005. It does not
+This is the release-candidate setup artifact for BDS-NFR-MAINT-005. It does not
 claim that two independent bit-identical builds have already happened.
 
 ## Fixed Inputs
@@ -147,7 +147,7 @@ claim that two independent bit-identical builds have already happened.
 - BORONDNS_BUILD_TIMESTAMP: \`$commit_timestamp\`
 
 The server binary embeds build commit, Rust version, and build timestamp for
-\`ODS-NFR-OBS-006\`. Builders must set the \`BORONDNS_BUILD_*\` values above, or the
+\`BDS-NFR-OBS-006\`. Builders must set the \`BORONDNS_BUILD_*\` values above, or the
 default wall-clock build timestamp in \`crates/borondns-server/build.rs\` will make
 otherwise equivalent builds differ.
 

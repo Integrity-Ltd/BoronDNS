@@ -425,91 +425,91 @@ where
             continue;
         };
         match name.as_str() {
-            "ODS_SERVER_HEALTH" => {
+            "BORONDNS_SERVER_HEALTH" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.health = Some(parse_env_value(&name, &value)?);
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_SERVER_LOG_LEVEL" => {
+            "BORONDNS_SERVER_LOG_LEVEL" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.log_level = value.clone();
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_SERVER_LOG_FORMAT" => {
+            "BORONDNS_SERVER_LOG_FORMAT" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.log_format = parse_log_format(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_SERVER_NSID" => {
+            "BORONDNS_SERVER_NSID" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.nsid = value.clone();
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
+            "BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_per_minute = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS" => {
+            "BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES" => {
+            "BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.logging.max_entry_length_bytes = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_TSIG_FUDGE_SECONDS" => {
+            "BORONDNS_TSIG_FUDGE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_TRANSFER_REQUIRE_TSIG" => {
+            "BORONDNS_TRANSFER_REQUIRE_TSIG" => {
                 let value = env_value_to_string(&name, value)?;
                 config.transfer.require_tsig = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_EDNS_EXTENDED_DNS_ERRORS" => {
+            "BORONDNS_EDNS_EXTENDED_DNS_ERRORS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.edns.extended_dns_errors = parse_extended_dns_errors(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_CHAOS_VERSION" => {
+            "BORONDNS_CHAOS_VERSION" => {
                 let value = env_value_to_string(&name, value)?;
                 config.chaos.version = value.clone();
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_CHAOS_HOSTNAME" => {
+            "BORONDNS_CHAOS_HOSTNAME" => {
                 let value = env_value_to_string(&name, value)?;
                 config.chaos.hostname = value.clone();
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_DNSSEC_NSEC3_MAX_ITERATIONS" => {
+            "BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.dnssec.nsec3_max_iterations = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
+            "BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_LIMITS_ZSM_MAX_INTERVAL_SECS" => {
+            "BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.zsm_max_interval_secs = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            "ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS" => {
+            "BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.zsm_loading_warning_threshold_secs = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
-            _ if name.starts_with("ODS_") => {
+            _ if name.starts_with("BORONDNS_") => {
                 warnings.push(ConfigWarning {
-                    code: "unrecognised_ods_environment_variable",
+                    code: "unrecognised_borondns_environment_variable",
                     parameter: name,
-                    message: "unrecognised ODS_* environment variable ignored".to_owned(),
+                    message: "unrecognised BORONDNS_* environment variable ignored".to_owned(),
                 });
             }
             _ => {}
@@ -1578,7 +1578,7 @@ mod tests {
     }
 
     #[test]
-    fn ods_environment_overrides_supported_scalar_config() {
+    fn borondns_environment_overrides_supported_scalar_config() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1617,22 +1617,22 @@ mod tests {
         let report = apply_environment_overrides_from(
             &mut config,
             [
-                ("ODS_SERVER_HEALTH", "127.0.0.1:8081"),
-                ("ODS_SERVER_LOG_LEVEL", "debug"),
-                ("ODS_SERVER_LOG_FORMAT", "logfmt"),
-                ("ODS_SERVER_NSID", "env-nsid"),
-                ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
-                ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
-                ("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
-                ("ODS_EDNS_EXTENDED_DNS_ERRORS", "minimal"),
-                ("ODS_CHAOS_VERSION", "BoronDNS anycast"),
-                ("ODS_CHAOS_HOSTNAME", "bud-dns-1"),
-                ("ODS_DNSSEC_NSEC3_MAX_ITERATIONS", "0"),
-                ("ODS_TSIG_FUDGE_SECONDS", "30"),
-                ("ODS_TRANSFER_REQUIRE_TSIG", "true"),
-                ("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
-                ("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
-                ("ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200"),
+                ("BORONDNS_SERVER_HEALTH", "127.0.0.1:8081"),
+                ("BORONDNS_SERVER_LOG_LEVEL", "debug"),
+                ("BORONDNS_SERVER_LOG_FORMAT", "logfmt"),
+                ("BORONDNS_SERVER_NSID", "env-nsid"),
+                ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
+                ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
+                ("BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
+                ("BORONDNS_EDNS_EXTENDED_DNS_ERRORS", "minimal"),
+                ("BORONDNS_CHAOS_VERSION", "BoronDNS anycast"),
+                ("BORONDNS_CHAOS_HOSTNAME", "bud-dns-1"),
+                ("BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS", "0"),
+                ("BORONDNS_TSIG_FUDGE_SECONDS", "30"),
+                ("BORONDNS_TRANSFER_REQUIRE_TSIG", "true"),
+                ("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
+                ("BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
+                ("BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200"),
             ]
             .into_iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
@@ -1666,7 +1666,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_ods_environment_override_reports_config_error() {
+    fn invalid_borondns_environment_override_reports_config_error() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1682,7 +1682,7 @@ mod tests {
         let error = apply_environment_overrides_from(
             &mut config,
             [(
-                OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                OsString::from("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
                 OsString::from("not-a-number"),
             )],
         )
@@ -1692,12 +1692,12 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
+                .contains("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
         );
     }
 
     #[test]
-    fn unrecognised_ods_environment_override_reports_warning() {
+    fn unrecognised_borondns_environment_override_reports_warning() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1714,15 +1714,15 @@ mod tests {
             &mut config,
             [
                 (
-                    OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                    OsString::from("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
                     OsString::from("120"),
                 ),
                 (
-                    OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"),
+                    OsString::from("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"),
                     OsString::from("240"),
                 ),
                 (
-                    OsString::from("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                    OsString::from("NOT_BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
                     OsString::from("480"),
                 ),
             ],
@@ -1733,11 +1733,11 @@ mod tests {
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(
             report.warnings[0].code,
-            "unrecognised_ods_environment_variable"
+            "unrecognised_borondns_environment_variable"
         );
         assert_eq!(
             report.warnings[0].parameter,
-            "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
+            "BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
         );
         assert!(
             config_warning_line(&report.warnings[0]).contains("category=configuration_warning")

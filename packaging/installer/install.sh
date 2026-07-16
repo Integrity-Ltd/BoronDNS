@@ -34,18 +34,18 @@ START_SERVICE=1
 ACTION="install"
 RUN_GROUP_SET=0
 STAGED_BORONDNS=""
-STAGED_OXIDE_GUN=""
+STAGED_BORON_GUN=""
 STAGED_CONFIG=""
 STAGED_SERVICE=""
 STAGED_DOCUMENT=""
 SERVICE_TARGET=""
 BACKUP_BORONDNS=""
-BACKUP_OXIDE_GUN=""
+BACKUP_BORON_GUN=""
 BACKUP_CONFIG=""
 BACKUP_SERVICE=""
 BACKUP_DOCUMENT=""
 BORONDNS_ACTIVATED=0
-OXIDE_GUN_ACTIVATED=0
+BORON_GUN_ACTIVATED=0
 CONFIG_ACTIVATED=0
 SERVICE_ACTIVATED=0
 DOCUMENT_ACTIVATED=0
@@ -82,7 +82,7 @@ INSTALLER_RECOVERY_DIAGNOSTIC_IDENTITY=""
 INSTALLER_RECOVERY_DIAGNOSTIC_QUARANTINE_COUNT=0
 declare -a INSTALLER_RETAINED_REMOVAL_QUARANTINES=()
 EXPECTED_BORONDNS_SHA256=""
-EXPECTED_OXIDE_GUN_SHA256=""
+EXPECTED_BORON_GUN_SHA256=""
 EXPECTED_SERVICE_SHA256=""
 EXPECTED_DOCUMENT_SHA256=""
 declare -A INSTALLER_REGULAR_FILE_IDENTITIES=()
@@ -534,7 +534,7 @@ validate_install_lock_disjoint_from_managed_targets() {
     esac
     local managed_target
     for managed_target in \
-        "$BIN_DIR/borondns" "$BIN_DIR/oxide-gun" "$CONFIG_FILE" "$DOC_FILE" "$service_target"; do
+        "$BIN_DIR/borondns" "$BIN_DIR/boron-gun" "$CONFIG_FILE" "$DOC_FILE" "$service_target"; do
         [[ -z "$managed_target" || "$INSTALL_LOCK_FILE" != "$managed_target" ]] ||
             die "installer lock must be disjoint from every managed target: $INSTALL_LOCK_FILE"
     done
@@ -697,7 +697,7 @@ validate_installer_payload() {
     local -a payload_entries=(
         'installer_sha256|install.sh|installer program'
         'binary_sha256|bin/borondns|BoronDNS binary'
-        'tool_binary_sha256|bin/oxide-gun|OxideGun binary'
+        'tool_binary_sha256|bin/boron-gun|BoronGun binary'
         'systemd_template_sha256|share/borondns/systemd/borondns.service|systemd service template'
         'openrc_template_sha256|share/borondns/openrc/borondns|OpenRC service template'
         'readme_sha256|README.install.md|installer documentation'
@@ -1112,8 +1112,8 @@ installer_reconciled_leaf_operation() {
 
 capture_install_activation_expectations() {
     capture_installer_target_expectation "$BIN_DIR/borondns" "borondns activation target" || return 1
-    if [[ -n "$STAGED_OXIDE_GUN" ]]; then
-        capture_installer_target_expectation "$BIN_DIR/oxide-gun" "oxide-gun activation target" || return 1
+    if [[ -n "$STAGED_BORON_GUN" ]]; then
+        capture_installer_target_expectation "$BIN_DIR/boron-gun" "boron-gun activation target" || return 1
     fi
     if [[ -n "$STAGED_CONFIG" ]]; then
         capture_installer_target_expectation "$CONFIG_FILE" "configuration activation target" || return 1
@@ -1675,9 +1675,9 @@ verify_installed_runtime_and_content() {
     [[ "$ACTION" != uninstall ]] || return 0
     verify_installed_regular_artifact "$BIN_DIR/borondns" "$EXPECTED_BORONDNS_SHA256" 755 \
         "installed BoronDNS binary" || return 1
-    if [[ -n "$EXPECTED_OXIDE_GUN_SHA256" ]]; then
-        verify_installed_regular_artifact "$BIN_DIR/oxide-gun" "$EXPECTED_OXIDE_GUN_SHA256" 755 \
-            "installed OxideGun binary" || return 1
+    if [[ -n "$EXPECTED_BORON_GUN_SHA256" ]]; then
+        verify_installed_regular_artifact "$BIN_DIR/boron-gun" "$EXPECTED_BORON_GUN_SHA256" 755 \
+            "installed BoronGun binary" || return 1
     fi
     if [[ -n "$EXPECTED_DOCUMENT_SHA256" ]]; then
         verify_installed_regular_artifact "$DOC_FILE" "$EXPECTED_DOCUMENT_SHA256" 644 \
@@ -1723,7 +1723,7 @@ create_runtime_user() {
 
 stage_binaries() {
     local source_bin="$PAYLOAD_ROOT/bin/borondns"
-    local source_tool="$PAYLOAD_ROOT/bin/oxide-gun"
+    local source_tool="$PAYLOAD_ROOT/bin/boron-gun"
     [[ -x "$source_bin" ]] || die "missing payload binary: $source_bin"
     verify_installer_payload_file "$source_bin" "BoronDNS binary" ||
         die "BoronDNS payload binary changed after validation"
@@ -1737,15 +1737,15 @@ stage_binaries() {
     capture_installer_regular_file "$STAGED_BORONDNS" "staged borondns binary"
     EXPECTED_BORONDNS_SHA256="${INSTALLER_PAYLOAD_FILE_SHA256[$source_bin]}"
     if [[ -x "$source_tool" ]]; then
-        verify_installer_payload_file "$source_tool" "OxideGun binary" ||
-            die "OxideGun payload binary changed after validation"
-        STAGED_OXIDE_GUN="$(mktemp "$BIN_DIR/.oxide-gun.install.XXXXXX")"
+        verify_installer_payload_file "$source_tool" "BoronGun binary" ||
+            die "BoronGun payload binary changed after validation"
+        STAGED_BORON_GUN="$(mktemp "$BIN_DIR/.boron-gun.install.XXXXXX")"
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-        install -m 0755 "$source_tool" "$STAGED_OXIDE_GUN"
-        verify_installer_payload_file "$source_tool" "OxideGun binary" ||
-            die "OxideGun payload binary changed while it was staged"
-        capture_installer_regular_file "$STAGED_OXIDE_GUN" "staged oxide-gun binary"
-        EXPECTED_OXIDE_GUN_SHA256="${INSTALLER_PAYLOAD_FILE_SHA256[$source_tool]}"
+        install -m 0755 "$source_tool" "$STAGED_BORON_GUN"
+        verify_installer_payload_file "$source_tool" "BoronGun binary" ||
+            die "BoronGun payload binary changed while it was staged"
+        capture_installer_regular_file "$STAGED_BORON_GUN" "staged boron-gun binary"
+        EXPECTED_BORON_GUN_SHA256="${INSTALLER_PAYLOAD_FILE_SHA256[$source_tool]}"
     fi
 }
 
@@ -1772,16 +1772,16 @@ validate_staged_binaries() {
     [[ "$actual" == "$expected" ]] || die "staged borondns does not match payload manifest"
     "$STAGED_BORONDNS" --version >/dev/null || die "staged borondns is not executable on this host"
 
-    [[ -n "$STAGED_OXIDE_GUN" ]] || die "payload is missing required oxide-gun binary"
+    [[ -n "$STAGED_BORON_GUN" ]] || die "payload is missing required boron-gun binary"
     expected="$(payload_manifest_value tool_binary_sha256)"
-    actual="$(file_sha256 "$STAGED_OXIDE_GUN")"
-    [[ "$actual" == "$expected" ]] || die "staged oxide-gun does not match payload manifest"
-    "$STAGED_OXIDE_GUN" --version >/dev/null || die "staged oxide-gun is not executable on this host"
+    actual="$(file_sha256 "$STAGED_BORON_GUN")"
+    [[ "$actual" == "$expected" ]] || die "staged boron-gun does not match payload manifest"
+    "$STAGED_BORON_GUN" --version >/dev/null || die "staged boron-gun is not executable on this host"
 }
 
 cleanup_staged_files() {
     local cleanup_failed=0
-    if [[ -n "$STAGED_BORONDNS" || -n "$STAGED_OXIDE_GUN" ]]; then
+    if [[ -n "$STAGED_BORONDNS" || -n "$STAGED_BORON_GUN" ]]; then
         if bin_directory_identity_is_current; then
             [[ -z "$STAGED_BORONDNS" ]] || {
                 verify_direct_child_path "$BIN_DIR" "$STAGED_BORONDNS" "staged borondns cleanup"
@@ -1793,12 +1793,12 @@ cleanup_staged_files() {
                         }
                 fi
             }
-            [[ -z "$STAGED_OXIDE_GUN" ]] || {
-                verify_direct_child_path "$BIN_DIR" "$STAGED_OXIDE_GUN" "staged oxide-gun cleanup"
-                if [[ -e "$STAGED_OXIDE_GUN" || -L "$STAGED_OXIDE_GUN" ]]; then
-                    remove_captured_installer_file "$STAGED_OXIDE_GUN" "staged oxide-gun cleanup" ||
+            [[ -z "$STAGED_BORON_GUN" ]] || {
+                verify_direct_child_path "$BIN_DIR" "$STAGED_BORON_GUN" "staged boron-gun cleanup"
+                if [[ -e "$STAGED_BORON_GUN" || -L "$STAGED_BORON_GUN" ]]; then
+                    remove_captured_installer_file "$STAGED_BORON_GUN" "staged boron-gun cleanup" ||
                         {
-                            printf 'Warning: retained identity-mismatched staged file: %s\n' "$STAGED_OXIDE_GUN" >&2
+                            printf 'Warning: retained identity-mismatched staged file: %s\n' "$STAGED_BORON_GUN" >&2
                             cleanup_failed=1
                         }
                 fi
@@ -2457,17 +2457,17 @@ rollback_install_transaction() {
                 rollback_activated_file "$DOC_FILE" BACKUP_DOCUMENT DOCUMENT_ACTIVATED || file_rollback_failed=1
             fi
         fi
-        if ((OXIDE_GUN_ACTIVATED || BORONDNS_ACTIVATED)); then
+        if ((BORON_GUN_ACTIVATED || BORONDNS_ACTIVATED)); then
             if ((bin_directory_current)); then
-                verify_direct_child_path "$BIN_DIR" "$BIN_DIR/oxide-gun" "oxide-gun rollback target"
+                verify_direct_child_path "$BIN_DIR" "$BIN_DIR/boron-gun" "boron-gun rollback target"
                 verify_direct_child_path "$BIN_DIR" "$BIN_DIR/borondns" "borondns rollback target"
-                if [[ -n "$BACKUP_OXIDE_GUN" ]]; then
-                    verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun rollback backup"
+                if [[ -n "$BACKUP_BORON_GUN" ]]; then
+                    verify_direct_child_path "$BIN_DIR" "$BACKUP_BORON_GUN" "boron-gun rollback backup"
                 fi
                 if [[ -n "$BACKUP_BORONDNS" ]]; then
                     verify_direct_child_path "$BIN_DIR" "$BACKUP_BORONDNS" "borondns rollback backup"
                 fi
-                rollback_activated_file "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || file_rollback_failed=1
+                rollback_activated_file "$BIN_DIR/boron-gun" BACKUP_BORON_GUN BORON_GUN_ACTIVATED || file_rollback_failed=1
                 rollback_activated_file "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || file_rollback_failed=1
             fi
         fi
@@ -2611,7 +2611,7 @@ render_recovery_diagnostic_payload() {
     printf 'service_was_active=%q\n' "$SERVICE_WAS_ACTIVE" || return 1
     printf 'service_was_enabled=%q\n' "$SERVICE_WAS_ENABLED" || return 1
     printf 'backup_borondns=%q\n' "$BACKUP_BORONDNS" || return 1
-    printf 'backup_oxide_gun=%q\n' "$BACKUP_OXIDE_GUN" || return 1
+    printf 'backup_boron_gun=%q\n' "$BACKUP_BORON_GUN" || return 1
     printf 'backup_config=%q\n' "$BACKUP_CONFIG" || return 1
     printf 'backup_service=%q\n' "$BACKUP_SERVICE" || return 1
     printf 'backup_document=%q\n' "$BACKUP_DOCUMENT" || return 1
@@ -2793,7 +2793,7 @@ record_transaction_cleanup_failure() {
 
 print_retained_backup_paths() {
     printf 'retained_backup_borondns=%q\n' "$BACKUP_BORONDNS" >&2
-    printf 'retained_backup_oxide_gun=%q\n' "$BACKUP_OXIDE_GUN" >&2
+    printf 'retained_backup_boron_gun=%q\n' "$BACKUP_BORON_GUN" >&2
     printf 'retained_backup_config=%q\n' "$BACKUP_CONFIG" >&2
     printf 'retained_backup_service=%q\n' "$BACKUP_SERVICE" >&2
     printf 'retained_backup_document=%q\n' "$BACKUP_DOCUMENT" >&2
@@ -2861,7 +2861,7 @@ discard_transaction_backups() {
                 "$DOC_DIR" >&2
             return 1
         fi
-        if ((OXIDE_GUN_ACTIVATED || BORONDNS_ACTIVATED)) && ! bin_directory_identity_is_current; then
+        if ((BORON_GUN_ACTIVATED || BORONDNS_ACTIVATED)) && ! bin_directory_identity_is_current; then
             printf 'Refusing installer commit after binary directory identity changed: %s\n' \
                 "$BIN_DIR" >&2
             return 1
@@ -2890,11 +2890,11 @@ discard_transaction_backups() {
                 verify_installer_regular_file "$DOC_FILE" "activated documentation target" || return 1
             fi
         fi
-        if ((OXIDE_GUN_ACTIVATED)); then
-            if installer_target_was_removed "$BIN_DIR/oxide-gun"; then
-                [[ ! -e "$BIN_DIR/oxide-gun" && ! -L "$BIN_DIR/oxide-gun" ]] || return 1
+        if ((BORON_GUN_ACTIVATED)); then
+            if installer_target_was_removed "$BIN_DIR/boron-gun"; then
+                [[ ! -e "$BIN_DIR/boron-gun" && ! -L "$BIN_DIR/boron-gun" ]] || return 1
             else
-                verify_installer_regular_file "$BIN_DIR/oxide-gun" "activated oxide-gun target" || return 1
+                verify_installer_regular_file "$BIN_DIR/boron-gun" "activated boron-gun target" || return 1
             fi
         fi
         if ((BORONDNS_ACTIVATED)); then
@@ -2918,9 +2918,9 @@ discard_transaction_backups() {
         verify_direct_child_path "$DOC_DIR" "$BACKUP_DOCUMENT" "documentation backup cleanup"
         verify_installer_regular_file "$BACKUP_DOCUMENT" "documentation backup cleanup" || return 1
     fi
-    if [[ -n "$BACKUP_OXIDE_GUN" ]]; then
-        verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup"
-        verify_installer_regular_file "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup" || return 1
+    if [[ -n "$BACKUP_BORON_GUN" ]]; then
+        verify_direct_child_path "$BIN_DIR" "$BACKUP_BORON_GUN" "boron-gun backup cleanup"
+        verify_installer_regular_file "$BACKUP_BORON_GUN" "boron-gun backup cleanup" || return 1
     fi
     if [[ -n "$BACKUP_BORONDNS" ]]; then
         verify_direct_child_path "$BIN_DIR" "$BACKUP_BORONDNS" "borondns backup cleanup"
@@ -2998,21 +2998,21 @@ discard_transaction_backups() {
             discard_failed=1
         fi
     fi
-    if [[ -n "$BACKUP_OXIDE_GUN" || -n "$BACKUP_BORONDNS" ]]; then
+    if [[ -n "$BACKUP_BORON_GUN" || -n "$BACKUP_BORONDNS" ]]; then
         if bin_directory_identity_is_current; then
-            if [[ -n "$BACKUP_OXIDE_GUN" ]]; then
-                verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup"
+            if [[ -n "$BACKUP_BORON_GUN" ]]; then
+                verify_direct_child_path "$BIN_DIR" "$BACKUP_BORON_GUN" "boron-gun backup cleanup"
                 remove_status=0
                 begin_installer_mutation_critical
-                remove_captured_installer_file "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup" || remove_status=$?
+                remove_captured_installer_file "$BACKUP_BORON_GUN" "boron-gun backup cleanup" || remove_status=$?
                 if ((remove_status == 0 || INSTALLER_LAST_OPERATION_COMMITTED == 1)); then
-                    BACKUP_OXIDE_GUN=""
+                    BACKUP_BORON_GUN=""
                 elif [[ -n "$INSTALLER_LAST_OPERATION_QUARANTINE" ]]; then
-                    BACKUP_OXIDE_GUN="$INSTALLER_LAST_OPERATION_QUARANTINE"
+                    BACKUP_BORON_GUN="$INSTALLER_LAST_OPERATION_QUARANTINE"
                 fi
                 end_installer_mutation_critical
                 if ((remove_status != 0)); then
-                    printf 'Warning: oxide-gun backup cleanup helper failed: %s\n' "$BACKUP_OXIDE_GUN" >&2
+                    printf 'Warning: boron-gun backup cleanup helper failed: %s\n' "$BACKUP_BORON_GUN" >&2
                     discard_failed=1
                 fi
             fi
@@ -3034,7 +3034,7 @@ discard_transaction_backups() {
             fi
         else
             printf 'Warning: retained binary backups after directory identity changed: %s %s\n' \
-                "$BACKUP_BORONDNS" "$BACKUP_OXIDE_GUN" >&2
+                "$BACKUP_BORONDNS" "$BACKUP_BORON_GUN" >&2
             discard_failed=1
         fi
     fi
@@ -3046,7 +3046,7 @@ discard_transaction_backups() {
     # shellcheck disable=SC2034
     DOCUMENT_ACTIVATED=0
     # shellcheck disable=SC2034
-    OXIDE_GUN_ACTIVATED=0
+    BORON_GUN_ACTIVATED=0
     # shellcheck disable=SC2034
     BORONDNS_ACTIVATED=0
     if ((discard_failed == 0)); then
@@ -3067,9 +3067,9 @@ activate_install_transaction() {
     fi
     verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
     activate_staged_file "$STAGED_BORONDNS" "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
-    if [[ -n "$STAGED_OXIDE_GUN" ]]; then
+    if [[ -n "$STAGED_BORON_GUN" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-        activate_staged_file "$STAGED_OXIDE_GUN" "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
+        activate_staged_file "$STAGED_BORON_GUN" "$BIN_DIR/boron-gun" BACKUP_BORON_GUN BORON_GUN_ACTIVATED || return 1
     fi
     if [[ -n "$STAGED_CONFIG" ]]; then
         verify_trusted_directory_identity "$CONFIG_DIR" "--config directory" "$CONFIG_DIR_IDENTITY"
@@ -3100,9 +3100,9 @@ activate_install_transaction() {
 activate_configure_transaction() {
     verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
     activate_staged_file "$STAGED_BORONDNS" "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
-    if [[ -n "$STAGED_OXIDE_GUN" ]]; then
+    if [[ -n "$STAGED_BORON_GUN" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-        activate_staged_file "$STAGED_OXIDE_GUN" "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
+        activate_staged_file "$STAGED_BORON_GUN" "$BIN_DIR/boron-gun" BACKUP_BORON_GUN BORON_GUN_ACTIVATED || return 1
     fi
     verify_trusted_directory_identity "$CONFIG_DIR" "--config directory" "$CONFIG_DIR_IDENTITY"
     activate_staged_file "$STAGED_CONFIG" "$CONFIG_FILE" BACKUP_CONFIG CONFIG_ACTIVATED || return 1
@@ -3308,7 +3308,7 @@ preflight_uninstall_targets() {
     if [[ -e "$BIN_DIR" || -L "$BIN_DIR" ]]; then
         BIN_DIR_IDENTITY="$(trusted_directory_identity "$BIN_DIR" "--bin-dir")"
         preflight_managed_regular_file "$BIN_DIR/borondns" "installed borondns binary"
-        preflight_managed_regular_file "$BIN_DIR/oxide-gun" "installed oxide-gun binary"
+        preflight_managed_regular_file "$BIN_DIR/boron-gun" "installed boron-gun binary"
     else
         BIN_DIR_IDENTITY=""
     fi
@@ -3406,9 +3406,9 @@ activate_uninstall_transaction() {
     if [[ -n "$BIN_DIR_IDENTITY" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
         preflight_managed_regular_file "$BIN_DIR/borondns" "installed borondns binary" || return 1
-        preflight_managed_regular_file "$BIN_DIR/oxide-gun" "installed oxide-gun binary" || return 1
+        preflight_managed_regular_file "$BIN_DIR/boron-gun" "installed boron-gun binary" || return 1
         remove_managed_file_transactional "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
-        remove_managed_file_transactional "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
+        remove_managed_file_transactional "$BIN_DIR/boron-gun" BACKUP_BORON_GUN BORON_GUN_ACTIVATED || return 1
     fi
 }
 

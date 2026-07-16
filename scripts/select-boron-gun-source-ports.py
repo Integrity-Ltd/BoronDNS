@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select oxide-gun source ports from a reduced AF_XDP calibration artifact."""
+"""Select boron-gun source ports from a reduced AF_XDP calibration artifact."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def parse_requester_queues(log_path: pathlib.Path) -> tuple[dict[int, int], int]
             summary = record
             break
     if summary is None:
-        raise ValueError(f"{log_path} does not contain an oxide-gun summary record")
+        raise ValueError(f"{log_path} does not contain an boron-gun summary record")
 
     requester_by_port: dict[int, int] = {}
     for queue in summary.get("queue_stats", []):
@@ -62,7 +62,7 @@ def parse_requester_weights(log_path: pathlib.Path) -> dict[int, int]:
             summary = record
             break
     if summary is None:
-        raise ValueError(f"{log_path} does not contain an oxide-gun summary record")
+        raise ValueError(f"{log_path} does not contain an boron-gun summary record")
 
     weights: dict[int, int] = {}
     for queue in summary.get("queue_stats", []):
@@ -556,7 +556,7 @@ def main() -> int:
     parser.add_argument(
         "--requester-weight-log",
         type=pathlib.Path,
-        help="High-rate oxide-gun log used to weight requester queues by tx_packets_total",
+        help="High-rate boron-gun log used to weight requester queues by tx_packets_total",
     )
     parser.add_argument(
         "--requester-only",

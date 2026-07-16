@@ -73,7 +73,7 @@ def main() -> int:
             )
 
     for manifest_path in [
-        "crates/oxide-gun-ebpf/Cargo.toml",
+        "crates/boron-gun-ebpf/Cargo.toml",
         "crates/borondns-server-ebpf/Cargo.toml",
     ]:
         manifest = load_toml(ROOT / manifest_path)
@@ -84,7 +84,7 @@ def main() -> int:
             expected,
         )
 
-    for package in ["oxide-gun", "borondns-cli", "borondns-core", "borondns-server"]:
+    for package in ["boron-gun", "borondns-cli", "borondns-core", "borondns-server"]:
         check_equal(
             errors,
             f"Cargo.lock package {package}",
@@ -94,7 +94,7 @@ def main() -> int:
 
     for lock_path, package in [
         ("fuzz/Cargo.lock", "borondns-core"),
-        ("crates/oxide-gun-ebpf/Cargo.lock", "oxide-gun-ebpf"),
+        ("crates/boron-gun-ebpf/Cargo.lock", "boron-gun-ebpf"),
         ("crates/borondns-server-ebpf/Cargo.lock", "borondns-server-ebpf"),
     ]:
         check_equal(

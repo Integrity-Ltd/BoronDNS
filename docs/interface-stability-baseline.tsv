@@ -32,7 +32,7 @@ configuration	[catalog_zones].member_transfer_extensions	stable	0.2	config/boron
 configuration	[catalog_zones.member_transfer_policy].unsigned_axfr	stable	0.2	config/borondns.example.toml	minor-additive	Optional deny or allow-legacy-private policy for catalog-derived member AXFR.
 configuration	[cookie] policy	stable	0.1	config/borondns.example.toml	major	DNS Cookie policy, secret, and tolerance settings.
 configuration	[rrl] policy	stable	0.1	config/borondns.example.toml	major	Process-wide RRL policy.
-environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown ODS variables.
+environment	BORONDNS_<SECTION>_<KEY>	stable	0.9	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown BoronDNS variables.
 cli	serve	stable	0.1	borondns --help	major	Default runtime mode.
 cli	check-config	stable	0.1	borondns --help	major	Explicit config validation command.
 cli	--config	stable	0.1	borondns --help	major	Configuration path selector; top-level path feeds config-loading modes and mode-specific paths take precedence.

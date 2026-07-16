@@ -13,7 +13,7 @@ SRS_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
 LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
 
 ID_PATTERN = (
-    r"ODS-(?:(?:FR|NFR|IF)-[A-Z0-9]{3,6}|(?:INV|NEG|VER))-[0-9]{3}"
+    r"BDS-(?:(?:FR|NFR|IF)-[A-Z0-9]{3,6}|(?:INV|NEG|VER))-[0-9]{3}"
 )
 ID_RE = re.compile(ID_PATTERN)
 RANGE_RE = re.compile(rf"({ID_PATTERN})\.\.({ID_PATTERN})")

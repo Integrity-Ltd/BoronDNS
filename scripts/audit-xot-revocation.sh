@@ -34,7 +34,7 @@ package_names = re.findall(r'^name = "([^"]+)"$', lock_text, flags=re.MULTILINE)
 failures: list[str] = []
 
 print("xot_revocation_audit=started")
-print("requirement=ODS-FR-XOT-012")
+print("requirement=BDS-FR-XOT-012")
 print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")
@@ -132,7 +132,7 @@ if "reqwest" in package_names:
 print()
 print("ocsp_stapling_posture")
 print("status=not_supported_by_current_client_path")
-print("evidence=No first-party rustls client call requests or consumes OCSP stapling data; under ODS-FR-XOT-012 this reduces the implementation posture to no revocation checking.")
+print("evidence=No first-party rustls client call requests or consumes OCSP stapling data; under BDS-FR-XOT-012 this reduces the implementation posture to no revocation checking.")
 
 if failures:
     print()

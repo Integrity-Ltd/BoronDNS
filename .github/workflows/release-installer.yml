@@ -198,13 +198,13 @@ jobs:
           CARGO="$verified_cargo" RUSTC="$verified_rustc" CARGO_TARGET_DIR="$release_target_dir" scripts/package-installer.sh
           shopt -s nullglob
           release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          release_boron_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#release_borondns[@]}" -eq 1
-          test "${#release_oxide_gun[@]}" -eq 1
+          test "${#release_boron_gun[@]}" -eq 1
           /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"
           /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
           test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
 
@@ -225,17 +225,17 @@ jobs:
         run: |
           shopt -s nullglob
           borondns_bins=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
-          oxide_gun_bins=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          boron_gun_bins=(target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#borondns_bins[@]}" -eq 1
-          test "${#oxide_gun_bins[@]}" -eq 1
+          test "${#boron_gun_bins[@]}" -eq 1
           ldd "${borondns_bins[0]}" > target/dist/release-binary-ldd.txt 2>&1 || true
           cat target/dist/release-binary-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-binary-ldd.txt
           "${borondns_bins[0]}" --version
-          ldd "${oxide_gun_bins[0]}" > target/dist/release-oxide-gun-ldd.txt 2>&1 || true
-          cat target/dist/release-oxide-gun-ldd.txt
-          grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-oxide-gun-ldd.txt
-          "${oxide_gun_bins[0]}" --version
+          ldd "${boron_gun_bins[0]}" > target/dist/release-boron-gun-ldd.txt 2>&1 || true
+          cat target/dist/release-boron-gun-ldd.txt
+          grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-boron-gun-ldd.txt
+          "${boron_gun_bins[0]}" --version
 
       - name: Verify packaged source remained clean
         shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
@@ -262,28 +262,28 @@ jobs:
             target/dist/borondns-*-x86_64-unknown-linux-musl.tar.xz.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl.bin
             target/dist/borondns-*-x86_64-unknown-linux-musl.bin.sha256
-            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin
-            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin
+            target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
             target/dist/borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json
             target/dist/borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json.sha256
-            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
-            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.cdx.json
+            target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.cdx.json.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
           )
           test "${#assets[@]}" -eq 16
           release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          release_boron_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#release_borondns[@]}" -eq 1
-          test "${#release_oxide_gun[@]}" -eq 1
+          test "${#release_boron_gun[@]}" -eq 1
           /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"
           /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"
           for asset in "${assets[@]}"; do
             /usr/bin/install -m 0644 "$asset" "$handoff/$(/usr/bin/basename "$asset")"
           done
@@ -294,7 +294,7 @@ jobs:
             scripts/release-api-supervisor.py scripts/verify-release-reproducibility.py \
             "$handoff/"
           for builder in a b; do
-            for artifact in borondns oxide-gun; do
+            for artifact in borondns boron-gun; do
               /usr/bin/install -D -m 0555 \
                 "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/$builder/$artifact" \
                 "$handoff/artifacts/$builder/$artifact"
@@ -310,9 +310,9 @@ jobs:
               comparison.tsv
               artifact-manifest.tsv
               artifacts/a/borondns
-              artifacts/a/oxide-gun
+              artifacts/a/boron-gun
               artifacts/b/borondns
-              artifacts/b/oxide-gun
+              artifacts/b/boron-gun
             )
             LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256
           )
@@ -394,11 +394,11 @@ jobs:
           notes="release-notes-$version.md"
           tarball="borondns-$version-x86_64-unknown-linux-musl.tar.xz"
           binary="borondns-$version-x86_64-unknown-linux-musl.bin"
-          oxide_gun="borondns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
+          boron_gun="borondns-$version-x86_64-unknown-linux-musl-boron-gun.bin"
           docker_image="borondns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
           docker_manifest="borondns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
           borondns_sbom="borondns-$version-x86_64-unknown-linux-musl-borondns.cdx.json"
-          oxide_gun_sbom="borondns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
+          boron_gun_sbom="borondns-$version-x86_64-unknown-linux-musl-boron-gun.cdx.json"
           docker_sbom="borondns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
           sbom_manifest="borondns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
           certificate_issuer="https://token.actions.githubusercontent.com"
@@ -409,15 +409,15 @@ jobs:
             borondns-*-x86_64-unknown-linux-musl.tar.xz.sha256
             borondns-*-x86_64-unknown-linux-musl.bin
             borondns-*-x86_64-unknown-linux-musl.bin.sha256
-            borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin
-            borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
+            borondns-*-x86_64-unknown-linux-musl-boron-gun.bin
+            borondns-*-x86_64-unknown-linux-musl-boron-gun.bin.sha256
             borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
             borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json
             borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json.sha256
-            borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
-            borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            borondns-*-x86_64-unknown-linux-musl-boron-gun.cdx.json
+            borondns-*-x86_64-unknown-linux-musl-boron-gun.cdx.json.sha256
             borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
             borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
             borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
@@ -425,9 +425,9 @@ jobs:
           )
           test "${#assets[@]}" -eq 17
           release_borondns=(borondns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          release_boron_gun=(borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#release_borondns[@]}" -eq 1
-          test "${#release_oxide_gun[@]}" -eq 1
+          test "${#release_boron_gun[@]}" -eq 1
 
           verify_authenticated_handoff() {
             printf '%s  %s\n' "$EXPECTED_HANDOFF_MANIFEST_SHA256" release-handoff.sha256 | /usr/bin/sha256sum -c --strict -
@@ -444,7 +444,7 @@ jobs:
             test "$(/usr/bin/find . -type f -print | /usr/bin/wc -l)" -eq 27
             python3 verify-release-reproducibility.py --require-artifacts \
               --release-borondns "${release_borondns[0]}" \
-              --release-oxide-gun "${release_oxide_gun[0]}" \
+              --release-boron-gun "${release_boron_gun[0]}" \
               . "$GITHUB_SHA"
           }
 
@@ -660,9 +660,9 @@ jobs:
           Assets:
           - Installer archive: $tarball
           - Static BoronDNS binary: $binary
-          - Static XDP-enabled OxideGun binary: $oxide_gun
+          - Static XDP-enabled BoronGun binary: $boron_gun
           - Docker image archive: $docker_image
-          - CycloneDX SBOMs: $borondns_sbom, $oxide_gun_sbom, $docker_sbom
+          - CycloneDX SBOMs: $borondns_sbom, $boron_gun_sbom, $docker_sbom
           - SHA256 files are attached for the installer, binaries, Docker image archive, and SBOMs.
           - The authenticated handoff manifest is release-handoff.sha256.
           - Each published asset has a keyless Sigstore bundle named \`<asset>.sigstore.json\`.
@@ -732,15 +732,15 @@ jobs:
             "$tarball.sigstore.json" "$tarball.sha256.sigstore.json"
             "$binary" "$binary.sha256"
             "$binary.sigstore.json" "$binary.sha256.sigstore.json"
-            "$oxide_gun" "$oxide_gun.sha256"
-            "$oxide_gun.sigstore.json" "$oxide_gun.sha256.sigstore.json"
+            "$boron_gun" "$boron_gun.sha256"
+            "$boron_gun.sigstore.json" "$boron_gun.sha256.sigstore.json"
             "$docker_image" "$docker_image.sha256"
             "$docker_image.sigstore.json" "$docker_image.sha256.sigstore.json"
             "$docker_manifest" "$docker_manifest.sigstore.json"
             "$borondns_sbom" "$borondns_sbom.sha256"
             "$borondns_sbom.sigstore.json" "$borondns_sbom.sha256.sigstore.json"
-            "$oxide_gun_sbom" "$oxide_gun_sbom.sha256"
-            "$oxide_gun_sbom.sigstore.json" "$oxide_gun_sbom.sha256.sigstore.json"
+            "$boron_gun_sbom" "$boron_gun_sbom.sha256"
+            "$boron_gun_sbom.sigstore.json" "$boron_gun_sbom.sha256.sigstore.json"
             "$docker_sbom" "$docker_sbom.sha256"
             "$docker_sbom.sigstore.json" "$docker_sbom.sha256.sigstore.json"
             "$sbom_manifest" "$sbom_manifest.sigstore.json"

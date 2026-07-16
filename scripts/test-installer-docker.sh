@@ -276,7 +276,7 @@ docker run --rm -i \
 			for collision_kind in binary tool config document service; do
 				case "$collision_kind" in
 				binary) collision_lock="$lock_collision_root/bin/borondns" ;;
-				tool) collision_lock="$lock_collision_root/bin/oxide-gun" ;;
+				tool) collision_lock="$lock_collision_root/bin/boron-gun" ;;
 				config) collision_lock="$lock_collision_root/config/config.toml" ;;
 				document) collision_lock=/usr/share/doc/borondns/README.install.md ;;
 				service) collision_lock="$lock_collision_root/systemd/borondns.service" ;;
@@ -314,13 +314,13 @@ docker run --rm -i \
 		test "$(stat -c "%a:%u" /run/lock/borondns)" = "700:0"
 		test "$(stat -c "%a:%u" /run/lock/borondns/installer.lock)" = "600:0"
 			/usr/local/bin/borondns --version
-			/usr/local/bin/oxide-gun --version
+			/usr/local/bin/boron-gun --version
 			test -f /usr/share/doc/borondns/README.install.md
 			test ! -L /usr/share/doc/borondns/README.install.md
 			grep -Fq "# BoronDNS Installer" /usr/share/doc/borondns/README.install.md
-		/usr/local/bin/oxide-gun --self-test --max-packets 2 --target-qps 1000 --flush-interval-ms 0 >/tmp/oxide-gun-self-test.json
-		grep -q "\"record_type\"" /tmp/oxide-gun-self-test.json
-		grep -q "\"summary\"" /tmp/oxide-gun-self-test.json
+		/usr/local/bin/boron-gun --self-test --max-packets 2 --target-qps 1000 --flush-interval-ms 0 >/tmp/boron-gun-self-test.json
+		grep -q "\"record_type\"" /tmp/boron-gun-self-test.json
+		grep -q "\"summary\"" /tmp/boron-gun-self-test.json
 		/usr/local/bin/borondns check-config --config /etc/borondns-secondary/config.toml
 		grep -q "installer-smoke.example." /etc/borondns-secondary/config.toml
 
@@ -846,15 +846,15 @@ mkdir -p -m 0755 "$service_target_root/units"
 			exit 1
 		fi
 		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
-		live_gun_hash="$(sha256sum /usr/local/bin/oxide-gun)"
+		live_gun_hash="$(sha256sum /usr/local/bin/boron-gun)"
 		cp -a /pkg /tmp/invalid-gun-pkg
-		printf "#!/bin/sh\nexit 0\n" >/tmp/invalid-gun-pkg/bin/oxide-gun
-		chmod 0755 /tmp/invalid-gun-pkg/bin/oxide-gun
+		printf "#!/bin/sh\nexit 0\n" >/tmp/invalid-gun-pkg/bin/boron-gun
+		chmod 0755 /tmp/invalid-gun-pkg/bin/boron-gun
 		if /tmp/invalid-gun-pkg/install.sh update --yes --init none --no-start; then
-			echo "installer accepted oxide-gun that mismatched the payload manifest" >&2
+			echo "installer accepted boron-gun that mismatched the payload manifest" >&2
 			exit 1
 		fi
-		test "$live_gun_hash" = "$(sha256sum /usr/local/bin/oxide-gun)"
+		test "$live_gun_hash" = "$(sha256sum /usr/local/bin/boron-gun)"
 
 		mkdir -p /tmp/preserved-bin /tmp/preserved-config
 		chmod 0700 /tmp/preserved-bin /tmp/preserved-config
@@ -1188,7 +1188,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			)
 			env "${signal_window_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			signal_old_binary_hash="$(sha256sum "$signal_window_root/bin/borondns")"
-			signal_old_tool_hash="$(sha256sum "$signal_window_root/bin/oxide-gun")"
+			signal_old_tool_hash="$(sha256sum "$signal_window_root/bin/boron-gun")"
 
 			run_signal_window_case() {
 				case_name="$1"
@@ -1231,7 +1231,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			run_signal_window_case existing-activation activate-existing .borondns.install. \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start
 			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/borondns")"
-			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/oxide-gun")"
+			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/boron-gun")"
 			test -z "$(find "$signal_window_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 			test -z "$(find "$signal_window_root/recovery" -type f -name "rollback-*.env" -print -quit)"
 
@@ -1249,7 +1249,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			run_signal_window_case absent-activation activate-absent .borondns.install. \
 				/pkg/install.sh install --yes --init none --no-start
 			test ! -e "$signal_absent_root/bin/borondns"
-			test ! -e "$signal_absent_root/bin/oxide-gun"
+			test ! -e "$signal_absent_root/bin/boron-gun"
 			test -z "$(find "$signal_absent_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 
 			signal_window_env=(
@@ -1263,7 +1263,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			run_signal_window_case uninstall-removal move borondns \
 				/pkg/install.sh uninstall --yes --init none --no-start
 			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/borondns")"
-			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/oxide-gun")"
+			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/boron-gun")"
 			test -f /usr/share/doc/borondns/README.install.md
 			test -z "$(find "$signal_window_root" -type f -name "*.rollback.*" -print -quit)"
 			test -z "$(find "$signal_window_root/recovery" -type f -name "rollback-*.env" -print -quit)"
@@ -1296,7 +1296,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			)
 			env "${late_error_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			late_error_old_binary_hash="$(sha256sum "$late_error_root/bin/borondns")"
-			late_error_old_tool_hash="$(sha256sum "$late_error_root/bin/oxide-gun")"
+			late_error_old_tool_hash="$(sha256sum "$late_error_root/bin/boron-gun")"
 			mkdir -m 0755 "$late_error_root/fault-state"
 			if env "${late_error_env[@]}" \
 				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
@@ -1309,7 +1309,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			test -e "$late_error_root/fault-state/activate"
 			test -e "$late_error_root/fault-state/exchange"
 			test "$late_error_old_binary_hash" = "$(sha256sum "$late_error_root/bin/borondns")"
-			test "$late_error_old_tool_hash" = "$(sha256sum "$late_error_root/bin/oxide-gun")"
+			test "$late_error_old_tool_hash" = "$(sha256sum "$late_error_root/bin/boron-gun")"
 			test -z "$(find "$late_error_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 
 			# Fresh activation has no prior inode: a committed-but-error promotion must
@@ -1340,7 +1340,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			fi
 			test -e "$late_absent_root/fault-state/absent"
 			test ! -e "$late_absent_root/bin/borondns"
-			test ! -e "$late_absent_root/bin/oxide-gun"
+			test ! -e "$late_absent_root/bin/boron-gun"
 			test -z "$(find "$late_absent_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 			grep -q "restored the previous installation" "$late_absent_root/install.log"
 			if grep -q "automatic rollback is incomplete" "$late_absent_root/install.log"; then
@@ -1523,7 +1523,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"fi" \
 				"staged_match=0" \
 				"if [[ \"\$mode\" == no-transaction && \"\$5\" == .borondns.install.* ]]; then staged_match=1; fi" \
-				"if [[ \"\$mode\" == after-diagnostic && \"\$5\" == .oxide-gun.install.* ]]; then staged_match=1; fi" \
+				"if [[ \"\$mode\" == after-diagnostic && \"\$5\" == .boron-gun.install.* ]]; then staged_match=1; fi" \
 				"if [[ \"\$2\" == remove && \"\$3\" == \"\$parent\" && \"\$staged_match\" == 1 && ! -e \"\$state/quarantined\" ]]; then" \
 				"  printf %s \"\$3/\$5\" >\"\$state/original-path\"" \
 				"  /usr/bin/stat -c %d:%i \"\$3/\$5\" >\"\$state/original-identity\"" \
@@ -2532,7 +2532,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$readiness_root" "$readiness_tools"
 			mkdir -p "$readiness_root/bin" "$readiness_root/config" "$readiness_root/units" \
 				"$readiness_root/state" "$readiness_tools"
-			cp /pkg/bin/borondns /pkg/bin/oxide-gun "$readiness_root/bin/"
+			cp /pkg/bin/borondns /pkg/bin/boron-gun "$readiness_root/bin/"
 			printf "%s\n" "#!/bin/sh" \
 				"state=\${READINESS_STATE:?}" \
 				"case \"\$1\" in" \
@@ -2611,7 +2611,7 @@ EOF
 				rm -rf "$port_zero_root"
 				mkdir -p "$port_zero_root/bin" "$port_zero_root/config" "$port_zero_root/units"
 				cp /bin/true "$port_zero_root/bin/borondns"
-				cp /bin/true "$port_zero_root/bin/oxide-gun"
+				cp /bin/true "$port_zero_root/bin/boron-gun"
 				cat >"$port_zero_root/config/config.toml" <<EOF
 [server]
 [process]
@@ -2629,7 +2629,7 @@ EOF
 				chmod 0640 "$port_zero_root/config/config.toml"
 				/pkg/bin/borondns check-config --config "$port_zero_root/config/config.toml" >/dev/null
 				port_zero_binary_before="$(sha256sum "$port_zero_root/bin/borondns")"
-				port_zero_tool_before="$(sha256sum "$port_zero_root/bin/oxide-gun")"
+				port_zero_tool_before="$(sha256sum "$port_zero_root/bin/boron-gun")"
 				port_zero_config_before="$(sha256sum "$port_zero_root/config/config.toml")"
 				if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
 					BORONDNS_SYSTEMD_DIR="$port_zero_root/units" BORONDNS_STATE_DIR="$port_zero_root/runtime" \
@@ -2642,7 +2642,7 @@ EOF
 				grep -q "installer-managed readiness endpoint must use a fixed nonzero port" \
 					"$port_zero_root/update.log"
 				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/borondns")"
-				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/oxide-gun")"
+				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/boron-gun")"
 				test "$port_zero_config_before" = "$(sha256sum "$port_zero_root/config/config.toml")"
 				test ! -e "$port_zero_root/units/borondns.service"
 
@@ -2660,7 +2660,7 @@ EOF
 				grep -q "installer-managed readiness endpoint must use a fixed nonzero port" \
 					"$port_zero_root/configure.log"
 				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/borondns")"
-				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/oxide-gun")"
+				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/boron-gun")"
 				test "$port_zero_config_before" = "$(sha256sum "$port_zero_root/config/config.toml")"
 				test ! -e "$port_zero_root/units/borondns.service"
 
@@ -2749,7 +2749,7 @@ EOF
 		uninstall_tool_dir=/opt/uninstall-preflight-bin
 		rm -rf "$uninstall_root" "$uninstall_tool_dir"
 		mkdir -p "$uninstall_root/bin" "$uninstall_root/units" "$uninstall_root/state" "$uninstall_tool_dir"
-		cp /usr/local/bin/borondns /usr/local/bin/oxide-gun "$uninstall_root/bin/"
+		cp /usr/local/bin/borondns /usr/local/bin/boron-gun "$uninstall_root/bin/"
 		printf "managed unit\n" >"$uninstall_root/units/borondns.service"
 		touch "$uninstall_root/state/active" "$uninstall_root/state/enabled"
 		printf "%s\n" "#!/bin/sh" \
@@ -2786,7 +2786,7 @@ EOF
 		mkdir -p "$uninstall_tx_root/bin" "$uninstall_tx_root/units" \
 			"$uninstall_tx_root/state" "$uninstall_tx_root/runtime" "$uninstall_tx_tools"
 		chmod 0700 "$uninstall_tx_root/runtime"
-		cp /usr/local/bin/borondns /usr/local/bin/oxide-gun "$uninstall_tx_root/bin/"
+		cp /usr/local/bin/borondns /usr/local/bin/boron-gun "$uninstall_tx_root/bin/"
 		printf "transactional unit\n" >"$uninstall_tx_root/units/borondns.service"
 		touch "$uninstall_tx_root/state/active" "$uninstall_tx_root/state/enabled"
 			printf "%s\n" "#!/bin/sh" \
@@ -2986,7 +2986,7 @@ docker run --rm \
 
         /root/pkg/install.sh uninstall --yes --init openrc --no-start
         test ! -e /usr/local/bin/borondns
-        test ! -e /usr/local/bin/oxide-gun
+        test ! -e /usr/local/bin/boron-gun
         test ! -e /etc/init.d/borondns
         test -f /etc/borondns-secondary/config.toml
     '

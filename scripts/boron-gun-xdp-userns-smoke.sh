@@ -2,11 +2,15 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-binary="${1:-$repo_root/target/debug/oxide-gun}"
-out_dir="$repo_root/target/oxide-gun-xdp-veth-smoke"
+binary="${1:-$repo_root/target/debug/boron-gun}"
+
+if [[ "${BORON_GUN_XDP_USERNS_INSIDE:-0}" != "1" ]]; then
+    command -v unshare >/dev/null
+    exec unshare -Urn env BORON_GUN_XDP_USERNS_INSIDE=1 "$0" "$binary"
+fi
+
+out_dir="$repo_root/target/boron-gun-xdp-userns-smoke"
 config="$out_dir/smoke.toml"
-src_ns="oxg-src-$$"
-dst_ns="oxg-dst-$$"
 src_if="veth-oxg-src"
 dst_if="veth-oxg-dst"
 src_ip="198.18.0.1"
@@ -15,15 +19,9 @@ src_range_start="198.18.0.10"
 src_mac="02:00:00:00:10:01"
 dst_mac="02:00:00:00:10:53"
 packet_count=4
-drop_object="${OXIDE_GUN_XDP_DROP_OBJECT:-}"
-
-if [[ "$(id -u)" -ne 0 ]]; then
-    echo "oxide-gun XDP veth smoke requires root; run with pkexec or sudo" >&2
-    exit 77
-fi
 
 if [[ ! -x "$binary" ]]; then
-    echo "oxide-gun binary is not executable: $binary" >&2
+    echo "boron-gun binary is not executable: $binary" >&2
     exit 1
 fi
 
@@ -49,58 +47,47 @@ completion_ring_size = 64
 TOML
 
 cleanup() {
-    ip netns pids "$dst_ns" 2>/dev/null | xargs -r kill 2>/dev/null || true
-    ip netns pids "$src_ns" 2>/dev/null | xargs -r kill 2>/dev/null || true
-    ip netns del "$src_ns" 2>/dev/null || true
-    ip netns del "$dst_ns" 2>/dev/null || true
+    if [[ -n "${tcpdump_pid:-}" ]]; then
+        kill "$tcpdump_pid" 2>/dev/null || true
+    fi
+    ip link del "$src_if" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-ip netns add "$src_ns"
-ip netns add "$dst_ns"
 ip link add "$src_if" address "$src_mac" type veth peer name "$dst_if" address "$dst_mac"
-ip link set "$src_if" netns "$src_ns"
-ip link set "$dst_if" netns "$dst_ns"
-ip -n "$src_ns" addr add "$src_ip/24" dev "$src_if"
-ip -n "$dst_ns" addr add "$dst_ip/24" dev "$dst_if"
-ip -n "$src_ns" link set lo up
-ip -n "$dst_ns" link set lo up
-ip -n "$src_ns" link set "$src_if" up
-ip -n "$dst_ns" link set "$dst_if" up
+ip addr add "$src_ip/24" dev "$src_if"
+ip addr add "$dst_ip/24" dev "$dst_if"
+ip link set lo up
+ip link set "$src_if" up
+ip link set "$dst_if" up
 
-ip netns exec "$dst_ns" timeout 8 tcpdump -i "$dst_if" -U -c "$packet_count" -w "$pcap" \
+timeout 8 tcpdump -i "$dst_if" -U -c "$packet_count" -w "$pcap" \
     "udp and dst port 53" >"$tcpdump_log" 2>&1 &
 tcpdump_pid=$!
 sleep 0.5
 
-cmd=(
-    ip netns exec "$src_ns" timeout 8 "$binary"
-    --config "$config"
-    --backend xdp
-    --interface "$src_if"
-    --tx-queue 0
-    --rx-queue 0
-    --xdp-zerocopy copy
-    --source-ip "$src_ip"
-    --source-port 53000
-    --source-range-start "$src_range_start"
-    --source-range-count "$packet_count"
-    --source-port-range 53000-53003
-    --source-port-select sequential
-    --source-mac "$src_mac"
-    --target "$dst_ip:53"
-    --target-mac "$dst_mac"
-    --qname smoke.oxide.test.
-    --qtype A
-    --recv-mode drop
-    --max-packets "$packet_count"
-    --target-qps 0
-    --flush-interval-ms 0
-)
-if [[ -n "$drop_object" ]]; then
-    cmd+=(--xdp-drop-object "$drop_object")
-fi
-"${cmd[@]}" >"$summary"
+"$binary" \
+    --config "$config" \
+    --backend xdp \
+    --interface "$src_if" \
+    --tx-queue 0 \
+    --rx-queue 0 \
+    --xdp-zerocopy copy \
+    --source-ip "$src_ip" \
+    --source-port 53000 \
+    --source-range-start "$src_range_start" \
+    --source-range-count "$packet_count" \
+    --source-port-range 53000-53003 \
+    --source-port-select sequential \
+    --source-mac "$src_mac" \
+    --target "$dst_ip:53" \
+    --target-mac "$dst_mac" \
+    --qname smoke.boron.test. \
+    --qtype A \
+    --recv-mode drop \
+    --max-packets "$packet_count" \
+    --target-qps 0 \
+    --flush-interval-ms 0 >"$summary"
 
 wait "$tcpdump_pid"
 
@@ -116,6 +103,8 @@ with open(path, encoding="utf-8") as handle:
 checks = {
     "record_type": "summary",
     "backend": "xdp_af_xdp",
+    "xdp_mode": "skb",
+    "zerocopy": "copy",
     "recv_mode": "drop",
     "drop_implementation": "userspace_suppression",
     "tx_packets_total": expected,
@@ -137,4 +126,4 @@ for offset in $(seq 0 $((packet_count - 1))); do
     source_port=$((53000 + offset))
     grep -q "198\\.18\\.0\\.$source_host\\.$source_port > $dst_ip\\.53" "$out_dir/peer.txt"
 done
-printf 'oxide-gun XDP veth smoke passed: %s\n' "$out_dir"
+printf 'boron-gun rootless XDP userns smoke passed: %s\n' "$out_dir"

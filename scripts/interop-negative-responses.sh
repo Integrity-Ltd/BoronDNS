@@ -319,7 +319,7 @@ def type_names(values):
 cases = [
     {
         "name": "nxdomain",
-        "requirements": "ODS-FR-CORE-023,ODS-FR-NRESP-001",
+        "requirements": "BDS-FR-CORE-023,BDS-FR-NRESP-001",
         "qname": "missing.negative.test.",
         "qtype": A,
         "rcode": 3,
@@ -331,7 +331,7 @@ cases = [
     },
     {
         "name": "nodata",
-        "requirements": "ODS-FR-CORE-022,ODS-FR-NRESP-001",
+        "requirements": "BDS-FR-CORE-022,BDS-FR-NRESP-001",
         "qname": "www.negative.test.",
         "qtype": AAAA,
         "rcode": 0,
@@ -343,7 +343,7 @@ cases = [
     },
     {
         "name": "empty_non_terminal",
-        "requirements": "ODS-FR-QRY-016,ODS-FR-NRESP-003,ODS-FR-CORE-022,ODS-FR-NRESP-001",
+        "requirements": "BDS-FR-QRY-016,BDS-FR-NRESP-003,BDS-FR-CORE-022,BDS-FR-NRESP-001",
         "qname": "foo.negative.test.",
         "qtype": A,
         "rcode": 0,
@@ -355,7 +355,7 @@ cases = [
     },
     {
         "name": "cname_negative_terminal",
-        "requirements": "ODS-FR-NRESP-004,ODS-FR-NRESP-001",
+        "requirements": "BDS-FR-NRESP-004,BDS-FR-NRESP-001",
         "qname": "alias.negative.test.",
         "qtype": A,
         "rcode": 3,
@@ -367,7 +367,7 @@ cases = [
     },
     {
         "name": "cname_nodata_terminal",
-        "requirements": "ODS-FR-NRESP-005,ODS-FR-NRESP-001",
+        "requirements": "BDS-FR-NRESP-005,BDS-FR-NRESP-001",
         "qname": "alias-nodata.negative.test.",
         "qtype": AAAA,
         "rcode": 0,
@@ -379,7 +379,7 @@ cases = [
     },
     {
         "name": "dname_out_of_zone_terminal",
-        "requirements": "ODS-FR-NRESP-006",
+        "requirements": "BDS-FR-NRESP-006",
         "qname": "www.deleg.negative.test.",
         "qtype": A,
         "rcode": 0,
@@ -391,7 +391,7 @@ cases = [
     },
     {
         "name": "outside_served_zone",
-        "requirements": "ODS-FR-CORE-019",
+        "requirements": "BDS-FR-CORE-019",
         "qname": "outside.example.",
         "qtype": A,
         "rcode": 5,
@@ -403,7 +403,7 @@ cases = [
     },
     {
         "name": "direct_soa_ttl",
-        "requirements": "ODS-FR-NRESP-002",
+        "requirements": "BDS-FR-NRESP-002",
         "qname": "negative.test.",
         "qtype": SOA,
         "rcode": 0,

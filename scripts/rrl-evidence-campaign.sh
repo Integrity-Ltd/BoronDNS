@@ -192,17 +192,17 @@ write_threshold_decision() {
 
     {
         printf 'setting\tvalue\trequirement\tstatus\tnote\n'
-        printf 'enabled\ttrue\tODS-FR-RRL-001\timplemented-srs-body-default\tRRL is enabled by default\n'
-        printf 'ipv4_prefix_len\t24\tODS-FR-RRL-002\timplemented-srs-body-default\tIPv4 accounting prefix length\n'
-        printf 'ipv6_prefix_len\t56\tODS-FR-RRL-002\timplemented-srs-body-default\tIPv6 accounting prefix length\n'
-        printf 'positive_per_second\t20\tODS-FR-RRL-003\timplemented-srs-body-default\tPositive response rate limit\n'
-        printf 'nxdomain_per_second\t5\tODS-FR-RRL-003\timplemented-srs-body-default\tNXDOMAIN response rate limit\n'
-        printf 'nodata_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tNODATA response rate limit\n'
-        printf 'referral_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tReferral response rate limit\n'
-        printf 'error_per_second\t5\tODS-FR-RRL-003\timplemented-srs-body-default\tError response rate limit\n'
-        printf 'slip\t2\tODS-FR-RRL-005\tresolved-srs-v0.9.1-default\tretain operational evidence before formal acceptance\n'
-        printf 'max_keys\t100000\tODS-FR-RRL-010\timplemented-srs-body-default\tMaximum tracked accounting keys\n'
-        printf 'summary_log_interval_secs\t60\tODS-FR-RRL-011\timplemented-srs-body-default\tAggregate RRL summary interval\n'
+        printf 'enabled\ttrue\tBDS-FR-RRL-001\timplemented-srs-body-default\tRRL is enabled by default\n'
+        printf 'ipv4_prefix_len\t24\tBDS-FR-RRL-002\timplemented-srs-body-default\tIPv4 accounting prefix length\n'
+        printf 'ipv6_prefix_len\t56\tBDS-FR-RRL-002\timplemented-srs-body-default\tIPv6 accounting prefix length\n'
+        printf 'positive_per_second\t20\tBDS-FR-RRL-003\timplemented-srs-body-default\tPositive response rate limit\n'
+        printf 'nxdomain_per_second\t5\tBDS-FR-RRL-003\timplemented-srs-body-default\tNXDOMAIN response rate limit\n'
+        printf 'nodata_per_second\t10\tBDS-FR-RRL-003\timplemented-srs-body-default\tNODATA response rate limit\n'
+        printf 'referral_per_second\t10\tBDS-FR-RRL-003\timplemented-srs-body-default\tReferral response rate limit\n'
+        printf 'error_per_second\t5\tBDS-FR-RRL-003\timplemented-srs-body-default\tError response rate limit\n'
+        printf 'slip\t2\tBDS-FR-RRL-005\tresolved-srs-v0.9.1-default\tretain operational evidence before formal acceptance\n'
+        printf 'max_keys\t100000\tBDS-FR-RRL-010\timplemented-srs-body-default\tMaximum tracked accounting keys\n'
+        printf 'summary_log_interval_secs\t60\tBDS-FR-RRL-011\timplemented-srs-body-default\tAggregate RRL summary interval\n'
     } >"$decision_file"
 }
 
@@ -331,7 +331,7 @@ write_aggregate() {
 
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$run_id" "$status" "$started" "$finished" "$elapsed_seconds" "$commit" \
-            "ODS-FR-RRL-001..ODS-FR-RRL-012" "$attempts" "$responses" "$dropped" \
+            "BDS-FR-RRL-001..BDS-FR-RRL-012" "$attempts" "$responses" "$dropped" \
             "$truncated" "$rrl_subject_total" "$rrl_dropped_total" "$rrl_truncated_total" \
             "$queries_truncated_total" "$rrl_keys_tracked" "$rrl_categories_checked" \
             >>"$aggregate_tsv"
@@ -363,7 +363,7 @@ write_aggregate() {
       printf "aggregate_metric_dropped=%d\n", metric_dropped
       printf "aggregate_metric_truncated=%d\n", metric_truncated
       printf "aggregate_queries_truncated=%d\n", queries_truncated
-      printf "requirements=ODS-FR-RRL-001..ODS-FR-RRL-012\n"
+      printf "requirements=BDS-FR-RRL-001..BDS-FR-RRL-012\n"
     }
   ' "$aggregate_tsv" >"$aggregate_summary"
 }

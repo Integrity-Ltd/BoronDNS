@@ -31,11 +31,11 @@ EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-ODS-NFR-MAINT-006	current-interface-baseline.tsv; interface-compatibility-check.log	setup-ready	compare against the previous accepted release baseline and publish additions deprecations and breaking changes in release notes
-ODS-IF-CONF-002	current-interface-baseline.tsv; interface-compatibility-policy.md	setup-ready	keep schema changes aligned with the backward-compatibility policy
-ODS-VER-010	release-notes-snippet.md	setup-ready	publish interface changes and compatibility-diff result in release notes
-ODS-VER-012	interface-compatibility-check.log	setup-ready	treat unapproved interface removal or semantic change as a release-blocking regression
-ODS-VER-015	release-engineer-signoff.md	setup-ready	record release engineer review and approval for compatibility status
+BDS-NFR-MAINT-006	current-interface-baseline.tsv; interface-compatibility-check.log	setup-ready	compare against the previous accepted release baseline and publish additions deprecations and breaking changes in release notes
+BDS-IF-CONF-002	current-interface-baseline.tsv; interface-compatibility-policy.md	setup-ready	keep schema changes aligned with the backward-compatibility policy
+BDS-VER-010	release-notes-snippet.md	setup-ready	publish interface changes and compatibility-diff result in release notes
+BDS-VER-012	interface-compatibility-check.log	setup-ready	treat unapproved interface removal or semantic change as a release-blocking regression
+BDS-VER-015	release-engineer-signoff.md	setup-ready	record release engineer review and approval for compatibility status
 EOF
 
 cat >"$evidence_dir/release-notes-snippet.md" <<'EOF'
@@ -74,7 +74,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory records the Engineering MVP setup artifact for ODS-NFR-MAINT-006.
+This directory records the Engineering MVP setup artifact for BDS-NFR-MAINT-006.
 Without a previous accepted release baseline, it establishes the current
 baseline and policy shape. When \`BORONDNS_PREVIOUS_INTERFACE_BASELINE\` is set, the
 checker compares the current baseline against that file and blocks removals

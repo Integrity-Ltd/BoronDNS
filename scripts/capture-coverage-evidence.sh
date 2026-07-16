@@ -127,7 +127,7 @@ with (artifact_dir / "coverage-traceability.tsv").open("w", encoding="utf-8") as
     out.write("requirement\tstatus\tartifact\tnote\n")
     overall_status = "pass" if overall_percent >= overall_min else "fail"
     out.write(
-        "ODS-NFR-MAINT-007\t"
+        "BDS-NFR-MAINT-007\t"
         f"{overall_status}\tcoverage-summary.env; coverage-summary.json\t"
         f"Overall first-party line coverage is {overall_percent:.3f}%, threshold {overall_min:.1f}%.\n"
     )
@@ -135,7 +135,7 @@ with (artifact_dir / "coverage-traceability.tsv").open("w", encoding="utf-8") as
         values = files[suffix]
         status = "pass" if values["percent"] >= parser_min else "fail"
         out.write(
-            "ODS-NFR-MAINT-007\t"
+            "BDS-NFR-MAINT-007\t"
             f"{status}\tcoverage-files.tsv\t"
             f"{scope} coverage in {suffix} is {values['percent']:.3f}%, threshold {parser_min:.1f}%.\n"
         )

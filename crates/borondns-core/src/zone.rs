@@ -19,10 +19,10 @@ use crate::dns::{
 };
 use crate::zone_image::{ZoneImage, ZoneImageBuildError};
 
-// ODS-NFR-MAINT-004 principal functional requirement references for the
+// BDS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
-// - ODS-FR-ZONE-001 ODS-FR-ZONE-002 ODS-FR-ZONE-003
-// - ODS-FR-ZONE-004 ODS-FR-ZONE-005 ODS-FR-ZONE-006
+// - BDS-FR-ZONE-001 BDS-FR-ZONE-002 BDS-FR-ZONE-003
+// - BDS-FR-ZONE-004 BDS-FR-ZONE-005 BDS-FR-ZONE-006
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneState {
     Loading,

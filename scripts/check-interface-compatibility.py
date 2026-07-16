@@ -22,7 +22,7 @@ REQUIRED_ELEMENTS = {
     ("configuration", "[interfaces].dns"),
     ("configuration", "[interfaces].transfer"),
     ("configuration", "[interfaces].mgmt"),
-    ("environment", "ODS_<SECTION>_<KEY>"),
+    ("environment", "BORONDNS_<SECTION>_<KEY>"),
     ("cli", "serve"),
     ("cli", "--validate-config"),
     ("cli", "--dump-config"),
@@ -90,8 +90,8 @@ def read_baseline(path: Path) -> dict[tuple[str, str], dict[str, str]]:
 def check_policy(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     for required in (
-        "ODS-NFR-MAINT-006",
-        "ODS-IF-CONF-002",
+        "BDS-NFR-MAINT-006",
+        "BDS-IF-CONF-002",
         "semantic",
         "major version",
         "deprecation",
@@ -144,14 +144,14 @@ def check_three_role_docs(repo_root: Path) -> None:
     )
     if "with `dns`, `mgmt`, `transfer`, and `notify` sub-keys" in srs:
         fail("SRS v0.9.1 still exposes notify as an active [interfaces] sub-key")
-    if "ODS-IF-NET-008 (optional `interface.notify`)" in srs:
-        fail("SRS v0.9.1 still describes ODS-IF-NET-008 as optional interface.notify")
+    if "BDS-IF-NET-008 (optional `interface.notify`)" in srs:
+        fail("SRS v0.9.1 still describes BDS-IF-NET-008 as optional interface.notify")
     if "new `interface.notify`" in srs:
         fail("SRS v0.9.1 audit history still claims interface.notify was added")
     if "Add optional `interface.notify`" in srs:
         fail("SRS v0.9.1 C.5 still asks to add optional interface.notify")
     if "MUST NOT expose a fourth `notify` role" not in srs:
-        fail("SRS v0.9.1 must preserve the ODS-IF-NET-008 three-role clarification")
+        fail("SRS v0.9.1 must preserve the BDS-IF-NET-008 three-role clarification")
 
     decision_register = (repo_root / "docs" / "project-decision-register.md").read_text(
         encoding="utf-8"

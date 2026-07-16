@@ -6,11 +6,22 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+No unreleased project-facing changes.
+
+## 0.9.0 - 2026-07-16
+
 ### Changed
 
 - Adopted the BoronDNS product name across crates, binaries, configuration,
   environment variables, metrics, packaging, deployment assets,
   documentation, and repository metadata.
+- Replaced the former product-initial configuration namespace with explicit
+  `BORONDNS_*` environment variables and moved formal requirement IDs into the
+  `BDS-*` namespace; the pre-1.0 rebrand intentionally provides no legacy
+  aliases.
+- Renamed the bundled load and packet-generation tool to `BoronGun`, including
+  its crate, binary, scripts, documentation, environment keys, package
+  artifacts, and SBOM names.
 - Advanced the pre-1.0 workspace and eBPF support crates from `0.2.0` to
   `0.9.0` for the breaking BoronDNS release-candidate identity.
 - Updated public-release preparation docs to align with current source-owned
@@ -31,7 +42,7 @@ full evidence pointers and sign-off.
 - Added physical UDP/Knot comparison harnessing for detached multi-row sweeps,
   Knot reference rows, host/NIC/qdisc evidence capture, and transmit-side loss
   diagnostics.
-- Added OxideGun and server AF_XDP/XDP controls for multi-queue binding,
+- Added BoronGun and server AF_XDP/XDP controls for multi-queue binding,
   sparse queue steering, source-port weighting, reply redirects, requester
   diagnostics, and packet-I/O counters.
 - Added observability API coverage and related operator/metrics documentation.
@@ -46,7 +57,7 @@ full evidence pointers and sign-off.
   did not justify keeping an approach.
 - Bumped the workspace and eBPF support crates to version `0.1.5`.
 - Built release-packaged `borondns` binaries with the server `af-xdp` feature
-  enabled, matching the XDP-enabled `oxide-gun` release asset.
+  enabled, matching the XDP-enabled `boron-gun` release asset.
 
 ### Notes
 
@@ -92,11 +103,11 @@ full evidence pointers and sign-off.
 
 ### Added
 
-- Added the initial `oxide-gun` crate: a DNS load/probe tool with TOML
+- Added the initial `boron-gun` crate: a DNS load/probe tool with TOML
   configuration, process/drop receive modes, structured summary output, a local
   responder `--self-test` E2E path, and an explicit Linux AF_XDP backend behind
   the `xdp` Cargo feature for lab hosts.
-- Added release packaging for the XDP-enabled `oxide-gun` binary, including a
+- Added release packaging for the XDP-enabled `boron-gun` binary, including a
   raw static binary asset, installer payload inclusion, SHA256 sidecars, and
   installer smoke coverage.
 
@@ -119,9 +130,9 @@ full evidence pointers and sign-off.
 ### Documentation
 
 - Refreshed memory-layout, architecture, health/metrics, operator, interface,
-  release-note, OxideGun, and test-plan documentation to describe the promoted
+  release-note, BoronGun, and test-plan documentation to describe the promoted
   ZoneImage layout, retired rollback/shadow surfaces, and release-packaged
-  OxideGun tooling.
+  BoronGun tooling.
 
 ### Notes
 

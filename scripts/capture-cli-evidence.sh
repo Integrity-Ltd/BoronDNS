@@ -107,11 +107,11 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Captured CLI invocation outputs for SRS process-lifecycle requirements:
 
-- ODS-IF-PROC-002: --version and -V
-- ODS-IF-PROC-003: --help and -h
-- ODS-IF-PROC-004: --example-config plus validation
-- ODS-IF-CONF-009: --dump-config redacted effective configuration output
-- ODS-IF-CONF-010: --validate-config checked-in configuration validation
+- BDS-IF-PROC-002: --version and -V
+- BDS-IF-PROC-003: --help and -h
+- BDS-IF-PROC-004: --example-config plus validation
+- BDS-IF-CONF-009: --dump-config redacted effective configuration output
+- BDS-IF-CONF-010: --validate-config checked-in configuration validation
 
 Each command stores stdout, stderr, and exit status in this directory.
 EOF

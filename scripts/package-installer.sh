@@ -144,7 +144,7 @@ package_require_safe_component archive-root "$archive_root"
 dist_dir="$(package_canonical_output_root BORONDNS_DIST_DIR "$dist_dir")"
 archive="$(package_safe_child_path "$dist_dir" "$archive_root.tar.xz" 'installer archive')"
 binary_asset="$(package_safe_child_path "$dist_dir" "$archive_root.bin" 'installer binary asset')"
-oxide_gun_asset="$(package_safe_child_path "$dist_dir" "$archive_root-oxide-gun.bin" 'installer tool binary asset')"
+boron_gun_asset="$(package_safe_child_path "$dist_dir" "$archive_root-boron-gun.bin" 'installer tool binary asset')"
 staging="$(package_safe_child_path "$dist_dir" "$archive_root" 'installer staging directory')"
 run_root=""
 package_publication_initialized=0
@@ -187,7 +187,7 @@ package_capture_cleanup_root "$run_root" "installer package run root"
 run_staging="$run_root/$archive_root"
 run_archive="$run_root/$archive_root.tar.xz"
 run_binary_asset="$run_root/$archive_root.bin"
-run_oxide_gun_asset="$run_root/$archive_root-oxide-gun.bin"
+run_boron_gun_asset="$run_root/$archive_root-boron-gun.bin"
 run_build_target="$run_root/build-target"
 run_build_home="$run_root/hermetic-home"
 run_cargo_home="$run_root/hermetic-cargo-home"
@@ -221,26 +221,26 @@ fi
         BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
         SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0 \
         CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release \
-        --target-dir "$run_build_target" --target "$target_triple" -p oxide-gun --features xdp
+        --target-dir "$run_build_target" --target "$target_triple" -p boron-gun --features xdp
     [[ "$(sha256_file "$cargo_bin" | awk '{ print $1 }')" == "$verified_cargo_sha256" ]]
     [[ "$(sha256_file "$rustc_bin" | awk '{ print $1 }')" == "$verified_rustc_sha256" ]]
 )
 verify_source_identity "after build"
 
 binary="$run_build_target/$target_triple/release/borondns"
-oxide_gun_binary="$run_build_target/$target_triple/release/oxide-gun"
+boron_gun_binary="$run_build_target/$target_triple/release/boron-gun"
 [[ -x "$binary" ]] || {
     printf 'missing built binary: %s\n' "$binary" >&2
     exit 1
 }
-[[ -x "$oxide_gun_binary" ]] || {
-    printf 'missing built binary: %s\n' "$oxide_gun_binary" >&2
+[[ -x "$boron_gun_binary" ]] || {
+    printf 'missing built binary: %s\n' "$boron_gun_binary" >&2
     exit 1
 }
 
 mkdir -p "$run_staging/bin" "$run_staging/share/borondns"
 install -m 0755 "$binary" "$run_staging/bin/borondns"
-install -m 0755 "$oxide_gun_binary" "$run_staging/bin/oxide-gun"
+install -m 0755 "$boron_gun_binary" "$run_staging/bin/boron-gun"
 install -m 0755 "$repo_root/packaging/installer/install.sh" "$run_staging/install.sh"
 cp -R "$repo_root/packaging/installer/share/borondns/." "$run_staging/share/borondns/"
 install -m 0644 "$repo_root/packaging/installer/README.install.md" "$run_staging/README.install.md"
@@ -265,11 +265,11 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
     sha256_file "$rustc_bin" | awk '{print "rustc_sha256="$1}'
     printf 'binary=bin/borondns\n'
     printf 'binary_features=af-xdp\n'
-    printf 'tool_binary=bin/oxide-gun\n'
+    printf 'tool_binary=bin/boron-gun\n'
     printf 'tool_binary_features=xdp\n'
     sha256_file "$run_staging/install.sh" | awk '{print "installer_sha256="$1}'
     sha256_file "$run_staging/bin/borondns" | awk '{print "binary_sha256="$1}'
-    sha256_file "$run_staging/bin/oxide-gun" | awk '{print "tool_binary_sha256="$1}'
+    sha256_file "$run_staging/bin/boron-gun" | awk '{print "tool_binary_sha256="$1}'
     sha256_file "$run_staging/share/borondns/systemd/borondns.service" |
         awk '{print "systemd_template_sha256="$1}'
     sha256_file "$run_staging/share/borondns/openrc/borondns" |
@@ -280,7 +280,7 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
 if command -v file >/dev/null 2>&1; then
     {
         file "$run_staging/bin/borondns"
-        file "$run_staging/bin/oxide-gun"
+        file "$run_staging/bin/boron-gun"
     } >"$run_staging/file.txt"
 else
     printf 'file not available\n' >"$run_staging/file.txt"
@@ -301,20 +301,20 @@ static_link_confirmed() {
 
 if command -v ldd >/dev/null 2>&1; then
     ldd "$run_staging/bin/borondns" >"$run_staging/ldd-borondns.txt" 2>&1 || true
-    ldd "$run_staging/bin/oxide-gun" >"$run_staging/ldd-oxide-gun.txt" 2>&1 || true
+    ldd "$run_staging/bin/boron-gun" >"$run_staging/ldd-boron-gun.txt" 2>&1 || true
     {
         printf '== %s ==\n' "$run_staging/bin/borondns"
         cat "$run_staging/ldd-borondns.txt"
-        printf '\n== %s ==\n' "$run_staging/bin/oxide-gun"
-        cat "$run_staging/ldd-oxide-gun.txt"
+        printf '\n== %s ==\n' "$run_staging/bin/boron-gun"
+        cat "$run_staging/ldd-boron-gun.txt"
     } >"$run_staging/ldd.txt"
 else
     printf 'ldd not available\n' >"$run_staging/ldd-borondns.txt"
-    printf 'ldd not available\n' >"$run_staging/ldd-oxide-gun.txt"
+    printf 'ldd not available\n' >"$run_staging/ldd-boron-gun.txt"
     printf 'ldd not available\n' >"$run_staging/ldd.txt"
 fi
 
-for checked_binary in "$run_staging/bin/borondns" "$run_staging/bin/oxide-gun"; do
+for checked_binary in "$run_staging/bin/borondns" "$run_staging/bin/boron-gun"; do
     ldd_report="$run_staging/ldd-$(basename "$checked_binary").txt"
     if static_link_confirmed "$checked_binary" "$ldd_report" "$run_staging/file.txt"; then
         continue
@@ -331,13 +331,13 @@ done
 verify_source_identity "before artifact publication"
 
 install -m 0755 "$binary" "$run_binary_asset"
-install -m 0755 "$oxide_gun_binary" "$run_oxide_gun_asset"
+install -m 0755 "$boron_gun_binary" "$run_boron_gun_asset"
 tar -C "$run_root" -cJf "$run_archive" "$archive_root"
 (
     cd "$run_root"
     sha256_file "$(basename "$run_archive")" >"$(basename "$run_archive").sha256"
     sha256_file "$(basename "$run_binary_asset")" >"$(basename "$run_binary_asset").sha256"
-    sha256_file "$(basename "$run_oxide_gun_asset")" >"$(basename "$run_oxide_gun_asset").sha256"
+    sha256_file "$(basename "$run_boron_gun_asset")" >"$(basename "$run_boron_gun_asset").sha256"
 )
 publication_lock_fd=""
 package_acquire_publication_lock "$dist_dir" "$archive_root" publication_lock_fd
@@ -349,8 +349,8 @@ package_publish_candidate "$run_archive" "$archive" "$dist_dir" 'installer archi
 package_publish_candidate "$run_archive.sha256" "$archive.sha256" "$dist_dir" 'installer archive checksum'
 package_publish_candidate "$run_binary_asset" "$binary_asset" "$dist_dir" 'installer binary asset'
 package_publish_candidate "$run_binary_asset.sha256" "$binary_asset.sha256" "$dist_dir" 'installer binary checksum'
-package_publish_candidate "$run_oxide_gun_asset" "$oxide_gun_asset" "$dist_dir" 'installer tool binary asset'
-package_publish_candidate "$run_oxide_gun_asset.sha256" "$oxide_gun_asset.sha256" "$dist_dir" 'installer tool binary checksum'
+package_publish_candidate "$run_boron_gun_asset" "$boron_gun_asset" "$dist_dir" 'installer tool binary asset'
+package_publish_candidate "$run_boron_gun_asset.sha256" "$boron_gun_asset.sha256" "$dist_dir" 'installer tool binary checksum'
 package_commit_publication
 package_remove_captured_cleanup_root "$run_root" "installer package run root"
 PACKAGE_PUBLICATION_RETAIN_ROOT=""
@@ -359,5 +359,5 @@ printf 'created %s\n' "$archive"
 printf 'created %s\n' "$archive.sha256"
 printf 'created %s\n' "$binary_asset"
 printf 'created %s\n' "$binary_asset.sha256"
-printf 'created %s\n' "$oxide_gun_asset"
-printf 'created %s\n' "$oxide_gun_asset.sha256"
+printf 'created %s\n' "$boron_gun_asset"
+printf 'created %s\n' "$boron_gun_asset.sha256"

@@ -24,8 +24,8 @@ cases completed without skips.
 | --- | --- |
 | Source commit | `4193049dc540feb7d9d97479fc6aede2b8cb3e09` |
 | Dirty checkout | `no` |
-| Host | `release-validation-host-arch` |
-| Kernel | `Linux release-validation-host-arch 7.0.11-arch1-1 #1 SMP PREEMPT_DYNAMIC Tue, 02 Jun 2026 18:26:58 +0000 x86_64 GNU/Linux` |
+| Host | `release-validation-host` |
+| Kernel | `Linux release-validation-host 7.0.11-arch1-1 #1 SMP PREEMPT_DYNAMIC Tue, 02 Jun 2026 18:26:58 +0000 x86_64 GNU/Linux` |
 | Docker | `Docker version 29.5.2, build 79eb04c7d8` |
 | DiG | `DiG 9.20.23` |
 | OpenSSL | `OpenSSL 3.6.3 9 Jun 2026 (Library: OpenSSL 3.6.3 9 Jun 2026)` |
@@ -38,7 +38,7 @@ Failure-evidence input summary:
 | Dirty checkout | `no` |
 | Captured at UTC | `20260616T170617Z` |
 | Host | `unknown` |
-| Kernel | `Linux release-validation-host-arch 7.0.11-arch1-1 #1 SMP PREEMPT_DYNAMIC Tue, 02 Jun 2026 18:26:58 +0000 x86_64 GNU/Linux` |
+| Kernel | `Linux release-validation-host 7.0.11-arch1-1 #1 SMP PREEMPT_DYNAMIC Tue, 02 Jun 2026 18:26:58 +0000 x86_64 GNU/Linux` |
 | Rust | `rustc 1.96.0 (ac68faa20 2026-05-25)` |
 | Cargo | `cargo 1.96.0 (30a34c682 2026-05-25)` |
 | OpenSSL | `OpenSSL 3.6.3 9 Jun 2026 (Library: OpenSSL 3.6.3 9 Jun 2026)` |
@@ -70,18 +70,18 @@ Failure-evidence input summary:
 
 Retained traceability files under the evidence directories map the cases to:
 
-- `ODS-FR-XOT-001`
-- `ODS-FR-XOT-002`
-- `ODS-FR-XOT-003`
-- `ODS-FR-XOT-004`
-- `ODS-FR-XOT-005`
-- `ODS-FR-XOT-006`
-- `ODS-FR-XOT-008`
-- `ODS-FR-XOT-011`
-- `ODS-NEG-016`
-- `ODS-CFG-001`
-- `ODS-FR-PROV-006`
-- `ODS-VER-003`
+- `BDS-FR-XOT-001`
+- `BDS-FR-XOT-002`
+- `BDS-FR-XOT-003`
+- `BDS-FR-XOT-004`
+- `BDS-FR-XOT-005`
+- `BDS-FR-XOT-006`
+- `BDS-FR-XOT-008`
+- `BDS-FR-XOT-011`
+- `BDS-NEG-016`
+- `BDS-CFG-001`
+- `BDS-FR-PROV-006`
+- `BDS-VER-003`
 
 ## Retained Artifacts
 

@@ -364,11 +364,11 @@ fi
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-real-primary	bind_udp_notify_reception	notify-proxy.log; primary-version.txt	The BIND primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and BoronDNS receives them on the DNS listener.
-ODS-FR-NOTIFY-006	retained-real-primary	bind_notify_response	notify-proxy.log	The forwarding proxy observes a successful BoronDNS NOTIFY response with RCODE=0 for BIND-generated NOTIFY.
-ODS-FR-NOTIFY-007	retained-real-primary	bind_refresh_signal	metrics.txt; bind-notify-refresh-summary.tsv	BoronDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
-ODS-FR-NOTIFY-010	retained-real-primary	bind_notify_logging	borondns.log	BoronDNS emits an accepted NOTIFY log for the real-primary BIND message, including source, zone, and refresh action.
-ODS-FR-ZSM-003	retained-real-primary	bind_notify_triggered_refresh	bind-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and BoronDNS republishes the updated SOA serial and A record.
+BDS-FR-NOTIFY-001	retained-real-primary	bind_udp_notify_reception	notify-proxy.log; primary-version.txt	The BIND primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and BoronDNS receives them on the DNS listener.
+BDS-FR-NOTIFY-006	retained-real-primary	bind_notify_response	notify-proxy.log	The forwarding proxy observes a successful BoronDNS NOTIFY response with RCODE=0 for BIND-generated NOTIFY.
+BDS-FR-NOTIFY-007	retained-real-primary	bind_refresh_signal	metrics.txt; bind-notify-refresh-summary.tsv	BoronDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
+BDS-FR-NOTIFY-010	retained-real-primary	bind_notify_logging	borondns.log	BoronDNS emits an accepted NOTIFY log for the real-primary BIND message, including source, zone, and refresh action.
+BDS-FR-ZSM-003	retained-real-primary	bind_notify_triggered_refresh	bind-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and BoronDNS republishes the updated SOA serial and A record.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

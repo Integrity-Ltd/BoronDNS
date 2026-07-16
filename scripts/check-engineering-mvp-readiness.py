@@ -18,7 +18,7 @@ REQUIRED_FILES = [
 
 REQUIRED_PHRASES = [
     "# Release Candidate Readiness",
-    "not full SRS `ODS-VER-008` release acceptance",
+    "not full SRS `BDS-VER-008` release acceptance",
     "scripts/check.sh",
     "scripts/engineering-mvp-evidence.sh",
     "bounded local preflight profile",
@@ -31,7 +31,7 @@ REQUIRED_PHRASES = [
 
 FORBIDDEN_PHRASES = [
     "full SRS acceptance is complete",
-    "ODS-VER-008 is complete",
+    "BDS-VER-008 is complete",
     "30-day soak completed",
     "24-hour fuzz campaigns completed",
     "Reference Hardware/Profile benchmarks completed",

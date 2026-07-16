@@ -791,7 +791,7 @@ fn xot_private_key_loader_checks_world_mode_symlinks_and_regular_file() {
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o640))
         .expect("group-readable private key mode");
     load_pem_private_key(addr, key_path.to_str().expect("UTF-8 key path"))
-        .expect("group-readable private key remains compatible with ODS-IF-CONF-004");
+        .expect("group-readable private key remains compatible with BDS-IF-CONF-004");
 
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o604))
         .expect("world-readable private key mode");

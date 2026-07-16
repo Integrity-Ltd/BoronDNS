@@ -4,9 +4,9 @@ members = [
   "crates/borondns-core",
   "crates/borondns-server",
   "crates/borondns-cli",
-  "crates/oxide-gun",
+  "crates/boron-gun",
 ]
-exclude = ["fuzz", "crates/oxide-gun-ebpf", "crates/borondns-server-ebpf"]
+exclude = ["fuzz", "crates/boron-gun-ebpf", "crates/borondns-server-ebpf"]
 
 [workspace.package]
 edition = "2024"

@@ -98,7 +98,7 @@ batch_size = 4
 zero_copy = "disable"
 
 [[zones]]
-name = "smoke.oxide.test."
+name = "smoke.boron.test."
 primaries = ["$peer_ip:53"]
 TOML
 

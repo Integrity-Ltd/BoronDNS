@@ -142,12 +142,12 @@ fi
 dist_dir="$(package_canonical_output_root BORONDNS_DIST_DIR "$dist_dir")"
 sbom_manifest="$(package_safe_child_path "$dist_dir" "$archive_root-sbom-manifest.tsv" 'SBOM manifest')"
 borondns_sbom="$(package_safe_child_path "$dist_dir" "$archive_root-borondns.cdx.json" 'BoronDNS SBOM')"
-oxide_gun_sbom="$(package_safe_child_path "$dist_dir" "$archive_root-oxide-gun.cdx.json" 'OxideGun SBOM')"
+boron_gun_sbom="$(package_safe_child_path "$dist_dir" "$archive_root-boron-gun.cdx.json" 'BoronGun SBOM')"
 docker_sbom="$(package_safe_child_path "$dist_dir" "$archive_root-docker-image.cdx.json" 'Docker SBOM')"
 image_manifest="$(package_safe_child_path "$dist_dir" "$docker_archive_root-docker-image.manifest.txt" 'Docker image manifest')"
 docker_mode="${BORONDNS_SBOM_DOCKER:-auto}"
 generated_borondns="$repo_root/crates/borondns-cli/borondns_bin.cdx.json"
-generated_oxide_gun="$repo_root/crates/oxide-gun/oxide-gun_bin.cdx.json"
+generated_boron_gun="$repo_root/crates/boron-gun/boron-gun_bin.cdx.json"
 case "$docker_mode" in
 1 | true | yes | 0 | false | no | auto) ;;
 *)
@@ -158,12 +158,12 @@ esac
 run_root=""
 run_sbom_manifest=""
 run_borondns_sbom=""
-run_oxide_gun_sbom=""
+run_boron_gun_sbom=""
 run_docker_sbom=""
 package_publication_initialized=0
 cyclonedx_generated_paths_owned=0
 generated_borondns_owned=0
-generated_oxide_gun_owned=0
+generated_boron_gun_owned=0
 
 unused_generated_retention_path() {
     local generated="$1" attempt retained
@@ -225,20 +225,20 @@ cleanup_generated() {
             cleanup_failed=1
         fi
     fi
-    if [[ "$generated_oxide_gun_owned" == 1 ]]; then
+    if [[ "$generated_boron_gun_owned" == 1 ]]; then
         package_begin_mutation_critical || return 1
-        if retain_generated_output "$generated_oxide_gun" "generated OxideGun SBOM"; then
-            generated_oxide_gun_owned=0
+        if retain_generated_output "$generated_boron_gun" "generated BoronGun SBOM"; then
+            generated_boron_gun_owned=0
             package_end_mutation_critical
         else
             if ((PACKAGE_LAST_MOVE_COMMITTED == 1)); then
-                generated_oxide_gun_owned=0
+                generated_boron_gun_owned=0
             fi
             package_end_mutation_critical
             cleanup_failed=1
         fi
     fi
-    if [[ "$generated_borondns_owned" == 0 && "$generated_oxide_gun_owned" == 0 ]]; then
+    if [[ "$generated_borondns_owned" == 0 && "$generated_boron_gun_owned" == 0 ]]; then
         cyclonedx_generated_paths_owned=0
     fi
     ((cleanup_failed == 0))
@@ -247,7 +247,7 @@ cleanup_generated() {
 claim_generated_paths() {
     local generated
     cyclonedx_generated_paths_owned=1
-    for generated in "$generated_borondns" "$generated_oxide_gun"; do
+    for generated in "$generated_borondns" "$generated_boron_gun"; do
         if [[ -e "$generated" || -L "$generated" ]]; then
             printf 'refusing to replace pre-existing cargo-cyclonedx workspace output: %s\n' \
                 "$generated" >&2
@@ -262,7 +262,7 @@ claim_generated_paths() {
         if [[ "$generated" == "$generated_borondns" ]]; then
             generated_borondns_owned=1
         else
-            generated_oxide_gun_owned=1
+            generated_boron_gun_owned=1
         fi
         if declare -F package_owned_file_transition_hook >/dev/null 2>&1; then
             package_owned_file_transition_hook after-create "$generated" \
@@ -308,7 +308,7 @@ done
 }
 run_sbom_manifest="$run_root/$(basename "$sbom_manifest")"
 run_borondns_sbom="$run_root/$(basename "$borondns_sbom")"
-run_oxide_gun_sbom="$run_root/$(basename "$oxide_gun_sbom")"
+run_boron_gun_sbom="$run_root/$(basename "$boron_gun_sbom")"
 run_docker_sbom="$run_root/$(basename "$docker_sbom")"
 package_publication_reset "$run_root"
 package_publication_initialized=1
@@ -459,25 +459,25 @@ claim_generated_paths
         --manifest-path "$repo_root/Cargo.toml" >/dev/null
     env RUSTC="$rustc_bin" "$cargo_bin" cyclonedx \
         --manifest-path "$repo_root/Cargo.toml" --format json --describe binaries \
-        --target "$target_triple" --features borondns-cli/af-xdp,oxide-gun/xdp --spec-version 1.5
+        --target "$target_triple" --features borondns-cli/af-xdp,boron-gun/xdp --spec-version 1.5
 )
 
-[[ -f "$generated_borondns" && -f "$generated_oxide_gun" ]] || {
+[[ -f "$generated_borondns" && -f "$generated_boron_gun" ]] || {
     printf 'missing generated Rust SBOM output\n' >&2
     exit 1
 }
 package_require_publication_file_identity "$generated_borondns" "generated BoronDNS SBOM"
-package_require_publication_file_identity "$generated_oxide_gun" "generated OxideGun SBOM"
+package_require_publication_file_identity "$generated_boron_gun" "generated BoronGun SBOM"
 install -m 0644 "$generated_borondns" "$run_borondns_sbom"
-install -m 0644 "$generated_oxide_gun" "$run_oxide_gun_sbom"
+install -m 0644 "$generated_boron_gun" "$run_boron_gun_sbom"
 normalize_sbom "$run_borondns_sbom" borondns
-normalize_sbom "$run_oxide_gun_sbom" oxide-gun
+normalize_sbom "$run_boron_gun_sbom" boron-gun
 require_json_sbom "$run_borondns_sbom" borondns 1.5
-require_json_sbom "$run_oxide_gun_sbom" oxide-gun 1.5
+require_json_sbom "$run_boron_gun_sbom" boron-gun 1.5
 write_sha256 "$run_borondns_sbom"
-write_sha256 "$run_oxide_gun_sbom"
+write_sha256 "$run_boron_gun_sbom"
 if declare -F package_sbom_generated_hook >/dev/null 2>&1; then
-    package_sbom_generated_hook before-cleanup "$generated_borondns" "$generated_oxide_gun"
+    package_sbom_generated_hook before-cleanup "$generated_borondns" "$generated_boron_gun"
 fi
 cleanup_generated
 # package_acquire_publication_lock caches one root-directory descriptor as the
@@ -517,11 +517,11 @@ esac
 {
     printf 'artifact\tformat\tsource\tfeatures\tpath\tsha256\ttool\n'
     printf 'borondns\tCycloneDX 1.5 JSON\tCargo.lock+cargo metadata\t%s\t%s\t%s\t%s\n' \
-        'borondns-cli/af-xdp,oxide-gun/xdp' "$(basename "$borondns_sbom")" \
+        'borondns-cli/af-xdp,boron-gun/xdp' "$(basename "$borondns_sbom")" \
         "$(sha256_file "$run_borondns_sbom" | awk '{print $1}')" "$(cargo_cyclonedx_version)"
-    printf 'oxide-gun\tCycloneDX 1.5 JSON\tCargo.lock+cargo metadata\t%s\t%s\t%s\t%s\n' \
-        'borondns-cli/af-xdp,oxide-gun/xdp' "$(basename "$oxide_gun_sbom")" \
-        "$(sha256_file "$run_oxide_gun_sbom" | awk '{print $1}')" "$(cargo_cyclonedx_version)"
+    printf 'boron-gun\tCycloneDX 1.5 JSON\tCargo.lock+cargo metadata\t%s\t%s\t%s\t%s\n' \
+        'borondns-cli/af-xdp,boron-gun/xdp' "$(basename "$boron_gun_sbom")" \
+        "$(sha256_file "$run_boron_gun_sbom" | awk '{print $1}')" "$(cargo_cyclonedx_version)"
     if [[ "$docker_sbom_status" == created ]]; then
         printf 'docker-image\tCycloneDX JSON\t%s\t%s\t%s\t%s\t%s\n' "$docker_image_id" \
             'container image package scan' "$(basename "$docker_sbom")" \
@@ -551,8 +551,8 @@ verify_source_identity "terminal publication"
 cleanup_generated
 package_publish_candidate "$run_borondns_sbom" "$borondns_sbom" "$dist_dir" 'BoronDNS SBOM'
 package_publish_candidate "$run_borondns_sbom.sha256" "$borondns_sbom.sha256" "$dist_dir" 'BoronDNS SBOM checksum'
-package_publish_candidate "$run_oxide_gun_sbom" "$oxide_gun_sbom" "$dist_dir" 'OxideGun SBOM'
-package_publish_candidate "$run_oxide_gun_sbom.sha256" "$oxide_gun_sbom.sha256" "$dist_dir" 'OxideGun SBOM checksum'
+package_publish_candidate "$run_boron_gun_sbom" "$boron_gun_sbom" "$dist_dir" 'BoronGun SBOM'
+package_publish_candidate "$run_boron_gun_sbom.sha256" "$boron_gun_sbom.sha256" "$dist_dir" 'BoronGun SBOM checksum'
 if [[ "$docker_sbom_status" == created ]]; then
     package_publish_candidate "$run_docker_sbom" "$docker_sbom" "$dist_dir" 'Docker SBOM'
     package_publish_candidate "$run_docker_sbom.sha256" "$docker_sbom.sha256" "$dist_dir" 'Docker SBOM checksum'
@@ -564,7 +564,7 @@ package_publish_candidate "$run_sbom_manifest" "$sbom_manifest" "$dist_dir" 'SBO
 package_commit_publication
 package_remove_captured_cleanup_root "$run_root" "SBOM package run root"
 PACKAGE_PUBLICATION_RETAIN_ROOT=""
-printf 'created %s\n' "$borondns_sbom" "$borondns_sbom.sha256" "$oxide_gun_sbom" "$oxide_gun_sbom.sha256"
+printf 'created %s\n' "$borondns_sbom" "$borondns_sbom.sha256" "$boron_gun_sbom" "$boron_gun_sbom.sha256"
 if [[ "$docker_sbom_status" == created ]]; then
     printf 'created %s\n' "$docker_sbom" "$docker_sbom.sha256"
 else

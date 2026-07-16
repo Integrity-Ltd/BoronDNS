@@ -320,13 +320,13 @@ EOF
 
 cat >"$traceability_tsv" <<'EOF'
 requirement	status	case	artifacts	note
-ODS-FR-XOT-001	retained-real-primary	knot_xot_axfr_tls	primary-version.txt; alpn-probe.txt; borondns.log; knot-xot-summary.env	BoronDNS successfully transfers AXFR over TLS from a real Knot primary; logs retain negotiated TLS version and cipher-suite fields for release review.
-ODS-FR-XOT-002	retained-real-primary	knot_xot_cipher_observed	borondns.log; alpn-probe.txt	The BoronDNS XoT session log records the negotiated cipher suite; broader prohibited-suite rejection remains covered by release TLS-matrix review.
-ODS-FR-XOT-003	retained-real-primary	knot_xot_port_override	borondns.toml; primary-version.txt	The primary uses an explicit per-primary XoT port override in configuration rather than cleartext TCP.
-ODS-FR-XOT-004	retained-real-primary	knot_xot_alpn_dot	alpn-probe.txt; borondns.log; knot-xot-summary.env	Knot and BoronDNS negotiate ALPN dot; missing-ALPN abort behavior remains covered by focused tests.
-ODS-FR-XOT-005	retained-real-primary	knot_xot_certificate_validation	server-certificate.txt; ca.crt; borondns.toml; readyz.json	BoronDNS trusts the configured CA and validates the SAN/SNI-bound real-primary certificate before publishing the transferred zone.
-ODS-FR-XOT-006	retained-real-primary	knot_xot_no_cleartext_fallback	borondns.log; metrics.txt; knot-xot-summary.env	The retained log has no XoT connection or TLS failure markers and transfer metrics show the TLS AXFR completed without cleartext fallback.
-ODS-FR-XOT-011	retained-real-primary	knot_xot_session_logging	borondns.log; knot-xot-summary.env	BoronDNS logs XoT TLS session establishment with version/cipher and session close with byte counters while retaining TLS key-material absence evidence.
+BDS-FR-XOT-001	retained-real-primary	knot_xot_axfr_tls	primary-version.txt; alpn-probe.txt; borondns.log; knot-xot-summary.env	BoronDNS successfully transfers AXFR over TLS from a real Knot primary; logs retain negotiated TLS version and cipher-suite fields for release review.
+BDS-FR-XOT-002	retained-real-primary	knot_xot_cipher_observed	borondns.log; alpn-probe.txt	The BoronDNS XoT session log records the negotiated cipher suite; broader prohibited-suite rejection remains covered by release TLS-matrix review.
+BDS-FR-XOT-003	retained-real-primary	knot_xot_port_override	borondns.toml; primary-version.txt	The primary uses an explicit per-primary XoT port override in configuration rather than cleartext TCP.
+BDS-FR-XOT-004	retained-real-primary	knot_xot_alpn_dot	alpn-probe.txt; borondns.log; knot-xot-summary.env	Knot and BoronDNS negotiate ALPN dot; missing-ALPN abort behavior remains covered by focused tests.
+BDS-FR-XOT-005	retained-real-primary	knot_xot_certificate_validation	server-certificate.txt; ca.crt; borondns.toml; readyz.json	BoronDNS trusts the configured CA and validates the SAN/SNI-bound real-primary certificate before publishing the transferred zone.
+BDS-FR-XOT-006	retained-real-primary	knot_xot_no_cleartext_fallback	borondns.log; metrics.txt; knot-xot-summary.env	The retained log has no XoT connection or TLS failure markers and transfer metrics show the TLS AXFR completed without cleartext fallback.
+BDS-FR-XOT-011	retained-real-primary	knot_xot_session_logging	borondns.log; knot-xot-summary.env	BoronDNS logs XoT TLS session establishment with version/cipher and session close with byte counters while retaining TLS key-material absence evidence.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

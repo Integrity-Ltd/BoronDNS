@@ -488,7 +488,7 @@ XDP belongs in a separate lane because it requires privileges, queue/NIC state,
 MTU constraints, and cleanup. Use existing local XDP smoke tools first:
 
 ```sh
-scripts/oxide-gun-xdp-pkexec-tests.sh
+scripts/boron-gun-xdp-pkexec-tests.sh
 scripts/borondns-af-xdp-veth-smoke.sh
 ```
 

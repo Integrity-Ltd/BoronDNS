@@ -422,9 +422,9 @@ done
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<EOF
-ODS-VER-SPLIT-001	retained-real-primary	powerdns_catalog_bind_member	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from BIND.
-ODS-VER-SPLIT-002	retained-real-primary	powerdns_catalog_knot_member	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from Knot.
-ODS-VER-SPLIT-003	retained-real-primary	powerdns_catalog_nsd_member	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from NSD.
+BDS-VER-SPLIT-001	retained-real-primary	powerdns_catalog_bind_member	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from BIND.
+BDS-VER-SPLIT-002	retained-real-primary	powerdns_catalog_knot_member	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from Knot.
+BDS-VER-SPLIT-003	retained-real-primary	powerdns_catalog_nsd_member	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from NSD.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

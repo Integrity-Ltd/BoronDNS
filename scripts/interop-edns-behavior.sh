@@ -544,23 +544,23 @@ def main():
         handle.write("\n".join(rows) + "\n")
 
     traceability = """requirement_id\tevidence_state\truntime_case\tartifacts\treview_note
-ODS-FR-EDNS-001\tretained-runtime\tvalid_edns_unknown_option; malformed_option_formerr\tedns-summary.tsv; client.log\tValid OPT option parsing succeeds, while an option whose length exceeds remaining RDATA returns FORMERR.
-ODS-FR-EDNS-002\tretained-runtime\tduplicate_opt_formerr\tedns-summary.tsv; client.log\tA query carrying two OPT records returns FORMERR.
-ODS-FR-EDNS-003\tretained-runtime\tanswer_section_opt_formerr\tedns-summary.tsv; client.log\tAn OPT record outside the additional section returns FORMERR.
-ODS-FR-EDNS-004\tretained-runtime\tbadvers_version_1\tedns-summary.tsv; client.log\tEDNS VERSION=1 returns extended RCODE BADVERS with response VERSION=0.
-ODS-FR-EDNS-005\tretained-runtime\tpayload_floor_512; payload_exact_floor_512\tedns-summary.tsv; client.log\tAdvertised UDP payload sizes below or equal to 512 are bounded to the 512-octet floor and truncate the large response within that size.
-ODS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; borondns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
-ODS-FR-EDNS-007\tretained-runtime\tvalid_edns_unknown_option; non_edns_512_no_opt\tedns-summary.tsv; client.log\tResponses include OPT only when the query contained OPT.
-ODS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; borondns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
-ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copies_response_do\tedns-summary.tsv; crates/borondns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=1 per RFC 6840 query-DO copy semantics; DNSSEC-augmented, explicit-type, error, and truncation paths remain covered by unit/runtime evidence.
-ODS-FR-EDNS-010\tretained-runtime\tbadvers_version_1\tedns-summary.tsv\tBADVERS uses the response OPT extended-RCODE field for RCODE 16.
-ODS-FR-EDNS-011\tretained-runtime\tudp_keepalive_ignored; tcp_keepalive_advertised\tedns-summary.tsv\tThe keepalive option is ignored over UDP and recognized over TCP.
-ODS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; borondns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.
-ODS-FR-EDNS-013\tretained-runtime\tconfigured_padding_aligns\tedns-summary.tsv; borondns.toml\tWith edns_padding_block_size=32 and a padding request, the response contains a padding option and the DNS message length is 32-byte aligned.
-ODS-FR-EDNS-014\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv\tAn unknown EDNS option is ignored and not echoed while the query still succeeds.
-ODS-FR-EDNS-015\tretained-runtime\tnon_edns_512_no_opt\tedns-summary.tsv\tA non-EDNS large UDP answer is truncated to at most 512 octets and contains no response OPT.
-ODS-FR-EDNS-016\tretained-runtime\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml\tConfigured NSID is returned for both empty and non-empty NSID request data.
-ODS-FR-EDNS-017\tretained-runtime-plus-support\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml; crates/borondns-core/src/config.rs::parses_configured_nsid\tThe retained config sets nsid=edns-node; default-empty suppression remains covered by focused unit tests.
+BDS-FR-EDNS-001\tretained-runtime\tvalid_edns_unknown_option; malformed_option_formerr\tedns-summary.tsv; client.log\tValid OPT option parsing succeeds, while an option whose length exceeds remaining RDATA returns FORMERR.
+BDS-FR-EDNS-002\tretained-runtime\tduplicate_opt_formerr\tedns-summary.tsv; client.log\tA query carrying two OPT records returns FORMERR.
+BDS-FR-EDNS-003\tretained-runtime\tanswer_section_opt_formerr\tedns-summary.tsv; client.log\tAn OPT record outside the additional section returns FORMERR.
+BDS-FR-EDNS-004\tretained-runtime\tbadvers_version_1\tedns-summary.tsv; client.log\tEDNS VERSION=1 returns extended RCODE BADVERS with response VERSION=0.
+BDS-FR-EDNS-005\tretained-runtime\tpayload_floor_512; payload_exact_floor_512\tedns-summary.tsv; client.log\tAdvertised UDP payload sizes below or equal to 512 are bounded to the 512-octet floor and truncate the large response within that size.
+BDS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; borondns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
+BDS-FR-EDNS-007\tretained-runtime\tvalid_edns_unknown_option; non_edns_512_no_opt\tedns-summary.tsv; client.log\tResponses include OPT only when the query contained OPT.
+BDS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; borondns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
+BDS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copies_response_do\tedns-summary.tsv; crates/borondns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=1 per RFC 6840 query-DO copy semantics; DNSSEC-augmented, explicit-type, error, and truncation paths remain covered by unit/runtime evidence.
+BDS-FR-EDNS-010\tretained-runtime\tbadvers_version_1\tedns-summary.tsv\tBADVERS uses the response OPT extended-RCODE field for RCODE 16.
+BDS-FR-EDNS-011\tretained-runtime\tudp_keepalive_ignored; tcp_keepalive_advertised\tedns-summary.tsv\tThe keepalive option is ignored over UDP and recognized over TCP.
+BDS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; borondns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.
+BDS-FR-EDNS-013\tretained-runtime\tconfigured_padding_aligns\tedns-summary.tsv; borondns.toml\tWith edns_padding_block_size=32 and a padding request, the response contains a padding option and the DNS message length is 32-byte aligned.
+BDS-FR-EDNS-014\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv\tAn unknown EDNS option is ignored and not echoed while the query still succeeds.
+BDS-FR-EDNS-015\tretained-runtime\tnon_edns_512_no_opt\tedns-summary.tsv\tA non-EDNS large UDP answer is truncated to at most 512 octets and contains no response OPT.
+BDS-FR-EDNS-016\tretained-runtime\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml\tConfigured NSID is returned for both empty and non-empty NSID request data.
+BDS-FR-EDNS-017\tretained-runtime-plus-support\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml; crates/borondns-core/src/config.rs::parses_configured_nsid\tThe retained config sets nsid=edns-node; default-empty suppression remains covered by focused unit tests.
 """
     with open(TRACEABILITY_PATH, "w", encoding="utf-8") as handle:
         handle.write(traceability)

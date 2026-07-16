@@ -34,7 +34,7 @@ The principal SBVR keywords used in this document, with their meaning:
 | **at least one**, **at most one**, **exactly one** | numeric quantifiers | with their natural reading |
 | **if … then**, **and**, **or**, **not** | logical connectives | with their classical-logic reading |
 
-Each rule carries an SBVR identifier of the form `[R-CATEGORY-AREA-NNN]` mirroring the SRS requirement identifier `ODS-CATEGORY-AREA-NNN` from which it is derived. The bidirectional traceability is one-to-one for most requirements; where a single SRS requirement decomposes into multiple SBVR rules, the identifier is suffixed with a letter (e.g., `[R-FR-TSIG-008a]`, `[R-FR-TSIG-008b]`).
+Each rule carries an SBVR identifier of the form `[R-CATEGORY-AREA-NNN]` mirroring the SRS requirement identifier `BDS-CATEGORY-AREA-NNN` from which it is derived. The bidirectional traceability is one-to-one for most requirements; where a single SRS requirement decomposes into multiple SBVR rules, the identifier is suffixed with a letter (e.g., `[R-FR-TSIG-008a]`, `[R-FR-TSIG-008b]`).
 
 Cross-references to RFCs follow the form *RFC NNNN §S.S*, matching the SRS convention. Cross-references between SBVR rules use the rule identifier in square brackets.
 
@@ -331,36 +331,36 @@ Structural rules are *definitional necessities* — properties that hold by virt
 **[R-INV-001]** Secondary-only operation.
 **It is necessary that** **each** *zone data* held by the *server* is *acquired* exclusively through an *AXFR session* per ***RFC 5936*** or an *IXFR session* per ***RFC 1995*** initiated by the *server* toward an operator-configured *primary*.
 **It is necessary that** the *server* **not** *accept* *zone data*, *zone* modification, or any change to its authoritative state through any channel other than such *transfer sessions*.
-*Source.* SRS ODS-INV-001.
+*Source.* SRS BDS-INV-001.
 
 **[R-INV-002]** Memory-resident zone data.
 **It is necessary that** **each** *zone data* served by the *server* resides in *process* memory.
 **It is necessary that** the *query*-serving execution path of the *server* **not** perform disk I/O.
-*Source.* SRS ODS-INV-002.
+*Source.* SRS BDS-INV-002.
 
 **[R-INV-003]** Atomic zone refresh.
 **It is necessary that** **each** *query* against a *zone* is *answered* from exactly one internally consistent version of that *zone's* *zone data*.
 **It is necessary that**, during a *zone refresh*, **each** *query* *observes* either the pre-refresh state in its entirety **or** the post-refresh state in its entirety; partial observation is **impossible**.
-*Source.* SRS ODS-INV-003.
+*Source.* SRS BDS-INV-003.
 
 **[R-INV-004]** No persistent operational state.
 **It is necessary that** the *server* **not** *write* operational state — including *zone data*, transfer history, *query* statistics, *configuration*, or any data intended to survive *process* restart — to persistent storage.
-*Source.* SRS ODS-INV-004.
+*Source.* SRS BDS-INV-004.
 
 **[R-INV-005]** Static configuration.
 **It is necessary that** **each** *configuration* is *supplied* to the *server* at *process startup* and remains immutable for the *process* lifetime.
 **It is necessary that** the *server* **not** *re-read* or otherwise *alter* its *configuration* during operation.
-*Source.* SRS ODS-INV-005.
+*Source.* SRS BDS-INV-005.
 
 **[R-INV-006]** Memory safety discipline.
 **It is necessary that** **each** code path of the *server* that *processes* data received from the network is implemented in Rust's safe subset.
 **It is necessary that** **each** `unsafe` block in the *server*'s implementation carries a comment stating the reason the block is necessary and the invariants on which its soundness depends.
-*Source.* SRS ODS-INV-006.
+*Source.* SRS BDS-INV-006.
 
 ### 2.2 Conceptual Necessities
 
 **[R-DEF-001]** Identifier scheme.
-**It is necessary that** **each** requirement of the SRS carries an identifier of the form `ODS-CATEGORY-AREA-NNN`, with *CATEGORY* ∈ {`FR`, `NFR`, `IF`, `INV`, `NEG`, `VER`}, *AREA* a 3–6-character uppercase mnemonic (omitted for `INV`, `NEG`, `VER`), and `NNN` a zero-padded three-digit sequence number unique within `(CATEGORY, AREA)`.
+**It is necessary that** **each** requirement of the SRS carries an identifier of the form `BDS-CATEGORY-AREA-NNN`, with *CATEGORY* ∈ {`FR`, `NFR`, `IF`, `INV`, `NEG`, `VER`}, *AREA* a 3–6-character uppercase mnemonic (omitted for `INV`, `NEG`, `VER`), and `NNN` a zero-padded three-digit sequence number unique within `(CATEGORY, AREA)`.
 *Source.* SRS §1.4.3.
 
 **[R-DEF-002]** Identifier immutability.
@@ -369,44 +369,44 @@ Structural rules are *definitional necessities* — properties that hold by virt
 
 **[R-DEF-003]** Zone uniqueness.
 **It is necessary that** **each** *served zone* is identified uniquely by the tuple (*zone apex*, *zone class*) with *zone apex* comparison case-insensitive per ***RFC 4343***.
-*Source.* SRS [ODS-FR-ZONE-001].
+*Source.* SRS [BDS-FR-ZONE-001].
 
 **[R-DEF-004]** SOA uniqueness.
 **It is necessary that** **each** *zone* contains **exactly one** *SOA record* and that *SOA record*'s *owner name* equals the *zone apex* of the *zone*.
-*Source.* SRS [ODS-FR-RR-002].
+*Source.* SRS [BDS-FR-RR-002].
 
 **[R-DEF-005]** Apex NS presence.
 **It is necessary that** **each** *zone* contains **at least one** NS *resource record* at its *zone apex*.
-*Source.* SRS [ODS-FR-RR-003].
+*Source.* SRS [BDS-FR-RR-003].
 
 **[R-DEF-006]** RRset semantics.
 **It is necessary that** **each** set of *resource records* sharing *owner name*, *class*, and type constitutes exactly one *RRset*.
 **It is necessary that** **each** *RRset* has a single *TTL* applied to all its members.
-*Source.* SRS [ODS-FR-CORE-026], [R-FR-CORE-027].
+*Source.* SRS [BDS-FR-CORE-026], [R-FR-CORE-027].
 
 **[R-DEF-007]** CNAME exclusivity.
 **It is necessary that** **each** *owner name* carrying a ***CNAME*** *RRset* in a *served zone* **not** carry **any** other *RRset* at that *owner name*, with the exception of ***RRSIG***, ***NSEC***, and ***NSEC3*** *resource records*.
-*Source.* SRS [ODS-FR-RR-005].
+*Source.* SRS [BDS-FR-RR-005].
 
 **[R-DEF-008]** DNAME / CNAME exclusion.
 **It is necessary that** **each** *owner name* carrying a ***DNAME*** *RRset* **not** carry a ***CNAME*** *RRset* at that same *owner name*, with the exception of ***RRSIG***, ***NSEC***, and ***NSEC3*** *resource records*.
-*Source.* SRS [ODS-FR-RR-006].
+*Source.* SRS [BDS-FR-RR-006].
 
 **[R-DEF-009]** SOA serial arithmetic.
 **It is necessary that** **each** comparison of two *SOA serial* values is performed per ***RFC 1982*** §3.2 modular arithmetic.
-*Source.* SRS [ODS-FR-RR-004].
+*Source.* SRS [BDS-FR-RR-004].
 
 **[R-DEF-010]** Zone state exhaustiveness.
 **It is necessary that** **each** *served zone* is at any given time in **exactly one** of the *zone states* ***LOADING***, ***ACTIVE***, or ***EXPIRED***.
-*Source.* SRS [ODS-FR-ZONE-006].
+*Source.* SRS [BDS-FR-ZONE-006].
 
 **[R-DEF-011]** EXPIRE-state transition.
 **It is necessary that** **each** *zone* transitions from ***ACTIVE*** to ***EXPIRED*** when and only when the elapsed wall-clock time since the most recent successful *refresh attempt* exceeds the *EXPIRE interval* of the *zone*.
-*Source.* SRS [ODS-FR-ZSM-009].
+*Source.* SRS [BDS-FR-ZSM-009].
 
 **[R-DEF-012]** Process-startup state.
 **It is necessary that** at *process startup* **each** *served zone* enters the ***LOADING*** state.
-*Source.* SRS [ODS-FR-ZSM-001].
+*Source.* SRS [BDS-FR-ZSM-001].
 
 ---
 
@@ -416,7 +416,7 @@ Operative rules are *behavioural rules* expressed with deontic modals. **It is o
 
 ### 3.1 Functional Rules
 
-The functional rules transcribe SRS §4 (ODS-FR-* identifiers) into SBVR form. The 17 areas of SRS §4 are reproduced in the 17 subsections below. Each rule's identifier `[R-FR-AREA-NNN]` mirrors the source `ODS-FR-AREA-NNN`.
+The functional rules transcribe SRS §4 (BDS-FR-* identifiers) into SBVR form. The 17 areas of SRS §4 are reproduced in the 17 subsections below. Each rule's identifier `[R-FR-AREA-NNN]` mirrors the source `BDS-FR-AREA-NNN`.
 
 #### 3.1.1 Core DNS Protocol — area CORE
 
@@ -958,7 +958,7 @@ The negative requirements of SRS §4.18 are restated as **It is prohibited that*
 
 ### 3.2 Non-Functional Rules
 
-The non-functional rules transcribe SRS §5 (ODS-NFR-* identifiers).
+The non-functional rules transcribe SRS §5 (BDS-NFR-* identifiers).
 
 #### 3.2.1 Performance — area PERF
 
@@ -1048,7 +1048,7 @@ The non-functional rules transcribe SRS §5 (ODS-NFR-* identifiers).
 
 ### 3.3 Interface Rules
 
-The interface rules transcribe SRS §6 (ODS-IF-* identifiers).
+The interface rules transcribe SRS §6 (BDS-IF-* identifiers).
 
 #### 3.3.1 Network Interfaces — area NET
 
@@ -1108,7 +1108,7 @@ The interface rules transcribe SRS §6 (ODS-IF-* identifiers).
 
 ### 3.5 Verification Rules — area VER
 
-The verification rules transcribe SRS §7 (ODS-VER-* identifiers). These are *project-process* rules rather than *server-behaviour* rules; they bind the project's verification procedure.
+The verification rules transcribe SRS §7 (BDS-VER-* identifiers). These are *project-process* rules rather than *server-behaviour* rules; they bind the project's verification procedure.
 
 **[R-VER-001]** **It is obligatory that** verification of **each** rule in §2 through §3.4 is performed using the method(s) specified in the corresponding SRS requirement's *Verification* field; **each** verification method maps to one or more methods enumerated in SRS §7.1 (inspection, unit test, integration test, conformance test, interoperability test, fuzz test, performance test, soak test, operational test, external operator acceptance).
 
@@ -1163,11 +1163,11 @@ external operator acceptance by **at least one** production-representative opera
 
 ### 4.2 SBVR Rule Identifier → SRS Requirement Identifier
 
-Each SBVR rule identifier `[R-XXX-YYY-NNN]` corresponds to the SRS requirement identifier `ODS-XXX-YYY-NNN`. The mapping is one-to-one with the following exceptions:
+Each SBVR rule identifier `[R-XXX-YYY-NNN]` corresponds to the SRS requirement identifier `BDS-XXX-YYY-NNN`. The mapping is one-to-one with the following exceptions:
 
 - **[R-DEF-001] through [R-DEF-012]** in §2.2 are conceptual necessities derived from SRS §1.4.3, §1.4.4, §4.14, §4.15, §4.16, and §4.18; they do not have direct 1:1 SRS counterparts but are restatements of normative content distributed across those sections.
-- **[R-INV-001] through [R-INV-006]** correspond directly to ODS-INV-001 through ODS-INV-006.
-- **All R-FR-*, R-NFR-*, R-IF-*, R-NEG-*, R-VER-*** correspond directly to ODS-FR-*, ODS-NFR-*, ODS-IF-*, ODS-NEG-*, ODS-VER-* with identical numbering.
+- **[R-INV-001] through [R-INV-006]** correspond directly to BDS-INV-001 through BDS-INV-006.
+- **All R-FR-*, R-NFR-*, R-IF-*, R-NEG-*, R-VER-*** correspond directly to BDS-FR-*, BDS-NFR-*, BDS-IF-*, BDS-NEG-*, BDS-VER-* with identical numbering.
 
 ### 4.3 RFC 2119 keyword → SBVR modal mapping
 

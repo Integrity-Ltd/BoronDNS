@@ -2,12 +2,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out_dir="$repo_root/target/oxide-gun-self-test"
+out_dir="$repo_root/target/boron-gun-self-test"
 out_file="$out_dir/summary.json"
 
 mkdir -p "$out_dir"
 
-cargo run --quiet -p oxide-gun -- \
+cargo run --quiet -p boron-gun -- \
     --self-test \
     --max-packets 8 \
     --target-qps 1000 \
@@ -35,5 +35,5 @@ for key, value in expected.items():
     if summary.get(key) != value:
         raise SystemExit(f"{key}: expected {value!r}, got {summary.get(key)!r}")
 
-print(f"oxide-gun self-test passed: {path}")
+print(f"boron-gun self-test passed: {path}")
 PY

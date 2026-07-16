@@ -1,5 +1,5 @@
 [graph]
-# MVP deployment is Linux/POSIX only per ODS-NFR-PORT-001/002. Keep the deny
+# MVP deployment is Linux/POSIX only per BDS-NFR-PORT-001/002. Keep the deny
 # graph scoped to Linux targets so target-conditional Windows crates in the
 # unified Cargo.lock do not create irrelevant duplicate-version noise.
 targets = [

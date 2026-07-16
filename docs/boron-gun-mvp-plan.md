@@ -1,6 +1,6 @@
-# OxideGun MVP Plan
+# BoronGun MVP Plan
 
-This plan turns the current OxideGun prototype into a practical RRL load tool. The SRS is `docs/OxideGun-SRS-v0.1.md`; this file is the execution plan.
+This plan turns the current BoronGun prototype into a practical RRL load tool. The SRS is `docs/BoronGun-SRS-v0.1.md`; this file is the execution plan.
 
 The important correction from the imported draft is scope discipline: XDP is part of the useful MVP because arbitrary source-address control needs packet construction. Kernel XDP_DROP and line-rate performance are not required for the first useful MVP.
 
@@ -39,8 +39,8 @@ Deliverables:
 Checks:
 
 ```bash
-cargo test -p oxide-gun
-./scripts/oxide-gun-self-test.sh
+cargo test -p boron-gun
+./scripts/boron-gun-self-test.sh
 ```
 
 ## Workstream 2: Query and Source MVP
@@ -63,8 +63,8 @@ Rules:
 Checks:
 
 ```bash
-cargo test -p oxide-gun
-cargo +nightly miri test -p oxide-gun
+cargo test -p boron-gun
+cargo +nightly miri test -p boron-gun
 ```
 
 Miri is expected to cover pure modules. If OS-specific tests block Miri, isolate them with cfg/test filtering instead of dropping Miri entirely.
@@ -98,11 +98,11 @@ Safety discipline:
 Checks:
 
 ```bash
-cargo test -p oxide-gun --features xdp
+cargo test -p boron-gun --features xdp
 RUSTFLAGS="-Zsanitizer=address" \
-  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p oxide-gun --features xdp
-pkexec ./scripts/oxide-gun-xdp-veth-smoke.sh "$(pwd)/target/debug/oxide-gun"
-./scripts/oxide-gun-xdp-pkexec-tests.sh
+  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p boron-gun --features xdp
+pkexec ./scripts/boron-gun-xdp-veth-smoke.sh "$(pwd)/target/debug/boron-gun"
+./scripts/boron-gun-xdp-pkexec-tests.sh
 ```
 
 ## Workstream 4: Receive Evidence
@@ -118,21 +118,21 @@ Deliverables:
 Checks:
 
 ```bash
-cargo test -p oxide-gun
-./scripts/oxide-gun-self-test.sh
+cargo test -p boron-gun
+./scripts/boron-gun-self-test.sh
 ```
 
 Add synthetic responder tests for each response class and timeout behaviour.
 
 ## Workstream 5: Kernel Drop
 
-Aya is the selected loader path for OxideGun's lab-only kernel drop mode. The
+Aya is the selected loader path for BoronGun's lab-only kernel drop mode. The
 Rust eBPF object is built separately so verifier and linker failures are visible
 and do not make normal workspace builds depend on a BPF toolchain.
 
 Deliverables:
 
-- Small Rust eBPF XDP program that passes non-OxideGun traffic.
+- Small Rust eBPF XDP program that passes non-BoronGun traffic.
 - Explicit `--xdp-drop-object` userspace loader path.
 - Drop selector includes the configured IPv4 DNS target, source port range, and
   fixed/CIDR source scope when compactly representable.
@@ -145,18 +145,18 @@ Deliverables:
 Checks:
 
 ```bash
-cargo test -p oxide-gun --features xdp
-./scripts/oxide-gun-xdp-userns-smoke.sh "$(pwd)/target/debug/oxide-gun"
-pkexec ./scripts/oxide-gun-xdp-veth-smoke.sh "$(pwd)/target/debug/oxide-gun"
-./scripts/oxide-gun-xdp-pkexec-tests.sh
+cargo test -p boron-gun --features xdp
+./scripts/boron-gun-xdp-userns-smoke.sh "$(pwd)/target/debug/boron-gun"
+pkexec ./scripts/boron-gun-xdp-veth-smoke.sh "$(pwd)/target/debug/boron-gun"
+./scripts/boron-gun-xdp-pkexec-tests.sh
 ```
 
 Plus:
 
 ```bash
-drop_object="$(./scripts/oxide-gun-build-ebpf.sh)"
-pkexec ./scripts/oxide-gun-xdp-drop-veth-smoke.sh \
-  "$(pwd)/target/debug/oxide-gun" \
+drop_object="$(./scripts/boron-gun-build-ebpf.sh)"
+pkexec ./scripts/boron-gun-xdp-drop-veth-smoke.sh \
+  "$(pwd)/target/debug/boron-gun" \
   "$drop_object"
 ```
 
@@ -165,39 +165,39 @@ Retain `bpftool prog list` / `bpftool map` before, during, and after a run when
 
 ## MVP Done Criteria
 
-- `cargo test -p oxide-gun` passes.
-- `cargo test -p oxide-gun --features xdp` passes.
+- `cargo test -p boron-gun` passes.
+- `cargo test -p boron-gun --features xdp` passes.
 - Self-test passes.
 - Rootless userns AF_XDP smoke passes where user/network namespaces are enabled.
 - Privileged veth XDP smoke passes on a capable host.
 - Privileged XDP_DROP veth smoke proves `rx_kernel_dropped_total` increments.
 - Veth throughput harness validates the JSONL/summary/counter-delta evidence
   pipeline without making hardware-saturation claims.
-- The single-pkexec local bundle uses a release OxideGun binary for throughput
+- The single-pkexec local bundle uses a release BoronGun binary for throughput
   evidence by default, while keeping debug binaries acceptable for functional
   smoke checks.
 - Local veth throughput evidence has a conservative default pass/fail floor of
   100k TX qps plus zero error/drop thresholds, so it catches severe performance
   regressions without claiming hardware saturation.
-- Dedicated-interface lab run from `scripts/oxide-gun-xdp-lab-throughput.sh`
-  retains preflight capability evidence, OxideGun JSONL, extracted
+- Dedicated-interface lab run from `scripts/boron-gun-xdp-lab-throughput.sh`
+  retains preflight capability evidence, BoronGun JSONL, extracted
   `summary.json`, pre/post NIC counters, and `evidence-summary.json` counter
   deltas.
 - Lab preflight fails closed on loopback and default-route interfaces unless the
   default-route override is set for an intentionally isolated host.
 - Lab preflight records interface evidence scope and supports
-  `OXIDE_GUN_REQUIRE_PHYSICAL=1` so saturation-oriented runs fail on veth and
+  `BORON_GUN_REQUIRE_PHYSICAL=1` so saturation-oriented runs fail on veth and
   other virtual link kinds.
 - Any claimed performance floor uses explicit evidence thresholds such as
-  minimum OxideGun TX QPS, minimum interface TX packet ratio, and maximum NIC TX
+  minimum BoronGun TX QPS, minimum interface TX packet ratio, and maximum NIC TX
   error/drop deltas.
 - Physical-device evidence can be packaged with
-  `scripts/oxide-gun-xdp-lab-package.sh`, which validates the expected artifact
+  `scripts/boron-gun-xdp-lab-package.sh`, which validates the expected artifact
   set, writes a SHA-256 manifest, and creates a copyable archive.
 - Miri passes for pure modules, or documented exclusions are narrow and justified.
 - ASan is run for unsafe packet-buffer tests where supported.
-- A retained example run shows source-varied IPv4 traffic in packet capture and matching OxideGun JSON.
-- `docs/oxide-gun.md` contains only commands that work against the implemented CLI.
+- A retained example run shows source-varied IPv4 traffic in packet capture and matching BoronGun JSON.
+- `docs/boron-gun.md` contains only commands that work against the implemented CLI.
 - `docs/unsafe-boundaries.tsv` matches the actual unsafe surface.
 
 ## Explicit Non-Goals For First MVP

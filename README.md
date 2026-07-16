@@ -1,4 +1,4 @@
-![BoronDNS](docs/assets/borondns-banner.png)
+![BoronDNS](docs/assets/borondns-banner.jpg)
 
 # BoronDNS
 
@@ -43,7 +43,7 @@ minimal local milestone. It is not yet a final formal SRS acceptance build: the
 remaining closeout work is tracked in the
 [SRS acceptance gap register](docs/mvp-gap-register.md). That register separates
 implemented behavior and retained evidence from the release artifacts,
-operator sign-off, and formal decisions still needed before an `ODS-VER-008`
+operator sign-off, and formal decisions still needed before a `BDS-VER-008`
 acceptance claim.
 
 The current release-candidate scope is wider than a minimal static-zone
@@ -102,7 +102,7 @@ path/to/config.toml`, remain supported and take precedence.
 - `borondns-server`: runtime, listeners, transfers, reloadable secret snapshots,
   health, metrics, RRL, XoT, packet-I/O adapters, and graceful shutdown.
 - `borondns-cli`: command-line entrypoint.
-- `oxide-gun`: BoronDNS test-tool DNS load generator with portable UDP self-tests
+- `boron-gun`: BoronDNS test-tool DNS load generator with portable UDP self-tests
   and an explicit Linux AF_XDP backend for lab hosts.
 
 The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
@@ -116,7 +116,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Operational SLO guide](docs/operational-slos.md)
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)
-- [OxideGun load generator](docs/oxide-gun.md)
+- [BoronGun load generator](docs/boron-gun.md)
 - [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Implemented feature scope](docs/implemented-feature-scope.md)

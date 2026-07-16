@@ -5,8 +5,8 @@ usage() {
     cat >&2 <<'EOF'
 usage: scripts/check-release-notes.sh RELEASE_NOTES.md [EVIDENCE_SNAPSHOT_DIR]
 
-Checks the SRS v0.9.1 release-note gate shape for ODS-VER-010, ODS-VER-013,
-ODS-VER-014, and ODS-VER-015. When an evidence snapshot directory is provided,
+Checks the SRS v0.9.1 release-note gate shape for BDS-VER-010, BDS-VER-013,
+BDS-VER-014, and BDS-VER-015. When an evidence snapshot directory is provided,
 each retained interop primary-version artifact listed in its INDEX.tsv must be
 referenced by snapshot-relative path in the release notes.
 EOF
@@ -48,7 +48,7 @@ for heading in \
     require_text "$heading"
 done
 
-for category in ODS-FR ODS-NFR ODS-IF ODS-INV ODS-NEG ODS-VER; do
+for category in BDS-FR BDS-NFR BDS-IF BDS-INV BDS-NEG BDS-VER; do
     require_text "$category"
 done
 
@@ -87,7 +87,7 @@ done
 for primary_doc_text in \
     "# RFC Compliance Assertions" \
     "## RFC Compliance Assertions" \
-    "ODS-VER-014" \
+    "BDS-VER-014" \
     "RFC number" \
     "Compliance status" \
     "SRS v0.9.1"; do

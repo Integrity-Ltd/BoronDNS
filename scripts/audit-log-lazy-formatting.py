@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static audit for SRS ODS-IF-LOG-008 lazy debug/trace log formatting."""
+"""Static audit for SRS BDS-IF-LOG-008 lazy debug/trace log formatting."""
 
 from __future__ import annotations
 

@@ -9835,8 +9835,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'if [[ "$fixture_manifest" == "$fixture_main_manifest" ]]; then printf "%s\n" "$*" >>"$fixture_main_cargo_log"; fi' \
     'case "${1:-}" in' \
     'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.0\"}]}" ;;' \
-    'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; oxide-gun) binary=oxide-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == oxide-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
-    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"oxide-gun\"}}}" >"$fixture_root/crates/oxide-gun/oxide-gun_bin.cdx.json" ;;' \
+    'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == boron-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
+    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"boron-gun\"}}}" >"$fixture_root/crates/boron-gun/boron-gun_bin.cdx.json" ;;' \
     '*) exit 95 ;;' \
     'esac' >"$package_fake_bin/cargo"
 # shellcheck disable=SC2016
@@ -10581,7 +10581,7 @@ package_clean_target="$workdir/package-clean-target"
 package_clean_docker_input="$workdir/package-clean-docker-input"
 package_clean_cargo_log="$workdir/package-clean-cargo.log"
 mkdir -p "$package_dirty_repo/scripts" "$package_dirty_repo/config" \
-    "$package_dirty_repo/crates/borondns-cli" "$package_dirty_repo/crates/oxide-gun" "$package_clean_dist" \
+    "$package_dirty_repo/crates/borondns-cli" "$package_dirty_repo/crates/boron-gun" "$package_clean_dist" \
     "$package_clean_target" "$package_clean_docker_input"
 cp "$repo_root/scripts/package-common.sh" "$repo_root/scripts/package-installer.sh" \
     "$repo_root/scripts/package-docker-image.sh" "$repo_root/scripts/package-sbom.sh" \
@@ -10603,7 +10603,7 @@ package_owned_file_transition_hook() {
     [[ "$1" == after-create ]] || return 0
     case "${PACKAGE_SBOM_PLACEHOLDER_SIGNAL:?}" in
     first) [[ "$2" == */crates/borondns-cli/borondns_bin.cdx.json ]] || return 0 ;;
-    second) [[ "$2" == */crates/oxide-gun/oxide-gun_bin.cdx.json ]] || return 0 ;;
+    second) [[ "$2" == */crates/boron-gun/boron-gun_bin.cdx.json ]] || return 0 ;;
     *) return 90 ;;
     esac
     kill -TERM "$BASHPID"
@@ -10627,7 +10627,7 @@ for package_sbom_placeholder_signal in first second; do
     set -e
     [[ "$package_sbom_signal_status" == 143 ]]
     [[ ! -e "$package_sbom_signal_repo/crates/borondns-cli/borondns_bin.cdx.json" ]]
-    [[ ! -e "$package_sbom_signal_repo/crates/oxide-gun/oxide-gun_bin.cdx.json" ]]
+    [[ ! -e "$package_sbom_signal_repo/crates/boron-gun/boron-gun_bin.cdx.json" ]]
     mapfile -t package_sbom_signal_quarantines < <(find "$package_sbom_signal_repo/.git" \
         -type f -name '*_bin.cdx.json.borondns-remove.*' -print)
     if [[ "$package_sbom_placeholder_signal" == first ]]; then
@@ -10945,10 +10945,10 @@ package_clean_prefix="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-mu
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz.sha256")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.bin")" == 755 ]]
-[[ "$(stat -c '%a' "$package_clean_prefix-oxide-gun.bin")" == 755 ]]
+[[ "$(stat -c '%a' "$package_clean_prefix-boron-gun.bin")" == 755 ]]
 tar -tJvf "$package_clean_prefix.tar.xz" | awk '
     $6 ~ /\/$/ { if ($1 !~ /^drwxr-xr-x/) exit 1; next }
-    $6 ~ /\/(borondns|oxide-gun|install.sh)$/ { if ($1 !~ /^-rwxr-xr-x/) exit 1; next }
+    $6 ~ /\/(borondns|boron-gun|install.sh)$/ { if ($1 !~ /^-rwxr-xr-x/) exit 1; next }
     { if ($1 !~ /^-rw-r--r--/) exit 1 }
 '
 clean_commit="$(git -C "$package_dirty_repo" rev-parse --short=12 HEAD)"
@@ -10970,7 +10970,7 @@ fi
 # operator file must be rejected intact, while a partial output created by the
 # owned generator invocation must be removed on failure.
 package_generated_borondns="$package_dirty_repo/crates/borondns-cli/borondns_bin.cdx.json"
-package_generated_oxide_gun="$package_dirty_repo/crates/oxide-gun/oxide-gun_bin.cdx.json"
+package_generated_boron_gun="$package_dirty_repo/crates/boron-gun/boron-gun_bin.cdx.json"
 printf 'operator CycloneDX sentinel\n' >"$package_generated_borondns"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_DIST_DIR="$workdir/package-preexisting-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
@@ -11010,7 +11010,7 @@ fi
 grep -Fqx 'generated SBOM replacement victim' "$package_generated_borondns"
 test -f "$package_generated_borondns.original"
 rm -f -- "$package_generated_borondns" "$package_generated_borondns.original" \
-    "$package_generated_oxide_gun"
+    "$package_generated_boron_gun"
 
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_DIST_DIR="$workdir/package-failed-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
@@ -11020,7 +11020,7 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     printf 'SBOM builder accepted a partial cargo-cyclonedx generation\n' >&2
     exit 1
 fi
-[[ ! -e "$package_generated_borondns" && ! -e "$package_generated_oxide_gun" ]]
+[[ ! -e "$package_generated_borondns" && ! -e "$package_generated_boron_gun" ]]
 package_dirty_git_root="$(git -C "$package_dirty_repo" rev-parse --absolute-git-dir)"
 mapfile -t package_failed_sbom_retained_lines < <(
     grep -F 'logical removal retained an identity-bound quarantine for privileged/manual reconciliation: path=' \
@@ -11430,8 +11430,8 @@ mkdir -p "$package_transient_dist"
 cp "$package_clean_dist/$package_sbom_prefix-sbom-manifest.tsv" \
     "$package_clean_dist/$package_sbom_prefix-borondns.cdx.json" \
     "$package_clean_dist/$package_sbom_prefix-borondns.cdx.json.sha256" \
-    "$package_clean_dist/$package_sbom_prefix-oxide-gun.cdx.json" \
-    "$package_clean_dist/$package_sbom_prefix-oxide-gun.cdx.json.sha256" \
+    "$package_clean_dist/$package_sbom_prefix-boron-gun.cdx.json" \
+    "$package_clean_dist/$package_sbom_prefix-boron-gun.cdx.json.sha256" \
     "$package_clean_dist/$package_sbom_prefix-docker-image.cdx.json" \
     "$package_clean_dist/$package_sbom_prefix-docker-image.cdx.json.sha256" \
     "$package_clean_dist/$package_sbom_prefix-docker-image.manifest.txt" \
@@ -11444,8 +11444,8 @@ package_sbom_snapshot() {
             "$package_sbom_prefix-sbom-manifest.tsv" \
             "$package_sbom_prefix-borondns.cdx.json" \
             "$package_sbom_prefix-borondns.cdx.json.sha256" \
-            "$package_sbom_prefix-oxide-gun.cdx.json" \
-            "$package_sbom_prefix-oxide-gun.cdx.json.sha256" \
+            "$package_sbom_prefix-boron-gun.cdx.json" \
+            "$package_sbom_prefix-boron-gun.cdx.json.sha256" \
             "$package_sbom_prefix-docker-image.cdx.json" \
             "$package_sbom_prefix-docker-image.cdx.json.sha256"; do
             sha256sum "$artifact"
@@ -11492,7 +11492,7 @@ done
 (
     cd "$package_concurrent_sbom_dist"
     sha256sum -c "$package_sbom_prefix-borondns.cdx.json.sha256"
-    sha256sum -c "$package_sbom_prefix-oxide-gun.cdx.json.sha256"
+    sha256sum -c "$package_sbom_prefix-boron-gun.cdx.json.sha256"
 )
 grep -Fq $'borondns\tCycloneDX 1.5 JSON' \
     "$package_concurrent_sbom_dist/$package_sbom_prefix-sbom-manifest.tsv"
@@ -11528,7 +11528,7 @@ for package_cross_target in target-a target-b; do
     (
         cd "$package_cross_target_sbom_dist"
         sha256sum -c "borondns-0.9.0-$package_cross_target-borondns.cdx.json.sha256"
-        sha256sum -c "borondns-0.9.0-$package_cross_target-oxide-gun.cdx.json.sha256"
+        sha256sum -c "borondns-0.9.0-$package_cross_target-boron-gun.cdx.json.sha256"
     )
 done
 
@@ -11563,7 +11563,7 @@ for package_cross_name in alpha beta; do
     (
         cd "$package_cross_name_dist"
         sha256sum -c "$package_cross_name_prefix-borondns.cdx.json.sha256"
-        sha256sum -c "$package_cross_name_prefix-oxide-gun.cdx.json.sha256"
+        sha256sum -c "$package_cross_name_prefix-boron-gun.cdx.json.sha256"
     )
 done
 
@@ -11607,7 +11607,7 @@ wait "$package_same_root_second_pid"
 (
     cd "$package_same_root_sbom_dist"
     sha256sum -c "$package_sbom_prefix-borondns.cdx.json.sha256"
-    sha256sum -c "$package_sbom_prefix-oxide-gun.cdx.json.sha256"
+    sha256sum -c "$package_sbom_prefix-boron-gun.cdx.json.sha256"
 )
 [[ -z "$(find "$package_same_root_sbom_dist" -maxdepth 1 \
     \( -name '*.previous.*' -o -name '*.sbom-package.*' \) \
@@ -11735,7 +11735,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'case "${1:-}" in' \
     '--version) printf "cargo 1.96.1 (fixture)\n" ;;' \
     'metadata) printf "%s\n" "{\"packages\":[]}" ;;' \
-    'build) target_dir=""; target=""; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; case "$package" in borondns-cli) binary=borondns ;; oxide-gun) binary=oxide-gun ;; *) exit 91 ;; esac; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"fixture $binary\\n\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary" ;;' \
+    'build) target_dir=""; target=""; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 91 ;; esac; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"fixture $binary\\n\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary" ;;' \
     '*) exit 92 ;;' \
     'esac' >"$repro_fixture_bin/cargo"
 # shellcheck disable=SC2016

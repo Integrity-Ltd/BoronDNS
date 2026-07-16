@@ -425,7 +425,7 @@ repeated setup, transfer, catalog mutation, query validation, and teardown.
 
 It is intentionally not the same as a single resident BoronDNS process serving
 one stable workload for 30 days. Treat the single-process RSS/FD growth soak as
-a companion lane when closing the strict ODS-NFR-REL-003 memory-growth target.
+a companion lane when closing the strict BDS-NFR-REL-003 memory-growth target.
 
 Scenario self-skips are recorded as `skipped` by default because some XoT
 coverage depends on the primary package in the host/container distribution. Use

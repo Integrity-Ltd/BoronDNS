@@ -15,8 +15,8 @@ unsafe_registry = repo_root / "docs" / "unsafe-boundaries.tsv"
 runtime_files = sorted(
     path
     for path in (repo_root / "crates").glob("*/src/**/*.rs")
-    if "crates/oxide-gun/" not in path.relative_to(repo_root).as_posix()
-    and "crates/oxide-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
+    if "crates/boron-gun/" not in path.relative_to(repo_root).as_posix()
+    and "crates/boron-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
     and not path.relative_to(repo_root).as_posix().endswith("/src/tests.rs")
     and "/src/tests/" not in path.relative_to(repo_root).as_posix()
     and "/src/config_tests/" not in path.relative_to(repo_root).as_posix()
@@ -68,7 +68,7 @@ runtime_sources_without_unsafe_adapters = [
 
 checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     (
-        "ODS-INV-001 secondary-only prohibited runtime surfaces",
+        "BDS-INV-001 secondary-only prohibited runtime surfaces",
         "No DNS UPDATE/admin/primary-serving surface terms found in runtime Rust source; RFC 9432 catalog-zone secondary support is allowed.",
         [
             re.compile(r"\bOpcode::Update\b"),
@@ -79,7 +79,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         list(runtime_sources),
     ),
     (
-        "ODS-INV-002 query path filesystem isolation",
+        "BDS-INV-002 query path filesystem isolation",
         "No filesystem API use found in the runtime DNS query/zone lookup path.",
         [
             re.compile(r"\bstd::fs\b"),
@@ -93,7 +93,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         ],
     ),
     (
-        "ODS-INV-004 no persistent operational state writes",
+        "BDS-INV-004 no persistent operational state writes",
         "No runtime filesystem write/delete/rename APIs found before test-only code.",
         [
             re.compile(r"\bstd::fs::write\b"),
@@ -109,7 +109,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         list(runtime_sources),
     ),
     (
-        "ODS-INV-005 static configuration/control surface",
+        "BDS-INV-005 static configuration/control surface",
         "No reload/runtime configuration/admin control surface terms found outside the audited POSIX signal-disposition adapter and the explicitly configured SecretStore runtime key-material reload path; RFC 9432 catalog members are dynamic zone data from configured transfer primaries.",
         [
             re.compile(r"\bSIGHUP\b"),
@@ -121,7 +121,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         runtime_sources_without_unsafe_adapters,
     ),
     (
-        "ODS-INV-006 first-party safe-Rust discipline",
+        "BDS-INV-006 first-party safe-Rust discipline",
         "No first-party runtime unsafe constructs found outside audited OS adapter files.",
         [
             re.compile(r"\bunsafe\s*(?:\{|fn|impl|trait|extern)"),
@@ -129,7 +129,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         runtime_sources_without_unsafe_adapters,
     ),
     (
-        "ODS-INV-007 authoritative-only response composition",
+        "BDS-INV-007 authoritative-only response composition",
         "No resolver, forwarding, or external lookup surface found in runtime Rust source.",
         [
             re.compile(r"\bresolv\.conf\b", re.IGNORECASE),
@@ -142,7 +142,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         list(runtime_sources),
     ),
     (
-        "ODS-INV-008 single-process architecture",
+        "BDS-INV-008 single-process architecture",
         "No runtime subprocess, fork, or exec invocation surface found in runtime Rust source.",
         [
             re.compile(r"\bstd::process::Command\b"),
@@ -154,7 +154,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         list(runtime_sources),
     ),
     (
-        "ODS-INV-009 static composition and no runtime code loading",
+        "BDS-INV-009 static composition and no runtime code loading",
         "No plugin, embedded interpreter, or dynamic-library loading surface found in runtime Rust source.",
         [
             re.compile(r"\blibloading\b", re.IGNORECASE),
@@ -1004,7 +1004,7 @@ let _root = open(root, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())?;
 let _child = openat(&_root, child, OFlags::RDONLY | OFlags::NOFOLLOW, Mode::empty())?;
 """
 if persistent_mutation_matches(read_only_filesystem_fixture):
-    raise SystemExit("ODS-INV-004 scanner rejected its read-only filesystem fixture")
+    raise SystemExit("BDS-INV-004 scanner rejected its read-only filesystem fixture")
 
 mutating_filesystem_fixture = """
 use std::{fs as filesystem};
@@ -1033,7 +1033,7 @@ let _temporary = open(path, Flags::TMPFILE, Mode::RUSR)?;
 fixture_mutators = persistent_mutation_matches(mutating_filesystem_fixture)
 if len(fixture_mutators) != 12:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its aliased filesystem mutation fixtures: "
+        "BDS-INV-004 scanner failed its aliased filesystem mutation fixtures: "
         f"{fixture_mutators}"
     )
 
@@ -1047,7 +1047,7 @@ let _direct = rustix::fs::open(path, NestedFlags::WRONLY, rustix::fs::Mode::RUSR
 nested_fixture_mutators = persistent_mutation_matches(nested_mutating_filesystem_fixture)
 if len(nested_fixture_mutators) != 3:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact nested std::fs write/OpenOptions/rustix OFlags fixtures: "
+        "BDS-INV-004 scanner failed its exact nested std::fs write/OpenOptions/rustix OFlags fixtures: "
         f"{nested_fixture_mutators}"
     )
 
@@ -1059,7 +1059,7 @@ use rustix::{fs::{*}};
 glob_fixture_mutators = persistent_mutation_matches(glob_mutating_filesystem_fixture)
 if len(glob_fixture_mutators) != 3:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact filesystem glob import fixtures: "
+        "BDS-INV-004 scanner failed its exact filesystem glob import fixtures: "
         f"{glob_fixture_mutators}"
     )
 
@@ -1076,7 +1076,7 @@ erase(path).await?;
 function_value_alias_mutators = persistent_mutation_matches(function_value_alias_fixture)
 if len(function_value_alias_mutators) != 3:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact filesystem function-value alias fixtures: "
+        "BDS-INV-004 scanner failed its exact filesystem function-value alias fixtures: "
         f"{function_value_alias_mutators}"
     )
 
@@ -1096,7 +1096,7 @@ typed_default_open_options_mutators = persistent_mutation_matches(
 )
 if len(typed_default_open_options_mutators) != 3:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact typed Default::default OpenOptions fixtures: "
+        "BDS-INV-004 scanner failed its exact typed Default::default OpenOptions fixtures: "
         f"{typed_default_open_options_mutators}"
     )
 
@@ -1116,7 +1116,7 @@ parenthesized_function_value_mutators = persistent_mutation_matches(
 )
 if len(parenthesized_function_value_mutators) != 4:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact parenthesized/cast function-value fixtures: "
+        "BDS-INV-004 scanner failed its exact parenthesized/cast function-value fixtures: "
         f"{parenthesized_function_value_mutators}"
     )
 
@@ -1135,7 +1135,7 @@ const_static_function_value_mutators = persistent_mutation_matches(
 )
 if len(const_static_function_value_mutators) != 3:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact const/static function-value fixtures: "
+        "BDS-INV-004 scanner failed its exact const/static function-value fixtures: "
         f"{const_static_function_value_mutators}"
     )
 
@@ -1156,7 +1156,7 @@ fn enable_write(options: &mut FsOptions) { options.write(true); }
 extended_fixture_mutators = persistent_mutation_matches(extended_mutation_fixture)
 if len(extended_fixture_mutators) != 6:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact rustix/std-symlink/multi-hop/helper mutation fixtures: "
+        "BDS-INV-004 scanner failed its exact rustix/std-symlink/multi-hop/helper mutation fixtures: "
         f"{extended_fixture_mutators}"
     )
 
@@ -1175,7 +1175,7 @@ second(path, name, value, XattrFlags::CREATE)?;
 rustix_public_mutators = persistent_mutation_matches(rustix_public_mutation_fixture)
 if len(rustix_public_mutators) != 6:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact rustix direct/import/module/multi-hop mutation fixtures: "
+        "BDS-INV-004 scanner failed its exact rustix direct/import/module/multi-hop mutation fixtures: "
         f"{rustix_public_mutators}"
     )
 
@@ -1204,7 +1204,7 @@ rust_196_and_crate_alias_mutators = persistent_mutation_matches(
 )
 if len(rust_196_and_crate_alias_mutators) != 11:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact Rust 1.96/crate-alias mutation fixtures: "
+        "BDS-INV-004 scanner failed its exact Rust 1.96/crate-alias mutation fixtures: "
         f"{rust_196_and_crate_alias_mutators}"
     )
 
@@ -1233,7 +1233,7 @@ unknown.read(true).custom_flags(runtime_flags).open(path)?;
 fail_closed_file_mutators = persistent_mutation_matches(fail_closed_file_mutation_fixture)
 if len(fail_closed_file_mutators) != 12:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact File/DirBuilder/custom-flags fixtures: "
+        "BDS-INV-004 scanner failed its exact File/DirBuilder/custom-flags fixtures: "
         f"{fail_closed_file_mutators}"
     )
 
@@ -1248,7 +1248,7 @@ options.read(true).custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW).open(path)?;
 rustix::fs::open(path, rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC, rustix::fs::Mode::empty())?;
 """
 if persistent_mutation_matches(read_only_writer_fixture):
-    raise SystemExit("ODS-INV-004 scanner rejected its generic-writer/read-only-flags fixture")
+    raise SystemExit("BDS-INV-004 scanner rejected its generic-writer/read-only-flags fixture")
 
 dynamic_rustix_open_fixture = """
 use rustix::fs as filesystem;
@@ -1261,7 +1261,7 @@ fn dynamic(flags: OFlags) {
 dynamic_rustix_open_mutators = persistent_mutation_matches(dynamic_rustix_open_fixture)
 if len(dynamic_rustix_open_mutators) != 2:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its dynamic rustix-open fixtures: "
+        "BDS-INV-004 scanner failed its dynamic rustix-open fixtures: "
         f"{dynamic_rustix_open_mutators}"
     )
 
@@ -1281,7 +1281,7 @@ async_write(path, bytes).await?;
 cargo_renamed_dependency_mutators = persistent_mutation_matches(cargo_renamed_dependency_fixture)
 if len(cargo_renamed_dependency_mutators) != 5:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its Cargo dependency-rename fixtures: "
+        "BDS-INV-004 scanner failed its Cargo dependency-rename fixtures: "
         f"{cargo_renamed_dependency_mutators}"
     )
 
@@ -1294,7 +1294,7 @@ cargo_and_source_renamed_dependency_mutators = persistent_mutation_matches(
 )
 if len(cargo_and_source_renamed_dependency_mutators) != 1:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact Cargo-plus-source crate rename fixture: "
+        "BDS-INV-004 scanner failed its exact Cargo-plus-source crate rename fixture: "
         f"{cargo_and_source_renamed_dependency_mutators}"
     )
 EXTERNAL_CRATE_ALIASES = {}
@@ -1307,7 +1307,7 @@ second.create(true).open(path)?;
 moved_open_options_mutators = persistent_mutation_matches(moved_open_options_fixture)
 if len(moved_open_options_mutators) != 1:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact moved OpenOptions fixture: "
+        "BDS-INV-004 scanner failed its exact moved OpenOptions fixture: "
         f"{moved_open_options_mutators}"
     )
 
@@ -1319,7 +1319,7 @@ fn mutate(file: &mut G) { file.write_all(bytes)?; }
 chained_file_type_alias_mutators = persistent_mutation_matches(chained_file_type_alias_fixture)
 if len(chained_file_type_alias_mutators) != 1:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its exact chained File type-alias fixture: "
+        "BDS-INV-004 scanner failed its exact chained File type-alias fixture: "
         f"{chained_file_type_alias_mutators}"
     )
 
@@ -1360,7 +1360,7 @@ fn move_file(first_file: F3) {
 fixed_point_capability_mutators = persistent_mutation_matches(fixed_point_capability_fixture)
 if len(fixed_point_capability_mutators) != 5:
     raise SystemExit(
-        "ODS-INV-004 scanner failed its multi-hop module/type/function/capability fixtures: "
+        "BDS-INV-004 scanner failed its multi-hop module/type/function/capability fixtures: "
         f"{fixed_point_capability_mutators}"
     )
 
@@ -1382,7 +1382,7 @@ rfs2::open(path, rfs2::OFlags::RDONLY | rfs2::OFlags::CLOEXEC, rfs2::Mode::empty
 """
 if persistent_mutation_matches(fixed_point_negative_fixture):
     raise SystemExit(
-        "ODS-INV-004 scanner rejected its moved generic-writer/read-only alias fixture"
+        "BDS-INV-004 scanner rejected its moved generic-writer/read-only alias fixture"
     )
 
 typed_default_and_function_value_negative_fixture = """
@@ -1402,7 +1402,7 @@ unrelated.write(true);
 """
 if persistent_mutation_matches(typed_default_and_function_value_negative_fixture):
     raise SystemExit(
-        "ODS-INV-004 scanner rejected its typed-default/function-value negative fixture"
+        "BDS-INV-004 scanner rejected its typed-default/function-value negative fixture"
     )
 
 print("architectural_invariant_audit=started")
@@ -1420,7 +1420,7 @@ for title, success, patterns, paths in checks:
         for line_number, line in enumerate(text.splitlines(), start=1):
             for pattern in patterns:
                 if pattern.search(line):
-                    if title.startswith("ODS-INV-005") and (
+                    if title.startswith("BDS-INV-005") and (
                         path == Path("crates/borondns-server/src/secret_store.rs")
                         or (
                             path == Path("crates/borondns-server/src/lib.rs")
@@ -1429,7 +1429,7 @@ for title, success, patterns, paths in checks:
                     ):
                         continue
                     matches.append(f"{path}:{line_number}: {line.strip()}")
-        if title.startswith("ODS-INV-004"):
+        if title.startswith("BDS-INV-004"):
             EXTERNAL_CRATE_ALIASES = cargo_dependency_aliases(path)
             for line_number, line in persistent_mutation_matches(text):
                 matches.append(f"{path}:{line_number}: {line}")
@@ -1471,7 +1471,7 @@ bench_text = (repo_root / "crates/borondns-core/examples/zone_image_bench.rs").r
 )
 
 print()
-print("check=ODS-INV-003 atomic publish evidence")
+print("check=BDS-INV-003 atomic publish evidence")
 required_fragments = [
     ("ZoneStore ArcSwap", "ArcSwap<ZoneDirectory>", zone_text),
     ("ZoneDirectory suffix index", "suffix_index: HashMap<Vec<u8>, Arc<ZoneStoreEntry>>", zone_text),
@@ -1522,7 +1522,7 @@ if missing:
     print("status=failed")
     for label in missing:
         print(f"  missing={label}")
-    failures.append(f"ODS-INV-003 atomic publish evidence missing: {', '.join(missing)}")
+    failures.append(f"BDS-INV-003 atomic publish evidence missing: {', '.join(missing)}")
 else:
     print("status=passed")
     print("evidence=ZoneStore publishes complete snapshot plus ZoneImage entries through a suffix-indexed ArcSwap directory with writer-side serialized replacement.")

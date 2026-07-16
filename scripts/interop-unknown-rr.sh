@@ -329,15 +329,15 @@ log(rows[-1])
 
 traceability = [
     "requirement_id\tevidence_state\truntime_case\tartifacts\treview_note",
-    "ODS-FR-URR-001\tretained-runtime\tprivate_use; future_type\tunknown-rr-summary.tsv; fake-primary.log\tThe fake primary transfers a private-use RR type and an unassigned future numeric RR type, and BoronDNS publishes the zone.",
-    "ODS-FR-URR-002\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv; client.log\tThe private-use RRset is served with the exact transferred RDATA hex values, including pointer-looking opaque bytes.",
-    "ODS-FR-URR-003\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe transferred private-use RRset includes and serves a zero-length RDATA record with RDLENGTH=0.",
-    "ODS-FR-URR-004\tretained-runtime\tprivate_use; future_type\tclient.log\tExact numeric QTYPE queries for the unknown RRsets receive authoritative NOERROR answers.",
-    "ODS-FR-URR-005\tretained-runtime\tprivate_use; future_type\tunknown-rr-summary.tsv; client.log\tThe response RDLENGTH values match the stored RDATA octet counts and the emitted RDATA hex is verbatim.",
-    "ODS-FR-URR-006\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe pointer-looking c00c00ff RDATA is emitted unchanged rather than compressed or interpreted as a DNS name.",
-    "ODS-FR-URR-007\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe transferred c00c00ff RDATA is consumed as opaque unknown-type RDATA and later served unchanged.",
-    "ODS-FR-URR-008\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tCaseSensitive and casesensitive RDATA values are retained as distinct RRset members, proving bit-for-bit membership semantics.",
-    "ODS-FR-URR-009\tretained-runtime-plus-support\tprivate_use; parser_prohibited_type_tests\tunknown-rr-summary.tsv; crates/borondns-core/src/axfr.rs::rejects_axfr_pseudo_and_transfer_meta_record_types; crates/borondns-core/src/axfr.rs::rejects_ixfr_reserved_record_type\tThe runtime harness proves private-use types are accepted; focused parser tests cover prohibited pseudo/meta/reserved transfer types.",
+    "BDS-FR-URR-001\tretained-runtime\tprivate_use; future_type\tunknown-rr-summary.tsv; fake-primary.log\tThe fake primary transfers a private-use RR type and an unassigned future numeric RR type, and BoronDNS publishes the zone.",
+    "BDS-FR-URR-002\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv; client.log\tThe private-use RRset is served with the exact transferred RDATA hex values, including pointer-looking opaque bytes.",
+    "BDS-FR-URR-003\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe transferred private-use RRset includes and serves a zero-length RDATA record with RDLENGTH=0.",
+    "BDS-FR-URR-004\tretained-runtime\tprivate_use; future_type\tclient.log\tExact numeric QTYPE queries for the unknown RRsets receive authoritative NOERROR answers.",
+    "BDS-FR-URR-005\tretained-runtime\tprivate_use; future_type\tunknown-rr-summary.tsv; client.log\tThe response RDLENGTH values match the stored RDATA octet counts and the emitted RDATA hex is verbatim.",
+    "BDS-FR-URR-006\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe pointer-looking c00c00ff RDATA is emitted unchanged rather than compressed or interpreted as a DNS name.",
+    "BDS-FR-URR-007\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tThe transferred c00c00ff RDATA is consumed as opaque unknown-type RDATA and later served unchanged.",
+    "BDS-FR-URR-008\tretained-runtime\tprivate_use\tunknown-rr-summary.tsv\tCaseSensitive and casesensitive RDATA values are retained as distinct RRset members, proving bit-for-bit membership semantics.",
+    "BDS-FR-URR-009\tretained-runtime-plus-support\tprivate_use; parser_prohibited_type_tests\tunknown-rr-summary.tsv; crates/borondns-core/src/axfr.rs::rejects_axfr_pseudo_and_transfer_meta_record_types; crates/borondns-core/src/axfr.rs::rejects_ixfr_reserved_record_type\tThe runtime harness proves private-use types are accepted; focused parser tests cover prohibited pseudo/meta/reserved transfer types.",
 ]
 
 with open(SUMMARY_PATH, "w", encoding="utf-8") as handle:

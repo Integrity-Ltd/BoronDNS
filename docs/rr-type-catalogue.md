@@ -2,7 +2,7 @@
 
 Status: implementation-supporting companion to SRS section 4.14.
 
-The normative RR type requirement is `ODS-FR-RR-001` in
+The normative RR type requirement is `BDS-FR-RR-001` in
 `docs/BoronDNS-Secondary-SRS-v0.9.1.md`. This document records how the current
 code owns that catalogue so review-driven MVP trim suggestions do not silently
 remove behavior that is already implemented and tested.
@@ -49,8 +49,8 @@ The current type-aware set is:
 
 ## Out-Of-Catalogue Behavior
 
-Types not listed in SRS section 4.14 are handled under `ODS-FR-URR-001` through
-`ODS-FR-URR-009`, not as missing implementation. Current examples intentionally
+Types not listed in SRS section 4.14 are handled under `BDS-FR-URR-001` through
+`BDS-FR-URR-009`, not as missing implementation. Current examples intentionally
 remaining unknown include LOC, SSHFP, IPSECKEY, OPENPGPKEY, CSYNC, ZONEMD,
 SMIMEA, CDS, CDNSKEY, CAA, HIP, and SPF type 99.
 
@@ -81,5 +81,5 @@ Current short evidence includes:
   against BIND, including known catalogue types and intentionally unknown CAA.
 
 Release acceptance still needs retained per-type packet artifacts where
-`docs/appendix-a-traceability-matrix.md` marks `ODS-FR-RR-001..ODS-FR-RR-007`
+`docs/appendix-a-traceability-matrix.md` marks `BDS-FR-RR-001..BDS-FR-RR-007`
 as partial.

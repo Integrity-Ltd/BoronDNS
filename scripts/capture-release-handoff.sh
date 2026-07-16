@@ -21,17 +21,17 @@ EOF
 
 cat >"$evidence_dir/evidence-attachment-map.tsv" <<'EOF'
 requirement_id	evidence_category	setup_artifact	completed_release_artifact	required_release_note_section	local_mvp_status	later_release_ops_action
-ODS-VER-008	formal SRS MVP acceptance gate	release-readiness-checklist.md	completed release checklist and external operator acceptance	Verification Responsibility Sign-off	setup-ready	complete every gate row before claiming formal SRS acceptance
-ODS-VER-010	release publication	release-notes-fill-plan.md	completed release notes checked by scripts/check-release-notes.sh	all release-note sections	setup-ready	publish evidence pointers and requirement outcomes
-ODS-VER-011	cadence governance	scheduled-ci-plan.md	CI/scheduler run logs or release engineer manual run record	Release/Operations Handoff	setup-ready	record continuous, periodic, and gate execution ownership
-ODS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table and perf/resource comparison output	Regression Delta	setup-ready	triage every functional or performance/resource regression
-ODS-VER-013	interop version retention	evidence-attachment-map.tsv	interop-primary-versions/INDEX.tsv and referenced primary-version files	Interop Primary Versions	setup-ready	attach every retained real-primary version artifact
-ODS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC compliance table with release evidence pointers	RFC Compliance Assertions	setup-ready	copy and update docs/rfc-compliance-assertions.md posture
-ODS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed responsibility and external-operator rows	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
-ODS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed interface baseline diff and release-note change classification	Interface Changes	setup-ready	compare current interface baseline against previous accepted release and classify additions deprecations and breaking changes
-ODS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
-ODS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
-ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
+BDS-VER-008	formal SRS MVP acceptance gate	release-readiness-checklist.md	completed release checklist and external operator acceptance	Verification Responsibility Sign-off	setup-ready	complete every gate row before claiming formal SRS acceptance
+BDS-VER-010	release publication	release-notes-fill-plan.md	completed release notes checked by scripts/check-release-notes.sh	all release-note sections	setup-ready	publish evidence pointers and requirement outcomes
+BDS-VER-011	cadence governance	scheduled-ci-plan.md	CI/scheduler run logs or release engineer manual run record	Release/Operations Handoff	setup-ready	record continuous, periodic, and gate execution ownership
+BDS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table and perf/resource comparison output	Regression Delta	setup-ready	triage every functional or performance/resource regression
+BDS-VER-013	interop version retention	evidence-attachment-map.tsv	interop-primary-versions/INDEX.tsv and referenced primary-version files	Interop Primary Versions	setup-ready	attach every retained real-primary version artifact
+BDS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC compliance table with release evidence pointers	RFC Compliance Assertions	setup-ready	copy and update docs/rfc-compliance-assertions.md posture
+BDS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed responsibility and external-operator rows	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
+BDS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed interface baseline diff and release-note change classification	Interface Changes	setup-ready	compare current interface baseline against previous accepted release and classify additions deprecations and breaking changes
+BDS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
+BDS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
+BDS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
 PROJECT-DECISIONS	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending project-decision item before claiming formal SRS acceptance
 EOF
 
@@ -87,7 +87,7 @@ EOF
 cat >"$evidence_dir/scheduled-ci-plan.md" <<'EOF'
 # BoronDNS Scheduled CI and Manual Release Run Plan
 
-This is the release-candidate handoff for ODS-VER-011. It is not proof that hosted CI or
+This is the release-candidate handoff for BDS-VER-011. It is not proof that hosted CI or
 scheduled jobs have run.
 
 ## Continuous
@@ -129,7 +129,7 @@ EOF
 cat >"$evidence_dir/signing-runbook.md" <<'EOF'
 # BoronDNS Release Signing Runbook
 
-This is the release-candidate handoff for ODS-NFR-MAINT-008. It does not sign artifacts.
+This is the release-candidate handoff for BDS-NFR-MAINT-008. It does not sign artifacts.
 
 ## Preferred Sigstore/Cosign Path
 
@@ -226,7 +226,7 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] Reproducible-build handoff attached, or completed independent
       bit-identical build comparison and artifact manifest attached.
 - [ ] Reproducible-build handoff is not treated as completed
-      ODS-NFR-MAINT-005 evidence unless the independent comparison is filled.
+      BDS-NFR-MAINT-005 evidence unless the independent comparison is filled.
 - [ ] Safe-Rust audit, transitive unsafe enumeration, scanner caveats, and
       unsafe exception review attached.
 - [ ] Security policy reviewed for this release candidate.

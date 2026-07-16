@@ -18,31 +18,31 @@ batch="${BORONDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${BORONDNS_PHYSICAL_KXDPGUN_MODE:-auto}"
 player_mtu="${BORONDNS_PHYSICAL_PLAYER_MTU:-${BORONDNS_PHYSICAL_KXDPGUN_MTU:-}}"
 player_tool="${BORONDNS_PHYSICAL_PLAYER_TOOL:-kxdpgun}"
-oxide_gun_bin="${BORONDNS_PHYSICAL_OXIDE_GUN_BIN:-__default__}"
-oxide_gun_xdp_redirect_object="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT:-__default__}"
-oxide_gun_xdp_mode="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_MODE:-drv}"
-oxide_gun_xdp_zerocopy="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-auto}"
-oxide_gun_xdp_batch_size="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-64}"
-oxide_gun_xdp_rx_drain_passes="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
-oxide_gun_xdp_tx_wakeup_interval="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
-oxide_gun_xdp_pace_wait_fraction="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION:-__omit__}"
-oxide_gun_xdp_umem_frame_count="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
-oxide_gun_xdp_ring_size="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
-oxide_gun_queue_count="${BORONDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
-oxide_gun_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
-oxide_gun_knot_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST:-$oxide_gun_queue_list}"
-oxide_gun_borondns_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_QUEUE_LIST:-$oxide_gun_queue_list}"
-oxide_gun_nsd_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_NSD_QUEUE_LIST:-$oxide_gun_knot_queue_list}"
-oxide_gun_source_port="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
-oxide_gun_source_port_range="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
-oxide_gun_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
-oxide_gun_knot_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
-oxide_gun_borondns_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
-oxide_gun_nsd_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_NSD_SOURCE_PORT_LIST:-$oxide_gun_knot_source_port_list}"
-oxide_gun_source_port_select="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
-oxide_gun_response_timeout_ms="${BORONDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS:-1000}"
-oxide_gun_source_mac="${BORONDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
-oxide_gun_target_mac="${BORONDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
+boron_gun_bin="${BORONDNS_PHYSICAL_BORON_GUN_BIN:-__default__}"
+boron_gun_xdp_redirect_object="${BORONDNS_PHYSICAL_BORON_GUN_XDP_REDIRECT_OBJECT:-__default__}"
+boron_gun_xdp_mode="${BORONDNS_PHYSICAL_BORON_GUN_XDP_MODE:-drv}"
+boron_gun_xdp_zerocopy="${BORONDNS_PHYSICAL_BORON_GUN_XDP_ZERO_COPY:-auto}"
+boron_gun_xdp_batch_size="${BORONDNS_PHYSICAL_BORON_GUN_XDP_BATCH_SIZE:-64}"
+boron_gun_xdp_rx_drain_passes="${BORONDNS_PHYSICAL_BORON_GUN_XDP_RX_DRAIN_PASSES:-4}"
+boron_gun_xdp_tx_wakeup_interval="${BORONDNS_PHYSICAL_BORON_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
+boron_gun_xdp_pace_wait_fraction="${BORONDNS_PHYSICAL_BORON_GUN_XDP_PACE_WAIT_FRACTION:-__omit__}"
+boron_gun_xdp_umem_frame_count="${BORONDNS_PHYSICAL_BORON_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
+boron_gun_xdp_ring_size="${BORONDNS_PHYSICAL_BORON_GUN_XDP_RING_SIZE:-4096}"
+boron_gun_queue_count="${BORONDNS_PHYSICAL_BORON_GUN_QUEUE_COUNT:-__auto__}"
+boron_gun_queue_list="${BORONDNS_PHYSICAL_BORON_GUN_QUEUE_LIST:-__none__}"
+boron_gun_knot_queue_list="${BORONDNS_PHYSICAL_BORON_GUN_KNOT_QUEUE_LIST:-$boron_gun_queue_list}"
+boron_gun_borondns_queue_list="${BORONDNS_PHYSICAL_BORON_GUN_BORONDNS_QUEUE_LIST:-$boron_gun_queue_list}"
+boron_gun_nsd_queue_list="${BORONDNS_PHYSICAL_BORON_GUN_NSD_QUEUE_LIST:-$boron_gun_knot_queue_list}"
+boron_gun_source_port="${BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT:-53000}"
+boron_gun_source_port_range="${BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT_RANGE:-__auto__}"
+boron_gun_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT_LIST:-__none__}"
+boron_gun_knot_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_KNOT_SOURCE_PORT_LIST:-$boron_gun_source_port_list}"
+boron_gun_borondns_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_BORONDNS_SOURCE_PORT_LIST:-$boron_gun_source_port_list}"
+boron_gun_nsd_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_NSD_SOURCE_PORT_LIST:-$boron_gun_knot_source_port_list}"
+boron_gun_source_port_select="${BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT_SELECT:-sequential}"
+boron_gun_response_timeout_ms="${BORONDNS_PHYSICAL_BORON_GUN_RESPONSE_TIMEOUT_MS:-1000}"
+boron_gun_source_mac="${BORONDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
+boron_gun_target_mac="${BORONDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
 perf_record="${BORONDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_scope="${BORONDNS_PHYSICAL_PERF_SCOPE:-process}"
 perf_event="${BORONDNS_PHYSICAL_PERF_EVENT:-__default__}"
@@ -272,7 +272,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\toxide_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tplayer_rx_packets_delta\\tplayer_tx_packets_delta\\tplayer_softnet_dropped_delta\\tplayer_softnet_time_squeeze_delta\\tplayer_rx_packets_phy_delta\\tplayer_tx_packets_phy_delta\\tplayer_rx_discards_phy_delta\\tplayer_tx_discards_phy_delta\\tplayer_rx_xsk_xdp_redirect_delta\\tplayer_tx_xsk_xmit_delta\\tplayer_tx_xsk_wakeup_delta\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\tboron_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tplayer_rx_packets_delta\\tplayer_tx_packets_delta\\tplayer_softnet_dropped_delta\\tplayer_softnet_time_squeeze_delta\\tplayer_rx_packets_phy_delta\\tplayer_tx_packets_phy_delta\\tplayer_rx_discards_phy_delta\\tplayer_tx_discards_phy_delta\\tplayer_rx_xsk_xdp_redirect_delta\\tplayer_tx_xsk_xmit_delta\\tplayer_tx_xsk_wakeup_delta\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -384,7 +384,7 @@ REMOTE
 
 configure_player_xdp_tuning() {
     local effective_player_mtu
-    local requested_oxide_gun_queue_count="$oxide_gun_queue_count"
+    local requested_boron_gun_queue_count="$boron_gun_queue_count"
 
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     original_player_mtu="$(player_link_mtu)"
@@ -397,31 +397,31 @@ sudo ip link set dev "$iface" mtu "$mtu"
 REMOTE
     fi
     effective_player_mtu="$(player_link_mtu)"
-    if [[ "$player_tool" == "oxide-gun" && "$oxide_gun_queue_count" == "__auto__" ]]; then
-        oxide_gun_queue_count="$(player_rx_queue_count)"
+    if [[ "$player_tool" == "boron-gun" && "$boron_gun_queue_count" == "__auto__" ]]; then
+        boron_gun_queue_count="$(player_rx_queue_count)"
     fi
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${player_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" "$oxide_gun_queue_list" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${player_mtu:-__none__}" "$effective_player_mtu" "$requested_boron_gun_queue_count" "$boron_gun_queue_count" "$boron_gun_queue_list" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_player_mtu="$2"
 requested_player_mtu="$3"
 effective_player_mtu="$4"
-requested_oxide_gun_queue_count="$5"
-effective_oxide_gun_queue_count="$6"
-oxide_gun_queue_list="$7"
+requested_boron_gun_queue_count="$5"
+effective_boron_gun_queue_count="$6"
+boron_gun_queue_list="$7"
 if [[ "$requested_player_mtu" == "__none__" ]]; then
     requested_player_mtu=""
 fi
-if [[ "$oxide_gun_queue_list" == "__none__" ]]; then
-    oxide_gun_queue_list=""
+if [[ "$boron_gun_queue_list" == "__none__" ]]; then
+    boron_gun_queue_list=""
 fi
 cat >"$out_abs/host/player-link-tuning.txt" <<EOF
 original_mtu=$original_player_mtu
 requested_mtu=$requested_player_mtu
 effective_mtu=$effective_player_mtu
-oxide_gun_requested_queue_count=$requested_oxide_gun_queue_count
-oxide_gun_effective_queue_count=$effective_oxide_gun_queue_count
-oxide_gun_queue_list=$oxide_gun_queue_list
+boron_gun_requested_queue_count=$requested_boron_gun_queue_count
+boron_gun_effective_queue_count=$effective_boron_gun_queue_count
+boron_gun_queue_list=$boron_gun_queue_list
 EOF
 REMOTE
 }
@@ -1385,7 +1385,7 @@ run_server_finish() {
     local server_prefix_arg="${selected_server_prefix_b64:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$server_udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$oxide_gun_response_timeout_ms" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$server_udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$boron_gun_response_timeout_ms" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 run_abs="$2"
@@ -1398,7 +1398,7 @@ xdp_tx_wakeup_interval="$8"
 workers="$9"
 rate="${10}"
 player_tool="${11}"
-oxide_gun_response_timeout_ms="${12}"
+boron_gun_response_timeout_ms="${12}"
 kxdpgun_batch="${13}"
 kxdpgun_mode="${14}"
 udp_batch_size="${15}"
@@ -1474,19 +1474,19 @@ tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2
 ip -details link show dev "$server_interface" >"$run_abs/server-ip-link-after-benchmark.txt" 2>&1 || true
 sudo bpftool net show dev "$server_interface" >"$run_abs/server-bpftool-net-after-benchmark.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$server_udp_backend" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$oxide_gun_response_timeout_ms" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_rmem_max" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$server_udp_backend" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$boron_gun_response_timeout_ms" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_rmem_max" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import json
 import re
 import sys
 
-target, server_udp_backend, xdp_mode, xdp_zero_copy, xdp_rx_drain_passes, xdp_tx_wakeup_interval, workers, rate, player_tool, oxide_gun_response_timeout_ms, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_ring, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_rmem_max, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:31]
+target, server_udp_backend, xdp_mode, xdp_zero_copy, xdp_rx_drain_passes, xdp_tx_wakeup_interval, workers, rate, player_tool, boron_gun_response_timeout_ms, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_ring, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_rmem_max, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:31]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies_per_second = ""
 reply_percent = ""
 dns_reply_size = ""
 ethernet_reply_bps = ""
 duration_seconds = ""
-if player_tool == "oxide-gun":
+if player_tool == "boron-gun":
     summary = None
     for raw in text.splitlines():
         raw = raw.strip()
@@ -1686,7 +1686,7 @@ print("\t".join([
     workers,
     rate,
     player_tool,
-    oxide_gun_response_timeout_ms,
+    boron_gun_response_timeout_ms,
     kxdpgun_batch,
     kxdpgun_mode,
     udp_batch_size,
@@ -1950,8 +1950,8 @@ run_player_kxdpgun() {
     local id="$2"
     local port="$3"
     local rate="$4"
-    local row_source_port_list="${5:-$oxide_gun_source_port_list}"
-    local row_queue_list="${6:-$oxide_gun_queue_list}"
+    local row_source_port_list="${5:-$boron_gun_source_port_list}"
+    local row_queue_list="${6:-$boron_gun_queue_list}"
     local local_log="$id.kxdpgun.tmp"
     local player_run_dir
     local remote_run_dir
@@ -1963,7 +1963,7 @@ run_player_kxdpgun() {
 
     capture_player_row_state "$run_abs" before
 
-    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$row_queue_list" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$boron_gun_bin" "$boron_gun_xdp_redirect_object" "$boron_gun_xdp_mode" "$boron_gun_xdp_zerocopy" "$boron_gun_xdp_batch_size" "$boron_gun_xdp_rx_drain_passes" "$boron_gun_xdp_tx_wakeup_interval" "$boron_gun_xdp_pace_wait_fraction" "$boron_gun_xdp_umem_frame_count" "$boron_gun_xdp_ring_size" "$boron_gun_queue_count" "$row_queue_list" "$boron_gun_source_port" "$boron_gun_source_port_range" "$row_source_port_list" "$boron_gun_source_port_select" "$boron_gun_source_mac" "$boron_gun_target_mac" "$boron_gun_response_timeout_ms" <<'REMOTE'
 set -euo pipefail
 workdir="$1"
 run_dir="$2"
@@ -1976,25 +1976,25 @@ mode="$8"
 source_ip="$9"
 target_ip="${10}"
 player_tool="${11}"
-oxide_gun_bin="${12}"
-oxide_gun_xdp_redirect_object="${13}"
-oxide_gun_xdp_mode="${14}"
-oxide_gun_xdp_zerocopy="${15}"
-oxide_gun_xdp_batch_size="${16}"
-oxide_gun_xdp_rx_drain_passes="${17}"
-oxide_gun_xdp_tx_wakeup_interval="${18}"
-oxide_gun_xdp_pace_wait_fraction="${19}"
-oxide_gun_xdp_umem_frame_count="${20}"
-oxide_gun_xdp_ring_size="${21}"
-oxide_gun_queue_count="${22}"
-oxide_gun_queue_list="${23}"
-oxide_gun_source_port="${24}"
-oxide_gun_source_port_range="${25}"
-oxide_gun_source_port_list="${26}"
-oxide_gun_source_port_select="${27}"
-oxide_gun_source_mac="${28}"
-oxide_gun_target_mac="${29}"
-oxide_gun_response_timeout_ms="${30}"
+boron_gun_bin="${12}"
+boron_gun_xdp_redirect_object="${13}"
+boron_gun_xdp_mode="${14}"
+boron_gun_xdp_zerocopy="${15}"
+boron_gun_xdp_batch_size="${16}"
+boron_gun_xdp_rx_drain_passes="${17}"
+boron_gun_xdp_tx_wakeup_interval="${18}"
+boron_gun_xdp_pace_wait_fraction="${19}"
+boron_gun_xdp_umem_frame_count="${20}"
+boron_gun_xdp_ring_size="${21}"
+boron_gun_queue_count="${22}"
+boron_gun_queue_list="${23}"
+boron_gun_source_port="${24}"
+boron_gun_source_port_range="${25}"
+boron_gun_source_port_list="${26}"
+boron_gun_source_port_select="${27}"
+boron_gun_source_mac="${28}"
+boron_gun_target_mac="${29}"
+boron_gun_response_timeout_ms="${30}"
 mkdir -p "$workdir/$run_dir"
 (
     cd "$workdir"
@@ -2003,55 +2003,55 @@ mkdir -p "$workdir/$run_dir"
         kxdpgun)
             sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i querydb "$target_ip"
             ;;
-        oxide-gun)
-            if [[ "$oxide_gun_bin" == "__default__" ]]; then
-                oxide_gun_bin="$workdir/xdp-template-slice/oxide-gun"
+        boron-gun)
+            if [[ "$boron_gun_bin" == "__default__" ]]; then
+                boron_gun_bin="$workdir/xdp-template-slice/boron-gun"
             fi
-            if [[ "$oxide_gun_xdp_redirect_object" == "__default__" ]]; then
-                oxide_gun_xdp_redirect_object="$workdir/xdp-template-slice/oxide-gun-xdp.bpf.o"
+            if [[ "$boron_gun_xdp_redirect_object" == "__default__" ]]; then
+                boron_gun_xdp_redirect_object="$workdir/xdp-template-slice/boron-gun-xdp.bpf.o"
             fi
-            source_port_args=(--source-port "$oxide_gun_source_port")
-            if [[ "$oxide_gun_source_port_range" != "__auto__" ]]; then
+            source_port_args=(--source-port "$boron_gun_source_port")
+            if [[ "$boron_gun_source_port_range" != "__auto__" ]]; then
                 source_port_args+=(
-                    --source-port-range "$oxide_gun_source_port_range"
-                    --source-port-select "$oxide_gun_source_port_select"
+                    --source-port-range "$boron_gun_source_port_range"
+                    --source-port-select "$boron_gun_source_port_select"
                 )
             fi
-            if [[ "$oxide_gun_source_port_list" != "__none__" ]]; then
-                source_port_args+=(--source-port-list "$oxide_gun_source_port_list")
+            if [[ "$boron_gun_source_port_list" != "__none__" ]]; then
+                source_port_args+=(--source-port-list "$boron_gun_source_port_list")
             fi
-            queue_args=(--queue-count "$oxide_gun_queue_count")
-            if [[ "$oxide_gun_queue_list" != "__none__" ]]; then
-                queue_args+=(--queue-list "$oxide_gun_queue_list")
+            queue_args=(--queue-count "$boron_gun_queue_count")
+            if [[ "$boron_gun_queue_list" != "__none__" ]]; then
+                queue_args+=(--queue-list "$boron_gun_queue_list")
             fi
             pace_args=()
-            if [[ "$oxide_gun_xdp_pace_wait_fraction" != "__omit__" ]]; then
-                pace_args+=(--xdp-pace-wait-fraction "$oxide_gun_xdp_pace_wait_fraction")
+            if [[ "$boron_gun_xdp_pace_wait_fraction" != "__omit__" ]]; then
+                pace_args+=(--xdp-pace-wait-fraction "$boron_gun_xdp_pace_wait_fraction")
             fi
-            sudo "$oxide_gun_bin" \
+            sudo "$boron_gun_bin" \
                 --backend xdp \
                 --interface "$interface" \
                 --tx-queue 0 \
                 --rx-queue 0 \
                 "${queue_args[@]}" \
-                --xdp-mode "$oxide_gun_xdp_mode" \
-                --xdp-zerocopy "$oxide_gun_xdp_zerocopy" \
-                --xdp-redirect-object "$oxide_gun_xdp_redirect_object" \
+                --xdp-mode "$boron_gun_xdp_mode" \
+                --xdp-zerocopy "$boron_gun_xdp_zerocopy" \
+                --xdp-redirect-object "$boron_gun_xdp_redirect_object" \
                 --xdp-reply-tracking count \
-                --xdp-batch-size "$oxide_gun_xdp_batch_size" \
-                --xdp-rx-drain-passes "$oxide_gun_xdp_rx_drain_passes" \
-                --xdp-tx-wakeup-interval "$oxide_gun_xdp_tx_wakeup_interval" \
+                --xdp-batch-size "$boron_gun_xdp_batch_size" \
+                --xdp-rx-drain-passes "$boron_gun_xdp_rx_drain_passes" \
+                --xdp-tx-wakeup-interval "$boron_gun_xdp_tx_wakeup_interval" \
                 "${pace_args[@]}" \
-                --xdp-umem-frame-count "$oxide_gun_xdp_umem_frame_count" \
-                --xdp-tx-ring-size "$oxide_gun_xdp_ring_size" \
-                --xdp-rx-ring-size "$oxide_gun_xdp_ring_size" \
-                --xdp-fill-ring-size "$oxide_gun_xdp_ring_size" \
-                --xdp-completion-ring-size "$oxide_gun_xdp_ring_size" \
+                --xdp-umem-frame-count "$boron_gun_xdp_umem_frame_count" \
+                --xdp-tx-ring-size "$boron_gun_xdp_ring_size" \
+                --xdp-rx-ring-size "$boron_gun_xdp_ring_size" \
+                --xdp-fill-ring-size "$boron_gun_xdp_ring_size" \
+                --xdp-completion-ring-size "$boron_gun_xdp_ring_size" \
                 --target "$target_ip:$port" \
                 --source-ip "$source_ip" \
                 "${source_port_args[@]}" \
-                --source-mac "$oxide_gun_source_mac" \
-                --target-mac "$oxide_gun_target_mac" \
+                --source-mac "$boron_gun_source_mac" \
+                --target-mac "$boron_gun_target_mac" \
                 --query-list querydb \
                 --query-select sequential \
                 --max-packets 0 \
@@ -2060,7 +2060,7 @@ mkdir -p "$workdir/$run_dir"
                 --recv-mode process \
                 --log-format json \
                 --flush-interval-ms 0 \
-                --response-timeout-ms "$oxide_gun_response_timeout_ms"
+                --response-timeout-ms "$boron_gun_response_timeout_ms"
             ;;
         *)
             printf 'unsupported BORONDNS_PHYSICAL_PLAYER_TOOL: %s\n' "$player_tool" >&2
@@ -2115,7 +2115,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; the
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
@@ -2130,7 +2130,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
@@ -2145,7 +2145,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_nsd" == true ]]; then
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "std"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
-        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "nsd" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_nsd_reference_stop "$run_abs"
@@ -2160,7 +2160,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_nsd_xdp" == true ]]; 
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "xdp"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
-        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "nsd-xdp" "xdp" "native" "on" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_nsd_reference_stop "$run_abs"
@@ -2206,7 +2206,7 @@ if [[ "$include_borondns" == true ]]; then
                                 run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
                                 run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
                                 run_server_socket_sample_start "$run_abs" "$socket_sample" "$borondns_port" "$duration" "$socket_sample_interval"
-                                run_player_kxdpgun "$run_abs" "$run_id" "$borondns_port" "$rate" "$oxide_gun_borondns_source_port_list" "$oxide_gun_borondns_queue_list"
+                                run_player_kxdpgun "$run_abs" "$run_id" "$borondns_port" "$rate" "$boron_gun_borondns_source_port_list" "$boron_gun_borondns_queue_list"
                                 run_server_socket_sample_finish "$run_abs" "$socket_sample"
                                 run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
                                 run_server_finish "$run_abs" "borondns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
@@ -2227,7 +2227,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_knot" == true ]];
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
@@ -2242,7 +2242,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_knot_xdp" == true
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
@@ -2257,7 +2257,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd" == true ]]; 
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "std"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
-        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "nsd" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_nsd_reference_stop "$run_abs"
@@ -2272,7 +2272,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd_xdp" == true 
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "xdp"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
-        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "nsd-xdp" "xdp" "native" "on" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_nsd_reference_stop "$run_abs"

@@ -34,7 +34,7 @@ def normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
 
 REQUIRED_REVIEW_DISPOSITIONS = [
-    "ODS/RDS namespace mismatch",
+    "BDS/RDS namespace mismatch",
     "Suffixed functional IDs violated the numeric scheme",
     "UPDATE rejection cross-reference pointed at `CORE-007`",
     "Response DO-bit semantics were wrong",
@@ -101,7 +101,7 @@ REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
 REQUIRED_SUPPORT_TOOLING_BOUNDARIES = [
     "## Retained Support And Evidence Tooling",
     "Release installer and Docker image archives",
-    "OxideGun load generator",
+    "BoronGun load generator",
     "Benchmark and tuning harnesses",
     "Supplemental interop harnesses",
     "do not expand the BoronDNS server protocol surface",
@@ -148,8 +148,8 @@ REVIEW_BASELINE_SCOPE = {
         ],
         "source_needles": [
             "Opcode::Notify",
-            "ODS-INV-001 secondary-only prohibited runtime surfaces",
-            "ODS-INV-007 authoritative-only response composition",
+            "BDS-INV-001 secondary-only prohibited runtime surfaces",
+            "BDS-INV-007 authoritative-only response composition",
         ],
     },
     "static toml config and tsig": {
@@ -300,7 +300,7 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
     ],
     "Full three-primary interop matrix": [
         "Deferred from Engineering MVP execution",
-        "the formal all-primary ODS-VER-003 matrix remains release acceptance",
+        "the formal all-primary BDS-VER-003 matrix remains release acceptance",
     ],
     "Exact performance MUSTs": [
         "Deferred from Engineering MVP execution",
@@ -396,7 +396,7 @@ FEATURES = {
             "scripts/interop-knot-ixfr-refresh-docker.sh",
             "scripts/interop-ixfr-notimp-fallback.sh",
         ],
-        "srs_needles": ["ODS-FR-IXFR-001", "ODS-FR-AXFR-001"],
+        "srs_needles": ["BDS-FR-IXFR-001", "BDS-FR-AXFR-001"],
         "source_needles": [
             "pub enum IxfrResponse",
             "build_ixfr_query",
@@ -424,7 +424,7 @@ FEATURES = {
             "scripts/interop-bind-xot-catalog-zone-docker.sh",
             "scripts/audit-xot-revocation.sh",
         ],
-        "srs_needles": ["ODS-FR-XOT-001", "ODS-FR-XOT-012"],
+        "srs_needles": ["BDS-FR-XOT-001", "BDS-FR-XOT-012"],
         "source_needles": [
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
@@ -452,7 +452,7 @@ FEATURES = {
             "scripts/audit-dnssec-passive.sh",
             "docs/dnssec-conformance-matrix.tsv",
         ],
-        "srs_needles": ["ODS-FR-DNSSEC-001", "ODS-FR-DNSSEC-014"],
+        "srs_needles": ["BDS-FR-DNSSEC-001", "BDS-FR-DNSSEC-014"],
         "source_needles": [
             "nsec3_iterations_exceeded",
             "nsec3_max_iterations",
@@ -480,7 +480,7 @@ FEATURES = {
             "scripts/rrl-evidence-campaign.sh",
             "docs/rrl-release-thresholds.md",
         ],
-        "srs_needles": ["ODS-FR-RRL-001", "ODS-FR-RRL-012"],
+        "srs_needles": ["BDS-FR-RRL-001", "BDS-FR-RRL-012"],
         "source_needles": [
             "struct RrlLimiter",
             "rrl_truncated_response",
@@ -508,7 +508,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-dns-cookie-dig.sh",
         ],
-        "srs_needles": ["ODS-FR-COOKIE-001", "ODS-FR-COOKIE-011"],
+        "srs_needles": ["BDS-FR-COOKIE-001", "BDS-FR-COOKIE-011"],
         "source_needles": [
             "EDNS_COOKIE_OPTION",
             "compute_dns_server_cookie",
@@ -538,9 +538,9 @@ FEATURES = {
             "scripts/interop-bind-xot-catalog-zone-docker.sh",
         ],
         "srs_needles": [
-            "ODS-FR-PROV-001",
-            "ODS-IF-CONF-013",
-            "ODS-NFR-OBS-008",
+            "BDS-FR-PROV-001",
+            "BDS-IF-CONF-013",
+            "BDS-NFR-OBS-008",
         ],
         "source_needles": [
             "parse_catalog_members",
@@ -569,7 +569,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
         ],
-        "srs_needles": ["ODS-FR-EDNS-001", "ODS-FR-EDNS-017"],
+        "srs_needles": ["BDS-FR-EDNS-001", "BDS-FR-EDNS-017"],
         "source_needles": [
             "parse_edns_options",
             "EDNS_NSID_OPTION",
@@ -605,7 +605,7 @@ FEATURES = {
             "scripts/interop-dnssec-nsec3-serve.sh",
             "docs/dnssec-conformance-matrix.tsv",
         ],
-        "srs_needles": ["ODS-FR-EDNS-018", "ODS-IF-CONF-017"],
+        "srs_needles": ["BDS-FR-EDNS-018", "BDS-IF-CONF-017"],
         "source_needles": [
             "EDNS_EXTENDED_DNS_ERROR_OPTION",
             "EDE_NOT_READY",
@@ -630,7 +630,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-chaos-queries.sh",
         ],
-        "srs_needles": ["ODS-FR-CHAS-001", "ODS-FR-CHAS-006", "ODS-IF-CONF-018"],
+        "srs_needles": ["BDS-FR-CHAS-001", "BDS-FR-CHAS-006", "BDS-IF-CONF-018"],
         "source_needles": [
             "answer_chaos_query",
             "is_chaos_version_name",
@@ -680,26 +680,26 @@ SUPPORT_TOOLING = {
             "x86_64-unknown-linux-musl-docker-image.tar.xz",
         ],
     },
-    "oxide-gun": {
+    "boron-gun": {
         "paths": [
-            "crates/oxide-gun/src/main.rs",
-            "crates/oxide-gun/src/xdp_backend.rs",
+            "crates/boron-gun/src/main.rs",
+            "crates/boron-gun/src/xdp_backend.rs",
             "docs/unsafe-boundaries.tsv",
         ],
         "evidence_paths": [
-            "docs/oxide-gun.md",
-            "scripts/oxide-gun-self-test.sh",
-            "scripts/oxide-gun-xdp-veth-smoke.sh",
-            "crates/oxide-gun/tests/cli.rs",
+            "docs/boron-gun.md",
+            "scripts/boron-gun-self-test.sh",
+            "scripts/boron-gun-xdp-veth-smoke.sh",
+            "crates/boron-gun/tests/cli.rs",
         ],
         "source_needles": [
             "backend xdp requires",
             "AF_XDP",
-            "oxidegun-xdp-af-xdp",
+            "borongun-xdp-af-xdp",
         ],
         "evidence_needles": [
             "pkexec",
-            "oxide-gun self-test",
+            "boron-gun self-test",
             "veth",
         ],
     },

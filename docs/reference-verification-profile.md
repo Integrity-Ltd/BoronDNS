@@ -40,7 +40,7 @@ hardware and workload definition.
 
 ### Network
 
-- **DNS query interface:** Dedicated to query traffic per `ODS-IF-NET-005`,
+- **DNS query interface:** Dedicated to query traffic per `BDS-IF-NET-005`,
   attached directly to the container as an SR-IOV virtual function or via NIC
   passthrough. Recommended NIC class: Intel E810 (`ice`) or Mellanox
   ConnectX-5 / ConnectX-6 (`mlx5`) at 25 Gbit/s line rate.
@@ -121,10 +121,10 @@ must be recorded with the run because response size and CPU behavior differ.
 
 | Variant | Purpose |
 | --- | --- |
-| Baseline | UDP transport, no TSIG, DO=0. Used for `ODS-NFR-PERF-001` through `ODS-NFR-PERF-003`. |
-| TCP-pipelined | Same QNAME/QTYPE distribution over TCP with 32 in-flight queries per connection and 1,000 distinct source connections. Used for `ODS-NFR-PERF-006`. |
-| TSIG-load | TSIG-signed NOTIFY messages at controlled rates, exercising cryptographic verification. Used for `ODS-NFR-PERF-007`. |
-| DNSSEC-augmented | Signed-zone variant with DO=1. Used for `ODS-NFR-PERF-008`. |
+| Baseline | UDP transport, no TSIG, DO=0. Used for `BDS-NFR-PERF-001` through `BDS-NFR-PERF-003`. |
+| TCP-pipelined | Same QNAME/QTYPE distribution over TCP with 32 in-flight queries per connection and 1,000 distinct source connections. Used for `BDS-NFR-PERF-006`. |
+| TSIG-load | TSIG-signed NOTIFY messages at controlled rates, exercising cryptographic verification. Used for `BDS-NFR-PERF-007`. |
+| DNSSEC-augmented | Signed-zone variant with DO=1. Used for `BDS-NFR-PERF-008`. |
 | Cookie-enabled | COOKIE baseline, Client-Cookie-only, valid-server-cookie, and invalid-server-cookie cases for DNS Cookie behavior. |
 
 ## Verification Recordkeeping

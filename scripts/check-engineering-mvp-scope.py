@@ -127,7 +127,7 @@ def main() -> None:
 
     readiness = normalized(READINESS)
     require(
-        "not full SRS `ODS-VER-008` release acceptance" in readiness,
+        "not full SRS `BDS-VER-008` release acceptance" in readiness,
         f"{READINESS}: missing release-candidate readiness SRS-acceptance boundary",
     )
     require(

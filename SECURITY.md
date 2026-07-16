@@ -1,8 +1,8 @@
 # BoronDNS Security Policy
 
 This policy implements the current project handling requirements for
-`ODS-NFR-SEC-007` and the release-signing publication requirements in
-`ODS-NFR-MAINT-008`.
+`BDS-NFR-SEC-007` and the release-signing publication requirements in
+`BDS-NFR-MAINT-008`.
 
 ## Reporting Vulnerabilities
 
@@ -49,7 +49,7 @@ if Cosign cannot be used for a specific distribution channel.
 
 Private Engineering MVP builds and test archives may be unsigned only when they
 are explicitly labelled as unsigned/internal. Those artifacts are useful for
-operator testing, but they are not evidence for `ODS-NFR-MAINT-008` and must
+operator testing, but they are not evidence for `BDS-NFR-MAINT-008` and must
 not be presented as accepted formal SRS MVP or public release artifacts.
 
 A release must meet one of these conditions:

@@ -24,9 +24,9 @@ source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/bind-packet-torture-$$"
 artifact_dir="${BORONDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR:-}"
 bind_container="borondns-bind-torture-$$"
-oxide_container="borondns-oxide-torture-$$"
+boron_container="borondns-boron-torture-$$"
 client_container="borondns-dumpcap-client-$$"
-oxide_image_ref="${BORONDNS_BIND_PACKET_TORTURE_IMAGE_REF:-borondns:bind-packet-torture}"
+boron_image_ref="${BORONDNS_BIND_PACKET_TORTURE_IMAGE_REF:-borondns:bind-packet-torture}"
 bind_image="$(ensure_alpine_bind_image)"
 packet_torture_image="$(ensure_alpine_packet_torture_image)"
 rm -rf "$workdir"
@@ -35,7 +35,7 @@ chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    for container in "$client_container" "$oxide_container" "$bind_container"; do
+    for container in "$client_container" "$boron_container" "$bind_container"; do
         if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
             if ((status != 0)); then
                 echo "---- $container logs ----" >&2
@@ -210,7 +210,7 @@ import sys
 import time
 
 BIND_PORT = int(sys.argv[1])
-OXIDE_PORT = int(sys.argv[2])
+BORON_PORT = int(sys.argv[2])
 SUMMARY = sys.argv[3]
 DIFF = sys.argv[4]
 LOG = sys.argv[5]
@@ -521,28 +521,28 @@ def main():
             qid = 0x5000 + index
             packet = build_query(qid, qname, qtype)
             bind = parse_response(exchange(BIND_PORT, packet))
-            oxide = parse_response(exchange(OXIDE_PORT, packet))
+            boron = parse_response(exchange(BORON_PORT, packet))
             bind_cmp = comparable(bind)
-            oxide_cmp = comparable_for_qtype(oxide, bind_cmp, qtype)
+            boron_cmp = comparable_for_qtype(boron, bind_cmp, qtype)
             bind_cmp = comparable_for_qtype(bind, bind_cmp, qtype)
-            status = "match" if bind_cmp == oxide_cmp else "mismatch"
+            status = "match" if bind_cmp == boron_cmp else "mismatch"
             print(
-                f"{qname}\t{qtype_name}\t{oxide['rcode']}\t{len(oxide['answers'])}\t"
-                f"{len(oxide['authorities'])}\t{len(oxide['additionals'])}\t{status}",
+                f"{qname}\t{qtype_name}\t{boron['rcode']}\t{len(boron['answers'])}\t"
+                f"{len(boron['authorities'])}\t{len(boron['additionals'])}\t{status}",
                 file=summary,
             )
             log(f"{status} qname={qname} qtype={qtype_name}")
             if status != "match":
-                failures.append((qname, qtype_name, bind_cmp, oxide_cmp))
+                failures.append((qname, qtype_name, bind_cmp, boron_cmp))
             time.sleep(0.02)
     if failures:
         with open(DIFF, "w", encoding="utf-8") as diff:
-            for qname, qtype_name, bind_cmp, oxide_cmp in failures:
+            for qname, qtype_name, bind_cmp, boron_cmp in failures:
                 print(f"### {qname} {qtype_name}", file=diff)
                 print("BIND:", file=diff)
                 print(json.dumps(bind_cmp, indent=2, sort_keys=True, default=str), file=diff)
                 print("BoronDNS:", file=diff)
-                print(json.dumps(oxide_cmp, indent=2, sort_keys=True, default=str), file=diff)
+                print(json.dumps(boron_cmp, indent=2, sort_keys=True, default=str), file=diff)
         raise SystemExit(f"{len(failures)} packet-content comparison mismatches")
     with open(DIFF, "w", encoding="utf-8") as diff:
         print("all packet-content comparisons matched", file=diff)
@@ -613,11 +613,11 @@ PY
 fi
 
 BORONDNS_DIST_DIR="$workdir/dist" \
-    BORONDNS_DOCKER_IMAGE_REF="$oxide_image_ref" \
+    BORONDNS_DOCKER_IMAGE_REF="$boron_image_ref" \
     "$repo_root/scripts/package-docker-image.sh" >/dev/null
 
 docker run -d \
-    --name "$oxide_container" \
+    --name "$boron_container" \
     --ulimit nofile=65536:65536 \
     --network host \
     --read-only \
@@ -626,14 +626,14 @@ docker run -d \
     --pids-limit 128 \
     --memory 256m \
     -v "$workdir/borondns.toml:/etc/borondns-secondary/config.toml:ro" \
-    "$oxide_image_ref" \
+    "$boron_image_ref" \
     serve --config /etc/borondns-secondary/config.toml \
     >"$workdir/borondns-container-id.txt"
 
 ready=""
 for _ in {1..120}; do
     if ready="$(
-        docker exec "$oxide_container" \
+        docker exec "$boron_container" \
             wget -qO- "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null
     )"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
@@ -646,7 +646,7 @@ if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
     exit 1
 fi
 
-docker logs "$oxide_container" >"$workdir/borondns.log" 2>&1 || true
+docker logs "$boron_container" >"$workdir/borondns.log" 2>&1 || true
 
 docker run --rm \
     --name "$client_container" \
@@ -661,8 +661,8 @@ docker run --rm \
         sleep 0.4; kill \$cap_pid >/dev/null 2>&1 || true; wait \$cap_pid >/dev/null 2>&1 || true"
 
 docker logs "$bind_container" >"$workdir/named.log" 2>&1 || true
-docker logs "$oxide_container" >"$workdir/borondns.log" 2>&1 || true
-docker exec "$oxide_container" \
+docker logs "$boron_container" >"$workdir/borondns.log" 2>&1 || true
+docker exec "$boron_container" \
     wget -qO- "http://127.0.0.1:$borondns_health_port/metrics" \
     >"$workdir/metrics.txt"
 

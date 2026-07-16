@@ -39,10 +39,10 @@ type CanonicalWireLabelRanges = SmallVec<[(usize, usize); 16]>;
 type Nsec3DomainHashCache<'a> = SmallVec<[(Nsec3Params<'a>, Option<[u8; 20]>); 1]>;
 pub(crate) type ZoneImageRecordFixedFields = [u8; 8];
 
-// ODS-NFR-MAINT-004 principal functional requirement references for the
+// BDS-NFR-MAINT-004 principal functional requirement references for the
 // experimental immutable query data-plane image:
-// - ODS-FR-ZONE-001 ODS-FR-ZONE-002 ODS-FR-ZONE-003
-// - ODS-FR-QRY-001 ODS-FR-QRY-002 ODS-FR-QRY-003
+// - BDS-FR-ZONE-001 BDS-FR-ZONE-002 BDS-FR-ZONE-003
+// - BDS-FR-QRY-001 BDS-FR-QRY-002 BDS-FR-QRY-003
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneImage {
     origin: DomainName,

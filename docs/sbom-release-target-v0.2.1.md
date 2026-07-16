@@ -8,15 +8,15 @@ files. The tagged GitHub release workflow generates and attaches:
 
 - `borondns-0.2.1-x86_64-unknown-linux-musl-borondns.cdx.json`
 - `borondns-0.2.1-x86_64-unknown-linux-musl-borondns.cdx.json.sha256`
-- `borondns-0.2.1-x86_64-unknown-linux-musl-oxide-gun.cdx.json`
-- `borondns-0.2.1-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256`
+- `borondns-0.2.1-x86_64-unknown-linux-musl-boron-gun.cdx.json`
+- `borondns-0.2.1-x86_64-unknown-linux-musl-boron-gun.cdx.json.sha256`
 - `borondns-0.2.1-x86_64-unknown-linux-musl-docker-image.cdx.json`
 - `borondns-0.2.1-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256`
 - `borondns-0.2.1-x86_64-unknown-linux-musl-sbom-manifest.tsv`
 
 The binary SBOMs are generated with `cargo-cyclonedx` from `Cargo.lock` and
 Cargo metadata for the musl release target with
-`borondns-cli/af-xdp,oxide-gun/xdp`, matching the shipped release feature set.
+`borondns-cli/af-xdp,boron-gun/xdp`, matching the shipped release feature set.
 The Docker image SBOM is generated with Syft after the release image has been
 built and smoked.
 

@@ -105,7 +105,7 @@ scripts/package-installer.sh
 
 The output is written under `target/dist/` as
 `borondns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
-archive contains `bin/borondns`, an XDP-enabled `bin/oxide-gun`, `install.sh`,
+archive contains `bin/borondns`, an XDP-enabled `bin/boron-gun`, `install.sh`,
 systemd/OpenRC service templates, the example config, licenses, and an installer
 README. On a target host:
 

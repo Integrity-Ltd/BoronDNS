@@ -1,7 +1,7 @@
 # BoronDNS Interface Compatibility Policy
 
-Status: Engineering MVP policy for `ODS-NFR-MAINT-006` and
-`ODS-IF-CONF-002`, not completed release-diff evidence.
+Status: Engineering MVP policy for `BDS-NFR-MAINT-006` and
+`BDS-IF-CONF-002`, not completed release-diff evidence.
 
 BoronDNS treats externally observable interfaces as stable under semantic
 versioning. The current baseline is recorded in

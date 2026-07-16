@@ -33,24 +33,24 @@ EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-ODS-NFR-PERF-001	benchmark-report-template.md; metric-results.tsv	setup-ready	record UDP authoritative query throughput on the Reference Hardware Profile
-ODS-NFR-PERF-002	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 direct-hit UDP latency at 50 percent target throughput
-ODS-NFR-PERF-003	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 query latency at 90 percent target throughput
-ODS-NFR-PERF-004	benchmark-report-template.md; metric-results.tsv	setup-ready	record TCP throughput and latency under pipelined query load
-ODS-NFR-PERF-005	benchmark-report-template.md; metric-results.tsv	setup-ready	record AXFR ingestion throughput and publication latency
-ODS-NFR-PERF-006	benchmark-report-template.md; metric-results.tsv	setup-ready	record IXFR refresh throughput and publication latency where primary support permits it
-ODS-NFR-PERF-007	benchmark-report-template.md; metric-results.tsv	setup-ready	record DNSSEC passive-serve latency and response-size impact
-ODS-NFR-PERF-008	benchmark-report-template.md; metric-results.tsv	setup-ready	record overload behavior and recovery timing at configured limits
-ODS-NFR-RES-001	resource-results.tsv	setup-ready	record RSS/VSZ/thread/file-descriptor samples during each benchmark phase
-ODS-NFR-RES-002	resource-results.tsv	setup-ready	record measured bytes per transferred record and compare with the release target
-ODS-NFR-RES-003	resource-results.tsv	setup-ready	record idle CPU and steady-state CPU under representative traffic
-ODS-NFR-RES-004	resource-results.tsv	setup-ready	record file-descriptor formula inputs, observed fd count, and OS limits
-ODS-NFR-RES-005	resource-results.tsv	setup-ready	record published OCI image size and binary size
-ODS-NFR-RES-006	resource-results.tsv	setup-ready	record capacity limit behavior and failure mode for configured resource caps
-ODS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	attach completed benchmark report to formal SRS MVP release evidence before final SRS acceptance
-ODS-VER-010	release-notes-snippet.md	setup-ready	publish completed benchmark result and evidence paths in release notes
-ODS-VER-012	baseline-history-template.tsv	setup-ready	update rolling baseline and triage regressions above threshold
-ODS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
+BDS-NFR-PERF-001	benchmark-report-template.md; metric-results.tsv	setup-ready	record UDP authoritative query throughput on the Reference Hardware Profile
+BDS-NFR-PERF-002	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 direct-hit UDP latency at 50 percent target throughput
+BDS-NFR-PERF-003	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 query latency at 90 percent target throughput
+BDS-NFR-PERF-004	benchmark-report-template.md; metric-results.tsv	setup-ready	record TCP throughput and latency under pipelined query load
+BDS-NFR-PERF-005	benchmark-report-template.md; metric-results.tsv	setup-ready	record AXFR ingestion throughput and publication latency
+BDS-NFR-PERF-006	benchmark-report-template.md; metric-results.tsv	setup-ready	record IXFR refresh throughput and publication latency where primary support permits it
+BDS-NFR-PERF-007	benchmark-report-template.md; metric-results.tsv	setup-ready	record DNSSEC passive-serve latency and response-size impact
+BDS-NFR-PERF-008	benchmark-report-template.md; metric-results.tsv	setup-ready	record overload behavior and recovery timing at configured limits
+BDS-NFR-RES-001	resource-results.tsv	setup-ready	record RSS/VSZ/thread/file-descriptor samples during each benchmark phase
+BDS-NFR-RES-002	resource-results.tsv	setup-ready	record measured bytes per transferred record and compare with the release target
+BDS-NFR-RES-003	resource-results.tsv	setup-ready	record idle CPU and steady-state CPU under representative traffic
+BDS-NFR-RES-004	resource-results.tsv	setup-ready	record file-descriptor formula inputs, observed fd count, and OS limits
+BDS-NFR-RES-005	resource-results.tsv	setup-ready	record published OCI image size and binary size
+BDS-NFR-RES-006	resource-results.tsv	setup-ready	record capacity limit behavior and failure mode for configured resource caps
+BDS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	attach completed benchmark report to formal SRS MVP release evidence before final SRS acceptance
+BDS-VER-010	release-notes-snippet.md	setup-ready	publish completed benchmark result and evidence paths in release notes
+BDS-VER-012	baseline-history-template.tsv	setup-ready	update rolling baseline and triage regressions above threshold
+BDS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
 EOF
 
 cat >"$evidence_dir/metric-results.tsv" <<'EOF'
@@ -125,12 +125,12 @@ cat >"$evidence_dir/operator-signoff.md" <<'EOF'
 - External operator, if applicable:
 - Accepted scope:
 - Requirements covered:
-  - ODS-NFR-PERF-001..ODS-NFR-PERF-008
-  - ODS-NFR-RES-001..ODS-NFR-RES-006
-  - ODS-VER-008
-  - ODS-VER-010
-  - ODS-VER-012
-  - ODS-VER-015
+  - BDS-NFR-PERF-001..BDS-NFR-PERF-008
+  - BDS-NFR-RES-001..BDS-NFR-RES-006
+  - BDS-VER-008
+  - BDS-VER-010
+  - BDS-VER-012
+  - BDS-VER-015
 - Result:
 - Regressions triaged:
 - Exceptions or accepted deviations:

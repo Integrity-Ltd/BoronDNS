@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static audit for SRS ODS-IF-LOG-005 canonical log field names."""
+"""Static audit for SRS BDS-IF-LOG-005 canonical log field names."""
 
 from __future__ import annotations
 
@@ -174,7 +174,7 @@ def main() -> int:
                 categories.add(category)
                 if category not in CANONICAL_CATEGORIES:
                     failures.append(
-                        f"{location}: category={category!r} is outside ODS-IF-LOG-005"
+                        f"{location}: category={category!r} is outside BDS-IF-LOG-005"
                     )
 
     if failures:

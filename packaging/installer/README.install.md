@@ -1,6 +1,6 @@
 # BoronDNS Installer
 
-This archive installs statically linked `borondns` and `oxide-gun` Linux
+This archive installs statically linked `borondns` and `boron-gun` Linux
 binaries plus a systemd or OpenRC service for `borondns`.
 
 ## Quick install
@@ -50,7 +50,7 @@ The installer:
 - creates an `borondns` runtime user and group when missing;
 - installs the server binary to `/usr/local/bin/borondns`;
 - installs the XDP-enabled lab load-generator binary to
-  `/usr/local/bin/oxide-gun`;
+  `/usr/local/bin/boron-gun`;
 - installs this operator README at
   `/usr/share/doc/borondns/README.install.md`, matching the systemd unit's
   `Documentation=` reference;
