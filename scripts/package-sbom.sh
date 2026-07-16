@@ -377,18 +377,41 @@ PY
 
 normalize_sbom() {
     local file="$1" artifact="$2"
-    python3 - "$file" "$package_name" "$version" "$target_triple" "$artifact" "$commit" "$source_date_epoch" <<'PY'
-import datetime, json, sys, uuid
-path, package, version, target, artifact, commit, epoch = sys.argv[1:]
+    python3 - "$file" "$package_name" "$version" "$target_triple" "$artifact" \
+        "$commit" "$source_date_epoch" "$repo_root" <<'PY'
+import datetime, json, pathlib, sys, uuid
+path, package, version, target, artifact, commit, epoch, source_root = sys.argv[1:]
 with open(path, "r", encoding="utf-8") as handle:
     data = json.load(handle)
+
+# cargo-cyclonedx identifies workspace path dependencies with absolute file
+# URIs. Preserve their relationships while replacing the checkout-specific
+# prefix with a stable public build location.
+source_root = str(pathlib.Path(source_root).resolve())
+source_uri = pathlib.Path(source_root).as_uri()
+logical_root = "/build/borondns"
+logical_uri = "file:///build/borondns"
+
+def normalize_paths(value):
+    if isinstance(value, dict):
+        return {key: normalize_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_paths(item) for item in value]
+    if isinstance(value, str):
+        return value.replace(source_uri, logical_uri).replace(source_root, logical_root)
+    return value
+
+data = normalize_paths(data)
 identity = f"{package}:{version}:{target}:{artifact}:{commit}"
 data["serialNumber"] = f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, identity)}"
 metadata = data.setdefault("metadata", {})
 timestamp = datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc)
 metadata["timestamp"] = timestamp.isoformat().replace("+00:00", "Z")
+encoded = json.dumps(data, sort_keys=True, separators=(",", ":"))
+if source_root in encoded or source_uri in encoded:
+    raise SystemExit(f"{path}: checkout path remained after SBOM normalization")
 with open(path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, sort_keys=True, separators=(",", ":"))
+    handle.write(encoded)
     handle.write("\n")
 PY
 }

@@ -203,6 +203,7 @@ artifact_size() {
 write_manifest_and_compare() {
     local manifest="$evidence_dir/artifact-manifest.tsv"
     local comparison="$evidence_dir/comparison.tsv"
+    local logical_cargo_bin="/build/rust-toolchain/bin/cargo"
     printf 'artifact\tbuilder\ttarget\tprofile\tfeatures\tcommit\trust_version\tbuild_command\tsha256\tsize_bytes\tevidence_path\n' >"$manifest"
     for builder in a b; do
         for artifact in borondns boron-gun; do
@@ -210,10 +211,10 @@ write_manifest_and_compare() {
             local command
             if [[ "$artifact" == "borondns" ]]; then
                 features="af-xdp"
-                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli --features af-xdp"
+                command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli --features af-xdp"
             else
                 features="xdp"
-                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p boron-gun --features xdp"
+                command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p boron-gun --features xdp"
             fi
             local path="$evidence_dir/artifacts/$builder/$artifact"
             printf '%s\t%s\t%s\trelease\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
