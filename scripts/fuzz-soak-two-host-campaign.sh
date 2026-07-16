@@ -894,7 +894,7 @@ sudo chmod -R a-w "$source_dir"
 sudo chown root:root "$remote_build_dir"
 sudo chmod 0755 "$remote_build_dir"
 cd "$source_dir"
-actual_commit="$(timeout --preserve-status --kill-after=5 30 "$git_path" rev-parse HEAD 2>/dev/null)" || {
+actual_commit="$(timeout --preserve-status --kill-after=5 30 "$git_path" -c "safe.directory=$source_dir" rev-parse HEAD 2>/dev/null)" || {
     printf 'cannot resolve immutable fuzz snapshot HEAD: %s\n' "$PWD" >&2
 	exit 1
 }
@@ -904,7 +904,7 @@ if [[ "$actual_commit" != "$expected_commit" ]]; then
 	exit 1
 fi
 runner_status=""
-if ! runner_status="$(timeout --preserve-status --kill-after=5 30 "$git_path" status --short --untracked-files=all)"; then
+if ! runner_status="$(timeout --preserve-status --kill-after=5 30 "$git_path" -c "safe.directory=$source_dir" status --short --untracked-files=all)"; then
     printf 'git status failed while checking immutable fuzz snapshot: %s\n' "$PWD" >&2
 	exit 1
 fi
@@ -922,6 +922,9 @@ export CARGO_TARGET_DIR="$target_dir"
 export BORONDNS_FUZZ_AUTHENTICATED_CARGO="$authenticated_cargo"
 export BORONDNS_FUZZ_AUTHENTICATED_RUSTC="$authenticated_rustc"
 export BORONDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ="$authenticated_cargo_fuzz"
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="$source_dir"
 RUNNER_BUILD
     printf 'mkdir -m 0700 %q\n' "$attempt_dir/evidence"
     printf 'exec scripts/fuzz-campaign.sh --toolchain %q ' "$toolchain"
