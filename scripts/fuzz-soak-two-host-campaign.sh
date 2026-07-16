@@ -664,6 +664,17 @@ unit_is_exactly_active() {
 	[[ "$active" != inactive && "$active" != failed ]] || return 1
 }
 cd "$remote_repo"
+service_user="$(id -un)"
+service_home="$(getent passwd "$service_user" | awk -F: 'NR == 1 { print $6 }')"
+[[ "$service_user" =~ ^[a-z_][a-z0-9_-]*$ && "$service_user" != root ]] || {
+	printf 'unsupported fuzz service user: %s\n' "$service_user" >&2
+	exit 1
+}
+[[ "$service_home" =~ ^/[A-Za-z0-9_./@:+-]+$ && "$service_home" != *'/../'* && "$service_home" != */.. &&
+	-d "$service_home" && ! -L "$service_home" && "$(stat -c %u "$service_home")" == "$(id -u)" ]] || {
+	printf 'unsafe fuzz service home: %s\n' "$service_home" >&2
+	exit 1
+}
 probe_timeout=30
 probe_kill_after=5
 bounded_probe() {
@@ -940,11 +951,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=codex
+User=$service_user
 WorkingDirectory=$remote_repo
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=CARGO_HOME=/home/codex/.cargo
-Environment=RUSTUP_HOME=/home/codex/.rustup
+Environment=CARGO_HOME=$service_home/.cargo
+Environment=RUSTUP_HOME=$service_home/.rustup
+Environment=CARGO_BUILD_JOBS=1
 LimitNOFILE=65536
 RuntimeMaxSec=$((duration + 3600))
 TimeoutStopSec=30
@@ -1107,6 +1119,17 @@ write_sampler_plan() {
             cat <<'REMOTE'
 
 cd "$repo"
+service_user="$(id -un)"
+service_home="$(getent passwd "$service_user" | awk -F: 'NR == 1 { print $6 }')"
+[[ "$service_user" =~ ^[a-z_][a-z0-9_-]*$ && "$service_user" != root ]] || {
+	printf 'unsupported sampler service user: %s\n' "$service_user" >&2
+	exit 1
+}
+[[ "$service_home" =~ ^/[A-Za-z0-9_./@:+-]+$ && "$service_home" != *'/../'* && "$service_home" != */.. &&
+	-d "$service_home" && ! -L "$service_home" && "$(stat -c %u "$service_home")" == "$(id -u)" ]] || {
+	printf 'unsafe sampler service home: %s\n' "$service_home" >&2
+	exit 1
+}
 require_owned_real_dir() {
 	local path="$1" label="$2" lexical real
 	[[ -d "$path" && ! -L "$path" ]] || { printf 'unsafe %s (not a real directory): %s\n' "$label" "$path" >&2; return 1; }
@@ -1786,7 +1809,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=codex
+User=$service_user
 WorkingDirectory=$repo
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LimitNOFILE=65536

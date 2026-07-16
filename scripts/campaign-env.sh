@@ -4243,13 +4243,22 @@ campaign_validate_systemd_fragment_schema() {
                 wants="$value"
                 ;;
             Service:Type) [[ "$value" == simple ]] || return 1 ;;
-            Service:User) [[ "$value" == codex ]] || return 1 ;;
+            Service:User)
+                [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ && "$value" != root ]] || return 1
+                ;;
             Service:WorkingDirectory) [[ "$value" =~ ^/[A-Za-z0-9_./@:+-]+$ && "$value" != *'/../'* && "$value" != */.. ]] || return 1 ;;
             Service:Environment)
                 case "$value" in
                 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin') key=Environment_PATH ;;
-                'CARGO_HOME=/home/codex/.cargo') key=Environment_CARGO_HOME ;;
-                'RUSTUP_HOME=/home/codex/.rustup') key=Environment_RUSTUP_HOME ;;
+                CARGO_HOME=/*)
+                    [[ "${value#CARGO_HOME=}" =~ ^/[A-Za-z0-9_./@:+-]+$ && "$value" != *'/../'* && "$value" != */.. ]] || return 1
+                    key=Environment_CARGO_HOME
+                    ;;
+                RUSTUP_HOME=/*)
+                    [[ "${value#RUSTUP_HOME=}" =~ ^/[A-Za-z0-9_./@:+-]+$ && "$value" != *'/../'* && "$value" != */.. ]] || return 1
+                    key=Environment_RUSTUP_HOME
+                    ;;
+                'CARGO_BUILD_JOBS=1') key=Environment_CARGO_BUILD_JOBS ;;
                 *) return 1 ;;
                 esac
                 ;;

@@ -2262,6 +2262,11 @@ fi
 fragment_runtime_pair="$workdir/fragment-runtime-pair.service"
 sed '/^\[Install\]$/i RuntimeMaxSec=60\nTimeoutStopSec=30' "$fragment_test_candidate" >"$fragment_runtime_pair"
 campaign_validate_systemd_fragment_schema "$fragment_runtime_pair" "$campaign_published_runner"
+fragment_portable_user="$workdir/fragment-portable-user.service"
+sed -e 's/^User=codex$/User=tibi/' \
+    -e '/^LimitNOFILE=/i Environment=CARGO_HOME=/home/tibi/.cargo\nEnvironment=RUSTUP_HOME=/home/tibi/.rustup\nEnvironment=CARGO_BUILD_JOBS=1' \
+    "$fragment_runtime_pair" >"$fragment_portable_user"
+campaign_validate_systemd_fragment_schema "$fragment_portable_user" "$campaign_published_runner"
 fragment_derived_runtime_pair="$workdir/fragment-derived-runtime-pair.service"
 sed '/^\[Install\]$/i RuntimeMaxSec=5745\nTimeoutStopSec=285' "$fragment_test_candidate" >"$fragment_derived_runtime_pair"
 campaign_validate_systemd_fragment_schema "$fragment_derived_runtime_pair" "$campaign_published_runner"
