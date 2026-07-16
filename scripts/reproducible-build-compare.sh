@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/package-common.sh"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_dir="${BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR:-$repo_root/target/evidence/reproducible-build-$timestamp}"
 target_triple="${BORONDNS_REPRODUCIBLE_BUILD_TARGET:-x86_64-unknown-linux-musl}"
@@ -78,6 +79,7 @@ fi
 cargo_bin="$(realpath -e "$cargo_bin")"
 rustc_bin="$(realpath -e "$rustc_bin")"
 toolchain_bin="$(dirname "$rustc_bin")"
+toolchain_root="$(dirname "$toolchain_bin")"
 
 if ! rustup target list --installed | grep -Fx "$target_triple" >/dev/null 2>&1; then
     rustup target add "$target_triple"
@@ -137,6 +139,9 @@ run_build() {
     local target_dir="$2"
     local target_dir_for_cargo
     target_dir_for_cargo="$(target_dir_arg "$target_dir")"
+    local release_encoded_rustflags
+    release_encoded_rustflags="$(package_release_encoded_rustflags \
+        "$repo_root" "$hermetic_cargo_home" "$target_dir" "$toolchain_root")"
     local log="$evidence_dir/build-$label.log"
 
     verify_source_identity "before build $label"
@@ -152,6 +157,7 @@ run_build() {
         cd "$repo_root"
         env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
             PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+            CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
             SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
             BORONDNS_BUILD_COMMIT="$short_commit" \
             BORONDNS_BUILD_RUST_VERSION="$rust_version" \
@@ -160,6 +166,7 @@ run_build() {
             --target "$target_triple" -p borondns-cli --features af-xdp
         env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
             PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+            CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
             SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
             BORONDNS_BUILD_COMMIT="$short_commit" \
             BORONDNS_BUILD_RUST_VERSION="$rust_version" \

@@ -192,7 +192,10 @@ run_build_target="$run_root/build-target"
 run_build_home="$run_root/hermetic-home"
 run_cargo_home="$run_root/hermetic-cargo-home"
 toolchain_bin="$(dirname "$rustc_bin")"
+toolchain_root="$(dirname "$toolchain_bin")"
 mkdir -m 0700 "$run_build_target" "$run_build_home" "$run_cargo_home"
+release_encoded_rustflags="$(package_release_encoded_rustflags \
+    "$repo_root" "$run_cargo_home" "$run_build_target" "$toolchain_root")"
 package_publication_reset "$run_root"
 package_publication_initialized=1
 
@@ -208,6 +211,7 @@ fi
     [[ "$(sha256_file "$rustc_bin" | awk '{ print $1 }')" == "$verified_rustc_sha256" ]]
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+        CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
         BORONDNS_BUILD_COMMIT="$commit" \
         BORONDNS_BUILD_RUST_VERSION="$verified_rust_version" \
         BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
@@ -216,6 +220,7 @@ fi
         --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli --features af-xdp
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+        CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
         BORONDNS_BUILD_COMMIT="$commit" \
         BORONDNS_BUILD_RUST_VERSION="$verified_rust_version" \
         BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \

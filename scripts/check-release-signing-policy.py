@@ -203,7 +203,7 @@ SIGN_STEP_SHA256 = {
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
     "Create GitHub release": "e40cc264364b4df30e46359b286780882393f89e5db2c08c667ef813e71520f5",
 }
-PACKAGE_TARGET_CONTRACT_SHA256 = "2eea31986280b4088e17a4695c69a5948cc9b71f26cb2ba6a71f7ef67889c3a9"
+PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -855,6 +855,8 @@ def package_policy_errors(text: str) -> list[str]:
         errors.append("package installer release builds must use the exact empty hermetic environment")
     if text.count('SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0') != 2:
         errors.append("package installer release builds must use the reproducibility environment")
+    if text.count('CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags"') != 2:
+        errors.append("package installer release builds must remap private build paths")
     if text.count('CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release') != 2:
         errors.append("package installer builds must bind verified Cargo and the private target directory")
     ordered_publication_contract = (
@@ -2460,6 +2462,8 @@ def reproducible_build_policy_errors(text: str) -> list[str]:
     )
     if text.count(hermetic_prefix) != 2:
         errors.append("both reproducible artifact builds must use the exact empty hermetic environment")
+    if text.count('CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags"') != 2:
+        errors.append("both reproducible artifact builds must remap private build paths")
     metadata_prefix = (
         'env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \\\n'
         '    PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \\\n'

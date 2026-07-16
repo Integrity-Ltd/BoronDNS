@@ -21,6 +21,21 @@ declare -g -a PACKAGE_RETAINED_REMOVAL_QUARANTINE_IDENTITIES=()
 declare -g -a PACKAGE_RETAINED_REMOVAL_QUARANTINE_PARENTS=()
 declare -g -a PACKAGE_RETAINED_REMOVAL_QUARANTINE_PARENT_IDENTITIES=()
 
+# Rust retains source locations used by panic and diagnostic paths even in a
+# stripped release binary. Encode fixed path remaps so release artifacts neither
+# disclose a builder account/path nor vary with private build-directory names.
+package_release_encoded_rustflags() {
+    local source_root="$1"
+    local cargo_home="$2"
+    local target_root="$3"
+    local toolchain_root="$4"
+    printf '%s\037%s\037%s\037%s' \
+        "--remap-path-prefix=$cargo_home=/build/cargo-home" \
+        "--remap-path-prefix=$target_root=/build/target" \
+        "--remap-path-prefix=$toolchain_root=/build/rust-toolchain" \
+        "--remap-path-prefix=$source_root=/build/borondns"
+}
+
 package_signal_handler() {
     local command_status=$?
     local status="$1"
