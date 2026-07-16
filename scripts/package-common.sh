@@ -29,11 +29,13 @@ package_release_encoded_rustflags() {
     local cargo_home="$2"
     local target_root="$3"
     local toolchain_root="$4"
+    # rustc applies the last matching remap. Put the broad repository mapping
+    # first so the more specific build and registry roots take precedence.
     printf '%s\037%s\037%s\037%s' \
-        "--remap-path-prefix=$cargo_home=/build/cargo-home" \
-        "--remap-path-prefix=$target_root=/build/target" \
+        "--remap-path-prefix=$source_root=/build/borondns" \
         "--remap-path-prefix=$toolchain_root=/build/rust-toolchain" \
-        "--remap-path-prefix=$source_root=/build/borondns"
+        "--remap-path-prefix=$target_root=/build/target" \
+        "--remap-path-prefix=$cargo_home=/build/cargo-home"
 }
 
 package_signal_handler() {
