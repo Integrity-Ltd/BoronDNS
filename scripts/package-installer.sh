@@ -283,10 +283,11 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
 } >"$run_staging/manifest.txt"
 
 if command -v file >/dev/null 2>&1; then
-    {
-        file "$run_staging/bin/borondns"
-        file "$run_staging/bin/boron-gun"
-    } >"$run_staging/file.txt"
+    (
+        cd "$run_staging"
+        file bin/borondns
+        file bin/boron-gun
+    ) >"$run_staging/file.txt"
 else
     printf 'file not available\n' >"$run_staging/file.txt"
 fi
@@ -295,22 +296,23 @@ static_link_confirmed() {
     local checked_binary="$1"
     local ldd_file="$2"
     local file_report="$3"
+    local checked_label="${checked_binary#"$run_staging/"}"
     if grep -Eiq 'not a dynamic executable|statically linked' "$ldd_file"; then
         return 0
     fi
-    if [[ -f "$file_report" ]] && grep -F "$checked_binary" "$file_report" | grep -Eiq 'statically linked|static-pie linked'; then
+    if [[ -f "$file_report" ]] && grep -F "$checked_label" "$file_report" | grep -Eiq 'statically linked|static-pie linked'; then
         return 0
     fi
     return 1
 }
 
 if command -v ldd >/dev/null 2>&1; then
-    ldd "$run_staging/bin/borondns" >"$run_staging/ldd-borondns.txt" 2>&1 || true
-    ldd "$run_staging/bin/boron-gun" >"$run_staging/ldd-boron-gun.txt" 2>&1 || true
+    (cd "$run_staging" && ldd bin/borondns) >"$run_staging/ldd-borondns.txt" 2>&1 || true
+    (cd "$run_staging" && ldd bin/boron-gun) >"$run_staging/ldd-boron-gun.txt" 2>&1 || true
     {
-        printf '== %s ==\n' "$run_staging/bin/borondns"
+        printf '== bin/borondns ==\n'
         cat "$run_staging/ldd-borondns.txt"
-        printf '\n== %s ==\n' "$run_staging/bin/boron-gun"
+        printf '\n== bin/boron-gun ==\n'
         cat "$run_staging/ldd-boron-gun.txt"
     } >"$run_staging/ldd.txt"
 else
