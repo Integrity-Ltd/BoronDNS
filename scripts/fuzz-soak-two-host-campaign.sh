@@ -879,6 +879,7 @@ require_owned_real_dir "$remote_build_dir" "fresh fuzz build directory" || exit 
 	printf 'remote_repo=%q\n' "$remote_repo"
 	printf 'expected_commit=%q\n' "$expected_commit"
 	printf 'remote_build_dir=%q\n' "$remote_build_dir"
+	printf 'target=%q\n' "$target"
 	printf 'git_path=%q\n' "$git_path"
 	printf 'expected_cargo_path=%q\n' "$actual_cargo"
 	printf 'expected_rustc_path=%q\n' "$actual_rustc"
@@ -889,6 +890,7 @@ require_owned_real_dir "$remote_build_dir" "fresh fuzz build directory" || exit 
 	cat <<'RUNNER_CHECK'
 source_dir="$remote_build_dir/source"
 target_dir="$remote_build_dir/target"
+fuzz_internal_artifact_dir="$source_dir/fuzz/artifacts/$target"
 exec 7<"$expected_cargo_path"
 exec 8<"$expected_rustc_path"
 exec 9<"$expected_cargo_fuzz_path"
@@ -901,8 +903,11 @@ authenticated_cargo_fuzz=/proc/self/fd/9
 "$git_path" clone --quiet --shared --no-checkout "$remote_repo" "$source_dir"
 "$git_path" -C "$source_dir" checkout --quiet --detach "$expected_commit"
 mkdir -m 0700 "$target_dir"
+mkdir -p "$fuzz_internal_artifact_dir"
 sudo chown -R root:root "$source_dir"
 sudo chmod -R a-w "$source_dir"
+sudo chown "$(id -u):$(id -g)" "$fuzz_internal_artifact_dir"
+sudo chmod 0700 "$fuzz_internal_artifact_dir"
 sudo chown root:root "$remote_build_dir"
 sudo chmod 0755 "$remote_build_dir"
 cd "$source_dir"
@@ -930,6 +935,12 @@ RUNNER_CHECK
 [[ -d "$remote_build_dir" && ! -L "$remote_build_dir" ]] || { printf 'unsafe fuzz build directory: %s\n' "$remote_build_dir" >&2; exit 1; }
 [[ "$(stat -c %u "$remote_build_dir")" == 0 && "$(stat -c %u "$source_dir")" == 0 ]] || { printf 'fuzz source snapshot is not root-owned: %s\n' "$source_dir" >&2; exit 1; }
 [[ "$(stat -c %u "$target_dir")" == "$(id -u)" ]] || { printf 'fuzz target directory owner mismatch: %s\n' "$target_dir" >&2; exit 1; }
+[[ -d "$fuzz_internal_artifact_dir" && ! -L "$fuzz_internal_artifact_dir" &&
+	"$(stat -c %u "$fuzz_internal_artifact_dir")" == "$(id -u)" &&
+	"$(stat -c %a "$fuzz_internal_artifact_dir")" == 700 ]] || {
+	printf 'fuzz internal artifact directory identity mismatch: %s\n' "$fuzz_internal_artifact_dir" >&2
+	exit 1
+}
 export CARGO_TARGET_DIR="$target_dir"
 export BORONDNS_FUZZ_AUTHENTICATED_CARGO="$authenticated_cargo"
 export BORONDNS_FUZZ_AUTHENTICATED_RUSTC="$authenticated_rustc"

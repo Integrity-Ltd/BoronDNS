@@ -2271,6 +2271,7 @@ grep -Fq 'GIT_CONFIG_KEY_0=safe.directory' "$repo_root/scripts/fuzz-soak-two-hos
 grep -Fq 'GIT_CONFIG_VALUE_0="$source_dir"' "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
 grep -Fq 'size_target_setup_reserve "$((${#targets[@]} * target_repeat))"' \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
+grep -Fq 'fuzz_internal_artifact_dir' "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
 fragment_derived_runtime_pair="$workdir/fragment-derived-runtime-pair.service"
 sed '/^\[Install\]$/i RuntimeMaxSec=5745\nTimeoutStopSec=285' "$fragment_test_candidate" >"$fragment_derived_runtime_pair"
 campaign_validate_systemd_fragment_schema "$fragment_derived_runtime_pair" "$campaign_published_runner"
