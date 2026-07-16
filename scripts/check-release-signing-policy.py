@@ -864,7 +864,7 @@ def package_policy_errors(text: str) -> list[str]:
         'env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home"',
         'verify_source_identity "after build"',
         'verify_source_identity "before artifact publication"',
-        'tar -C "$run_root" -cJf "$run_archive" "$archive_root"',
+        'tar --sort=name --mtime="@$source_epoch" --owner=0 --group=0 --numeric-owner',
         'package_acquire_publication_lock "$dist_dir" "$archive_root" publication_lock_fd',
         'verify_source_identity "terminal publication"',
         'package_publish_candidate "$run_staging" "$staging"',

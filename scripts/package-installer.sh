@@ -339,7 +339,8 @@ verify_source_identity "before artifact publication"
 
 install -m 0755 "$binary" "$run_binary_asset"
 install -m 0755 "$boron_gun_binary" "$run_boron_gun_asset"
-tar -C "$run_root" -cJf "$run_archive" "$archive_root"
+tar --sort=name --mtime="@$source_epoch" --owner=0 --group=0 --numeric-owner \
+    -C "$run_root" -cJf "$run_archive" "$archive_root"
 (
     cd "$run_root"
     sha256_file "$(basename "$run_archive")" >"$(basename "$run_archive").sha256"
