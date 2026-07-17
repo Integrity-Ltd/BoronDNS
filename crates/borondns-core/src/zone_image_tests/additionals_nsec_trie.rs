@@ -774,7 +774,8 @@
 
         assert_eq!(image.child_hashes.len(), 1);
         assert_eq!(image.nodes[0].child_hash, 0);
-        assert!(image.child_hash_slots.len() >= CHILD_HASH_FANOUT_THRESHOLD);
+        assert!(image.child_hash_slots_u16.len() >= CHILD_HASH_FANOUT_THRESHOLD);
+        assert!(image.child_hash_slots_u32.is_empty());
         for qname in [
             "host0.example.test.",
             "HOST0.example.test.",
@@ -986,4 +987,3 @@
             ))
         );
     }
-

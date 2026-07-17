@@ -6,7 +6,35 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
-No unreleased project-facing changes.
+### Changed
+
+- Promoted ZoneImage global arena offsets and record/relation ordinals to
+  selective `u64` fields while retaining compact query-local indexes.
+- Reworked the concurrent ZoneStore fuzz target around four persistent workers
+  so multi-day AddressSanitizer campaigns retain real mutation races without
+  accumulating per-input OS-thread state.
+- Bounded equivalent full-capacity lifecycle queue probes per fuzz input after
+  the first 24-hour campaign produced multi-second slow units by repeating the
+  same expensive overflow transition.
+- Removed the rejected canonical range-sharding prototype after paired
+  physical-link UDP tests found no measurable unsaturated service penalty from
+  selective `u64`.
+- Added code-aligned ZoneImage capacity documentation covering encoded,
+  DNS-format, transfer-ingest, and reload-memory limits.
+
+### Fixed
+
+- Reserved compact `u32::MAX` sentinel values at builder boundaries and added
+  checked aggregate edge and child-hash-slot limits instead of permitting
+  ambiguous or overflowing compact indexes.
+- Updated architectural invariant checks for the current `u32` compact fields
+  and RRSIG relation-builder structure.
+- Corrected the lifecycle fuzz oracle for reactivation from an already-EXPIRED
+  synthesized control view, and added the minimized sequence as a unit-test
+  regression.
+- Canonicalized validated saved-plan paths before fuzz campaign management so
+  the documented relative `status`, `collect`, `resume`, and `cleanup` commands
+  match immutable absolute command paths.
 
 ## 0.9.0 - 2026-07-16
 

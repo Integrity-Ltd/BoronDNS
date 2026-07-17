@@ -720,6 +720,14 @@ failure counters instead of falling back to ordinary snapshot lookup. The old
 snapshot response composer is retained only as a hidden test/benchmark/oracle
 boundary while final target-hardware evidence is collected.
 
+Large-zone operators should use
+`docs/zone-image-capacity-limits.md` for exact encoded and DNS-format limits,
+the default 4 GiB transfer-ingest guard, and reload working-set planning. Zones
+whose transfers exceed that default must raise
+`limits.max_transfer_ingest_bytes` deliberately and provision enough memory for
+the decoded snapshot, builder workspace, new image, and still-referenced prior
+generation.
+
 SRS v0.9.1 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained
 health response-time evidence, and rate-limit behavior under

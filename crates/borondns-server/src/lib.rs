@@ -6325,6 +6325,7 @@ fn lifecycle_soa_rdata(serial: u32) -> Vec<u8> {
 fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
     const ZONE_COUNT: usize = 4;
     const MAX_OPERATIONS: usize = 512;
+    const MAX_OVERFLOW_PROBES: usize = 4;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -6555,6 +6556,7 @@ fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
     let mut attempts: [Option<(ZoneRefreshAttempt, Option<ZoneTransferPlan>)>; ZONE_COUNT] =
         std::array::from_fn(|_| None);
     let mut stats = LifecycleFuzzStats::default();
+    let mut overflow_probes = 0usize;
 
     for operation in data.chunks(3).take(MAX_OPERATIONS) {
         let opcode = operation.first().copied().unwrap_or(0) % 17;
@@ -6771,38 +6773,47 @@ fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
                 active_keys.remove(&origin.canonical_key());
             }
             10 => {
-                let missing = NOTIFY_REFRESH_QUEUE_CAPACITY.saturating_sub(pending.len());
-                for filler in 0..missing {
-                    let filler =
-                        DomainName::from_absolute_str(&format!("filler-{filler}.lifecycle-fuzz."))
-                            .expect("generated filler name is valid");
-                    let _ = enqueue_pending_refresh_request_at(
-                        &mut pending,
-                        &mut pending_keys,
-                        &active_keys,
-                        RefreshRequest::new(filler, Some(1), RefreshReason::Notify),
-                        modeled_now,
-                    );
-                }
-                let overflow_plan = transfer_plan.get(origin);
-                if let Some(plan) = overflow_plan
-                    && let Some(dropped) = enqueue_pending_refresh_request_at(
-                        &mut pending,
-                        &mut pending_keys,
-                        &active_keys,
-                        RefreshRequest::new(origin.clone(), None, RefreshReason::Catalog)
-                            .with_plan_generation(&plan),
-                        modeled_now,
-                    )
-                {
-                    dropped.rollback_notify_dedup_after_queue_drop();
-                    stats.overflow_drops = stats.overflow_drops.saturating_add(1);
-                    if dropped.incarnation_is_current(&registry, &transfer_plan) {
-                        registry.defer_refresh_after_queue_drop_at(
-                            &dropped,
+                // Filling the real 1,024-entry queue is intentionally expensive.
+                // Repeating that operation adds no new state-machine coverage and
+                // let libFuzzer synthesize multi-second units during the first long
+                // campaign. Keep enough probes to cover full, partially drained,
+                // and refilled states without rewarding unbounded repetition.
+                if overflow_probes < MAX_OVERFLOW_PROBES {
+                    overflow_probes += 1;
+                    let missing = NOTIFY_REFRESH_QUEUE_CAPACITY.saturating_sub(pending.len());
+                    for filler in 0..missing {
+                        let filler = DomainName::from_absolute_str(&format!(
+                            "filler-{filler}.lifecycle-fuzz."
+                        ))
+                        .expect("generated filler name is valid");
+                        let _ = enqueue_pending_refresh_request_at(
+                            &mut pending,
+                            &mut pending_keys,
+                            &active_keys,
+                            RefreshRequest::new(filler, Some(1), RefreshReason::Notify),
                             modeled_now,
-                            modeled_unix_secs,
                         );
+                    }
+                    let overflow_plan = transfer_plan.get(origin);
+                    if let Some(plan) = overflow_plan
+                        && let Some(dropped) = enqueue_pending_refresh_request_at(
+                            &mut pending,
+                            &mut pending_keys,
+                            &active_keys,
+                            RefreshRequest::new(origin.clone(), None, RefreshReason::Catalog)
+                                .with_plan_generation(&plan),
+                            modeled_now,
+                        )
+                    {
+                        dropped.rollback_notify_dedup_after_queue_drop();
+                        stats.overflow_drops = stats.overflow_drops.saturating_add(1);
+                        if dropped.incarnation_is_current(&registry, &transfer_plan) {
+                            registry.defer_refresh_after_queue_drop_at(
+                                &dropped,
+                                modeled_now,
+                                modeled_unix_secs,
+                            );
+                        }
                     }
                 }
             }
@@ -6886,7 +6897,13 @@ fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
                 if let Some(plan) = transfer_plan.get(origin)
                     && let Some(current) = store.exact_snapshot_with_serial_for_transfer(origin)
                 {
-                    let retained = current.snapshot_arc_for_transfer().clone();
+                    // An EXPIRED transfer view carries a synthesized control
+                    // snapshot whose state matches the directory. It is not the
+                    // installed ACTIVE snapshot that activation deliberately
+                    // retains, so pointer identity is meaningful only when the
+                    // captured view was already ACTIVE.
+                    let retained_active = (current.metadata().state == ZoneState::Active)
+                        .then(|| current.snapshot_arc_for_transfer().clone());
                     if current.metadata().state == ZoneState::Active {
                         assert!(store.expire_zone_if_snapshot(&current));
                     }
@@ -6901,10 +6918,13 @@ fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
                         let reactivated = store
                             .exact_snapshot_with_serial_for_transfer(origin)
                             .expect("current confirmation reactivates retained snapshot");
-                        assert!(Arc::ptr_eq(
-                            &retained,
-                            reactivated.snapshot_arc_for_transfer()
-                        ));
+                        assert_eq!(reactivated.metadata().serial, expired.metadata().serial);
+                        if let Some(retained) = retained_active {
+                            assert!(Arc::ptr_eq(
+                                &retained,
+                                reactivated.snapshot_arc_for_transfer()
+                            ));
+                        }
                     }
                 }
             }

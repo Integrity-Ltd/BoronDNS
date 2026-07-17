@@ -2,17 +2,125 @@
     fn compact_rdata_range_keeps_image_record_and_rrset_metadata_bounded() {
         assert_eq!(mem::size_of::<RdataRange>(), mem::size_of::<BlobRange>());
         assert_eq!(mem::size_of::<ImageRecord>(), mem::size_of::<BlobRange>());
-        assert_eq!(mem::size_of::<ImageRrsetRelation>(), 12);
-        assert_eq!(mem::size_of::<ImageRrset>(), 48);
+        assert_eq!(mem::size_of::<ImageRrsetRelation>(), 16);
+        assert_eq!(mem::size_of::<ImageRrset>(), 72);
+        assert_eq!(mem::size_of::<NameNode>(), 36);
+        assert_eq!(mem::align_of::<NameNode>(), 4);
+        assert_eq!(mem::size_of::<ImageChildHash>(), 12);
         assert_eq!(mem::size_of::<PackedRdataEncoding>(), 2);
-        assert_eq!(mem::size_of::<ZoneImageSelectedRecord>(), 24);
+        assert_eq!(mem::size_of::<ZoneImageSelectedRecord>(), 32);
         assert_eq!(mem::size_of::<ZoneImageWireRecord<'static>>(), 48);
     }
 
     #[test]
+    fn global_offsets_and_ordinals_represent_values_above_u32() {
+        let above_u32 = u64::from(u32::MAX) + 1;
+        let range = BlobRange {
+            offset: above_u32,
+            len: 1,
+        };
+        let rdata = RdataRange {
+            offset: above_u32,
+            len: 1,
+            rdata_encoding: PackedRdataEncoding::copy(),
+        };
+        let rrset = ImageRrset {
+            owner_wire: range,
+            fixed_fields: [0; 8],
+            negative_ttl_bytes: [0; 4],
+            first_record: above_u32,
+            record_count: 0,
+            owner_label_count: 0,
+            relation_span: u32::MAX,
+            direct_answer_body_len: 0,
+            ownerless_wire_len: 0,
+            wire: range,
+        };
+        let relation = ImageRrsetRelation {
+            kind: ImageRrsetRelationKind::Rrsig,
+            rrset_id: ZoneImageRrsetId(0),
+            record_index: above_u32,
+            rdata_len: 0,
+            owner_wire_len: 0,
+        };
+        let span = ImageRrsetRelationSpan::new(above_u32, 0, &[])
+            .expect("u64 relation ordinal is representable");
+
+        assert_eq!(range.offset, above_u32);
+        assert_eq!(rdata.offset, above_u32);
+        assert_eq!(rrset.first_record, above_u32);
+        assert_eq!(relation.record_index, above_u32);
+        assert_eq!(span.first_relation, above_u32);
+    }
+
+    #[test]
+    fn compact_u32_indexes_reserve_the_none_sentinel() {
+        let largest_valid = usize::try_from(u32::MAX - 1).expect("supported pointer width");
+        let sentinel = usize::try_from(u32::MAX).expect("supported pointer width");
+
+        assert_eq!(
+            checked_u32_index(largest_valid, "test indexes"),
+            Ok(u32::MAX - 1)
+        );
+        assert_eq!(
+            checked_u32_index(sentinel, "test indexes"),
+            Err(ZoneImageBuildError::TooManyItems {
+                kind: "test indexes"
+            })
+        );
+        assert_eq!(
+            checked_compact_array_end(largest_valid - 9, 10, "test slots"),
+            Ok(sentinel)
+        );
+        assert_eq!(
+            checked_compact_array_end(largest_valid - 9, 11, "test slots"),
+            Err(ZoneImageBuildError::TooManyItems { kind: "test slots" })
+        );
+    }
+
+    #[test]
+    fn child_hash_slots_widen_only_above_the_u16_edge_offset_space() {
+        let fanout = usize::from(u16::MAX) + 1;
+        let mut labels = Vec::with_capacity(fanout * mem::size_of::<u32>());
+        let mut edges = Vec::with_capacity(fanout);
+        for index in 0..fanout {
+            let offset = labels.len() as u64;
+            labels.extend_from_slice(&(index as u32).to_be_bytes());
+            edges.push(NameEdge {
+                label: BlobRange { offset, len: 4 },
+                child: index as u32,
+            });
+        }
+        let mut nodes = [NameNode {
+            first_edge: 0,
+            edge_count: fanout as u32,
+            low_rrtype_bitmap: NO_NODE_LOW_RRTYPE_BITMAP,
+            first_rrset: u32::MAX,
+            rrset_count: 0,
+            parent: 0,
+            depth: 0,
+            nearest_in_delegation: u32::MAX,
+            nearest_in_dname: u32::MAX,
+            child_hash: u32::MAX,
+        }];
+
+        let BuiltChildHashes {
+            hashes,
+            slots_u16: narrow_slots,
+            slots_u32: wide_slots,
+        } = build_child_hashes(&mut nodes, &edges, &labels).expect("wide child hash builds");
+
+        assert!(narrow_slots.is_empty());
+        assert_eq!(wide_slots.len(), fanout * 2);
+        assert_eq!(hashes.len(), 1);
+        assert!(hashes[0].wide_slots);
+        assert_eq!(nodes[0].child_hash, 0);
+    }
+
+    #[test]
     fn plan_answer_indexes_stay_compact() {
-        assert_eq!(mem::size_of::<PlanAnswer>(), 28);
-        assert_eq!(mem::align_of::<PlanAnswer>(), 4);
+        assert_eq!(mem::size_of::<PlanAnswer>(), 40);
+        assert_eq!(mem::align_of::<PlanAnswer>(), 8);
         assert_eq!(
             mem::size_of::<IndirectionTargetWire<'static>>(),
             mem::size_of::<Option<&'static [u8]>>()
@@ -836,4 +944,3 @@
         assert_eq!(wildcard_minimal.additional_rrsets().len(), 1);
         assert_eq!(wildcard_minimal.owner_overrides.len(), 1);
     }
-

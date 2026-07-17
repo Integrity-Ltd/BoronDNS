@@ -30,7 +30,7 @@ const PLAN_FLAG_AUTHORITY_FIRST_RRSET_IS_SOA: u8 = 1 << 7;
 const DIRECT_ANSWER_BODY_RECORDS_FALLBACK: u32 = u32::MAX;
 const LOW_RRTYPE_BITMAP_WORDS: usize = 4;
 const NO_AUTHORITY_SOA_INDEX: u16 = u16::MAX;
-const NO_NODE_LOW_RRTYPE_BITMAP: u16 = u16::MAX;
+const NO_NODE_LOW_RRTYPE_BITMAP: u32 = u32::MAX;
 type OwnerOverrideWire = InlineNameWire;
 type LowercaseLabelKey = SmallVec<[u8; LABEL_INLINE_CAPACITY]>;
 type Nsec3ParamHashCache = SmallVec<[(u16, Option<[u8; 20]>); 1]>;
@@ -50,7 +50,8 @@ pub struct ZoneImage {
     nodes: Box<[NameNode]>,
     edges: Box<[NameEdge]>,
     child_hashes: Box<[ImageChildHash]>,
-    child_hash_slots: Box<[u16]>,
+    child_hash_slots_u16: Box<[u16]>,
+    child_hash_slots_u32: Box<[u32]>,
     node_low_rrtype_bitmaps: Box<[u64]>,
     rrsets: Box<[ImageRrset]>,
     low_rrtype_bitmap: [u64; LOW_RRTYPE_BITMAP_WORDS],
@@ -203,10 +204,10 @@ pub enum ZoneImageLookupOutcome {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ZoneImageBuildError {
-    #[error("zone image cannot encode more than u32::MAX {kind}")]
+    #[error("zone image cannot encode {kind}: compact field capacity exceeded")]
     TooManyItems { kind: &'static str },
 
-    #[error("zone image arena {name} exceeds u32::MAX bytes")]
+    #[error("zone image arena {name} exceeds the platform's addressable memory")]
     ArenaTooLarge { name: &'static str },
 
     #[error("record owner {owner} is outside zone origin {origin}")]
@@ -293,8 +294,8 @@ impl PackedRdataEncoding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NameNode {
     first_edge: u32,
-    edge_count: u16,
-    low_rrtype_bitmap: u16,
+    edge_count: u32,
+    low_rrtype_bitmap: u32,
     first_rrset: u32,
     rrset_count: u16,
     parent: u32,
@@ -314,6 +315,13 @@ struct NameEdge {
 struct ImageChildHash {
     first_slot: u32,
     slot_mask: u32,
+    wide_slots: bool,
+}
+
+struct BuiltChildHashes {
+    hashes: Vec<ImageChildHash>,
+    slots_u16: Vec<u16>,
+    slots_u32: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,7 +329,7 @@ struct ImageRrset {
     owner_wire: BlobRange,
     fixed_fields: ZoneImageRecordFixedFields,
     negative_ttl_bytes: [u8; 4],
-    first_record: u32,
+    first_record: u64,
     record_count: u16,
     owner_label_count: u16,
     relation_span: u32,
@@ -393,9 +401,11 @@ struct ImageNsec3Range {
     next_hash: [u8; 20],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageRrsigCovered {
     rrset_id: ZoneImageRrsetId,
+    owner_key: String,
+    class: u16,
     covered_type: u16,
 }
 
@@ -414,14 +424,14 @@ enum ImageRrsetRelationKind {
 struct ImageRrsetRelation {
     kind: ImageRrsetRelationKind,
     rrset_id: ZoneImageRrsetId,
-    record_index: u32,
+    record_index: u64,
     rdata_len: u16,
     owner_wire_len: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ImageRrsetRelationSpan {
-    first_relation: u32,
+    first_relation: u64,
     relation_count: u16,
     single_name_target_offset: u16,
     rrsig_offset: u16,
@@ -432,7 +442,7 @@ struct ImageRrsetRelationSpan {
 
 impl ImageRrsetRelationSpan {
     fn new(
-        first_relation: u32,
+        first_relation: u64,
         relation_count: u16,
         relations: &[ImageRrsetRelation],
     ) -> Result<Self, ZoneImageBuildError> {
@@ -545,13 +555,13 @@ fn relation_kind_offset(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BlobRange {
-    offset: u32,
+    offset: u64,
     len: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RdataRange {
-    offset: u32,
+    offset: u64,
     len: u16,
     rdata_encoding: PackedRdataEncoding,
 }
@@ -654,7 +664,7 @@ impl ZoneImagePlanSectionAccumulator {
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
-const SMALL_CHILD_LINEAR_SCAN_THRESHOLD: u16 = 4;
+const SMALL_CHILD_LINEAR_SCAN_THRESHOLD: u32 = 4;
 const CHILD_HASH_FANOUT_THRESHOLD: usize = 1024;
 
 fn observe_zone_image_record_summary(
@@ -790,8 +800,8 @@ impl ZoneImage {
     #[doc(hidden)]
     pub fn widest_child_lookup_profile(&self) -> Option<ZoneImageChildLookupProfile> {
         let node = self.nodes.iter().max_by_key(|node| node.edge_count)?;
-        let edges = &self.edges
-            [node.first_edge as usize..(node.first_edge + u32::from(node.edge_count)) as usize];
+        let edges =
+            &self.edges[node.first_edge as usize..(node.first_edge + node.edge_count) as usize];
         let labels = edges
             .iter()
             .map(|edge| self.blob(&self.labels, edge.label).to_vec())
@@ -1188,7 +1198,7 @@ impl ZoneImage {
                         .saturating_add(2usize.saturating_mul(record_count)),
                 )
             } else {
-                let body_offset = rrset.wire.offset.checked_add(rrset.wire.len)?;
+                let body_offset = rrset.wire.offset.checked_add(u64::from(rrset.wire.len))?;
                 (
                     ZoneImageDirectRrsetBody::Template(self.blob(
                         &self.wire,
@@ -1811,7 +1821,7 @@ impl ZoneImage {
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+            let record = self.records[(rrset.first_record + u64::from(offset)) as usize];
             visit(ZoneImageWireRecord {
                 owner_wire,
                 fixed_fields,
@@ -2006,7 +2016,7 @@ impl ZoneImage {
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+            let record = self.records[(rrset.first_record + u64::from(offset)) as usize];
             append_stored_record_fields_wire(
                 owner_wire,
                 fixed_fields,
@@ -2099,9 +2109,7 @@ impl ZoneImage {
         if index == NO_NODE_LOW_RRTYPE_BITMAP {
             return None;
         }
-        self.node_low_rrtype_bitmaps
-            .get(usize::from(index))
-            .copied()
+        self.node_low_rrtype_bitmaps.get(index as usize).copied()
     }
 
     fn minimal_any_rrset_at_node(&self, node_index: u32, qclass: u16) -> Option<ZoneImageRrsetId> {
@@ -3369,8 +3377,8 @@ impl ZoneImage {
         if node.edge_count == 0 {
             return None;
         }
-        let edges = &self.edges
-            [node.first_edge as usize..(node.first_edge + u32::from(node.edge_count)) as usize];
+        let edges =
+            &self.edges[node.first_edge as usize..(node.first_edge + node.edge_count) as usize];
         if let [edge] = edges {
             return lowercase_stored_label_eq_with_ascii_lowercase_hint(
                 self.blob(&self.labels, edge.label),
@@ -3435,10 +3443,19 @@ impl ZoneImage {
         let mut slot =
             child_label_hash_with_ascii_lowercase_hint(label, label_ascii_lowercase) & mask;
         for _ in 0..=mask {
-            let edge_offset = self.child_hash_slots[first_slot + slot];
-            if edge_offset == u16::MAX {
-                return Some(None);
-            }
+            let edge_offset = if !hash.wide_slots {
+                let edge_offset = self.child_hash_slots_u16[first_slot + slot];
+                if edge_offset == u16::MAX {
+                    return Some(None);
+                }
+                u32::from(edge_offset)
+            } else {
+                let edge_offset = self.child_hash_slots_u32[first_slot + slot];
+                if edge_offset == u32::MAX {
+                    return Some(None);
+                }
+                edge_offset
+            };
             let edge = edges[edge_offset as usize];
             if lowercase_stored_label_eq_with_ascii_lowercase_hint(
                 self.blob(&self.labels, edge.label),
@@ -4059,11 +4076,12 @@ impl ZoneImageBuilder {
             !rdatas.is_empty(),
             "ZoneImage rrsets are built from grouped snapshot records"
         );
-        let rrset_index = checked_u32(self.image_rrsets.len(), "rrsets").map(ZoneImageRrsetId)?;
+        let rrset_index =
+            checked_u32_index(self.image_rrsets.len(), "rrsets").map(ZoneImageRrsetId)?;
         let owner_wire = owner.to_wire();
         let owner_wire_ref = push_blob(&mut self.names, &owner_wire, "names")?;
-        let first_record = checked_u32(self.image_records.len(), "records")?;
-        let wire_start = checked_u32(self.wire.len(), "wire")?;
+        let first_record = checked_u64(self.image_records.len(), "records")?;
+        let wire_start = checked_u64(self.wire.len(), "wire")?;
         let fixed_fields = zone_image_record_fixed_fields(rr_type, class, ttl);
 
         for rdata in rdatas {
@@ -4082,7 +4100,7 @@ impl ZoneImageBuilder {
             self.wire.extend_from_slice(rdata);
         }
 
-        let wire_end = checked_u32(self.wire.len(), "wire")?;
+        let wire_end = checked_u64(self.wire.len(), "wire")?;
         let direct_copy_eligible = direct_copy_rdata_type(rr_type);
         let direct_answer_body_len =
             push_direct_answer_body(&mut self.wire, direct_copy_eligible, fixed_fields, rdatas)?;
@@ -4117,11 +4135,16 @@ impl ZoneImageBuilder {
             ownerless_wire_len,
             wire: BlobRange {
                 offset: wire_start,
-                len: wire_end - wire_start,
+                len: checked_u32(
+                    usize::try_from(wire_end - wire_start).map_err(|_| {
+                        ZoneImageBuildError::TooManyItems {
+                            kind: "RRset wire bytes",
+                        }
+                    })?,
+                    "RRset wire bytes",
+                )?,
             },
         });
-        self.rrset_index
-            .insert((owner_key, rr_type, class), rrset_index);
         if rr_type == RecordType::Nsec as u16 {
             self.nsec_rrsets.push(rrset_index);
         } else if rr_type == RecordType::Nsec3 as u16 {
@@ -4140,10 +4163,14 @@ impl ZoneImageBuilder {
             for covered_type in covered_types {
                 self.rrsig_covered.push(ImageRrsigCovered {
                     rrset_id: rrset_index,
+                    owner_key: owner_key.clone(),
+                    class,
                     covered_type,
                 });
             }
         }
+        self.rrset_index
+            .insert((owner_key, rr_type, class), rrset_index);
         Ok(rrset_index)
     }
 
@@ -4168,7 +4195,7 @@ impl ZoneImageBuilder {
             node_index = match existing {
                 Some(child) => child,
                 None => {
-                    let child = checked_u32(self.build_nodes.len(), "nodes")?;
+                    let child = checked_u32_index(self.build_nodes.len(), "nodes")?;
                     let depth = self.build_nodes[node_index as usize].depth + 1;
                     self.build_nodes.push(BuildNode {
                         parent: node_index,
@@ -4218,6 +4245,10 @@ impl ZoneImageBuilder {
                     .map(|rrset| rrset.0)
                     .unwrap_or(inherited_dname);
             let first_edge = checked_u32(edges.len(), "edges")?;
+            let edge_count = checked_u32(build_node.children.len(), "edges")?;
+            first_edge
+                .checked_add(edge_count)
+                .ok_or(ZoneImageBuildError::TooManyItems { kind: "edges" })?;
             for (label, child) in &build_node.children {
                 let label_ref = push_blob(&mut labels, label, "labels")?;
                 edges.push(NameEdge {
@@ -4228,7 +4259,7 @@ impl ZoneImageBuilder {
             let first_rrset = build_node.rrsets.first().map(|id| id.0).unwrap_or(u32::MAX);
             nodes.push(NameNode {
                 first_edge,
-                edge_count: checked_u16(build_node.children.len(), "edges")?,
+                edge_count,
                 low_rrtype_bitmap: NO_NODE_LOW_RRTYPE_BITMAP,
                 first_rrset,
                 rrset_count: checked_u16(build_node.rrsets.len(), "rrsets")?,
@@ -4239,7 +4270,11 @@ impl ZoneImageBuilder {
                 child_hash: u32::MAX,
             });
         }
-        let (child_hashes, child_hash_slots) = build_child_hashes(&mut nodes, &edges, &labels)?;
+        let BuiltChildHashes {
+            hashes: child_hashes,
+            slots_u16: child_hash_slots_u16,
+            slots_u32: child_hash_slots_u32,
+        } = build_child_hashes(&mut nodes, &edges, &labels)?;
         let node_low_rrtype_bitmaps =
             build_node_low_rrtype_bitmaps(&self.image_rrsets, &self.build_nodes, &mut nodes)?;
 
@@ -4257,7 +4292,8 @@ impl ZoneImageBuilder {
         let hot_bytes = nodes.len() * mem::size_of::<NameNode>()
             + edges.len() * mem::size_of::<NameEdge>()
             + child_hashes.len() * mem::size_of::<ImageChildHash>()
-            + child_hash_slots.len() * mem::size_of::<u16>()
+            + child_hash_slots_u16.len() * mem::size_of::<u16>()
+            + child_hash_slots_u32.len() * mem::size_of::<u32>()
             + node_low_rrtype_bitmaps.len() * mem::size_of::<u64>()
             + self.image_rrsets.len() * mem::size_of::<ImageRrset>()
             + mem::size_of::<[u64; LOW_RRTYPE_BITMAP_WORDS]>()
@@ -4331,11 +4367,12 @@ impl ZoneImageBuilder {
             node_count: nodes.len(),
             edge_count: edges.len(),
             child_hash_count: child_hashes.len(),
-            child_hash_slot_count: child_hash_slots.len(),
-            child_hash_slot_bytes: child_hash_slots.len() * mem::size_of::<u16>(),
+            child_hash_slot_count: child_hash_slots_u16.len() + child_hash_slots_u32.len(),
+            child_hash_slot_bytes: child_hash_slots_u16.len() * mem::size_of::<u16>()
+                + child_hash_slots_u32.len() * mem::size_of::<u32>(),
             max_child_fanout: nodes
                 .iter()
-                .map(|node| usize::from(node.edge_count))
+                .map(|node| node.edge_count as usize)
                 .max()
                 .unwrap_or_default(),
             max_rrsets_per_name: nodes
@@ -4365,7 +4402,8 @@ impl ZoneImageBuilder {
             nodes: nodes.into_boxed_slice(),
             edges: edges.into_boxed_slice(),
             child_hashes: child_hashes.into_boxed_slice(),
-            child_hash_slots: child_hash_slots.into_boxed_slice(),
+            child_hash_slots_u16: child_hash_slots_u16.into_boxed_slice(),
+            child_hash_slots_u32: child_hash_slots_u32.into_boxed_slice(),
             node_low_rrtype_bitmaps: node_low_rrtype_bitmaps.into_boxed_slice(),
             rrsets: self.image_rrsets.into_boxed_slice(),
             low_rrtype_bitmap,
@@ -4448,7 +4486,7 @@ impl ZoneImageBuilder {
                 continue;
             };
             for offset in 0..rrset.record_count {
-                let record = self.image_records[(rrset.first_record + u32::from(offset)) as usize];
+                let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
                 let rdata = rdata_from_arena(&self.rdata, record.rdata);
                 let Some(next_key) =
                     push_canonical_order_wire_key(&mut self.names, rdata, false, "names")?
@@ -4541,10 +4579,11 @@ impl ZoneImageBuilder {
     }
 
     fn precompute_rrset_relation_spans(&mut self) -> Result<(), ZoneImageBuildError> {
-        for rrset_index in 0..self.image_rrsets.len() {
+        let rrsig_rrsets_by_covered = self.rrsig_rrsets_by_covered();
+        for (rrset_index, rrsig_rrset_id) in rrsig_rrsets_by_covered.into_iter().enumerate() {
             let mut relations = SmallVec::<[ImageRrsetRelation; 8]>::new();
             self.push_single_name_target_relation_for_rrset(rrset_index, &mut relations);
-            self.push_rrsig_relations_for_rrset(rrset_index, &mut relations)?;
+            self.push_rrsig_relations_for_rrset(rrset_index, rrsig_rrset_id, &mut relations)?;
             self.push_referral_glue_relations_for_rrset(rrset_index, &mut relations);
             self.push_referral_dnssec_relations_for_rrset(rrset_index, &mut relations);
             self.push_additional_relations_for_rrset(rrset_index, &mut relations);
@@ -4553,11 +4592,12 @@ impl ZoneImageBuilder {
                 continue;
             }
 
-            let first_relation = checked_u32(self.rrset_relations.len(), "rrset relations")?;
+            let first_relation = checked_u64(self.rrset_relations.len(), "rrset relations")?;
             self.rrset_relations.extend(relations.iter().copied());
             let relation_count = checked_u16(relations.len(), "rrset relations")?;
             let span = ImageRrsetRelationSpan::new(first_relation, relation_count, &relations)?;
-            let span_index = checked_u32(self.rrset_relation_spans.len(), "rrset relation spans")?;
+            let span_index =
+                checked_u32_index(self.rrset_relation_spans.len(), "rrset relation spans")?;
             set_rrset_flag(
                 &mut self.rrsig_rrset_flags,
                 rrset_index,
@@ -4572,6 +4612,25 @@ impl ZoneImageBuilder {
             self.image_rrsets[rrset_index].relation_span = span_index;
         }
         Ok(())
+    }
+
+    fn rrsig_rrsets_by_covered(&self) -> Vec<Option<ZoneImageRrsetId>> {
+        let mut rrsig_rrsets = vec![None; self.image_rrsets.len()];
+        for covered in &self.rrsig_covered {
+            if covered.covered_type == RecordType::Rrsig as u16 {
+                continue;
+            }
+            let key = (
+                covered.owner_key.clone(),
+                covered.covered_type,
+                covered.class,
+            );
+            let Some(covered_rrset_id) = self.rrset_index.get(&key) else {
+                continue;
+            };
+            rrsig_rrsets[covered_rrset_id.0 as usize] = Some(covered.rrset_id);
+        }
+        rrsig_rrsets
     }
 
     fn push_single_name_target_relation_for_rrset(
@@ -4589,7 +4648,7 @@ impl ZoneImageBuilder {
         relations.push(ImageRrsetRelation {
             kind: ImageRrsetRelationKind::SingleNameTarget,
             rrset_id: ZoneImageRrsetId(rrset_index as u32),
-            record_index: target_index as u32,
+            record_index: target_index as u64,
             rdata_len: 0,
             owner_wire_len: 0,
         });
@@ -4598,45 +4657,33 @@ impl ZoneImageBuilder {
     fn push_rrsig_relations_for_rrset(
         &self,
         covered_index: usize,
+        rrsig_rrset_id: Option<ZoneImageRrsetId>,
         relations: &mut SmallVec<[ImageRrsetRelation; 8]>,
     ) -> Result<(), ZoneImageBuildError> {
         let covered_rrset = self.image_rrsets[covered_index];
         let covered_type = covered_rrset.rr_type();
-        if covered_type == RecordType::Rrsig as u16 {
+        let Some(rrsig_rrset_id) = rrsig_rrset_id else {
             return Ok(());
-        }
+        };
 
-        let covered_owner = blob_from_arena(&self.names, covered_rrset.owner_wire);
-        for index in &self.rrsig_covered {
-            if index.covered_type != covered_type {
+        let rrsig_rrset = self.image_rrsets[rrsig_rrset_id.0 as usize];
+        for offset in 0..rrsig_rrset.record_count {
+            let record_index = rrsig_rrset.first_record + u64::from(offset);
+            let record = self.image_records[record_index as usize];
+            let rdata = rdata_from_arena(&self.rdata, record.rdata);
+            if rrsig_type_covered_rdata(rdata) != Some(covered_type) {
                 continue;
             }
-
-            let rrsig_rrset = self.image_rrsets[index.rrset_id.0 as usize];
-            if rrsig_rrset.class() != covered_rrset.class()
-                || blob_from_arena(&self.names, rrsig_rrset.owner_wire) != covered_owner
-            {
-                continue;
-            }
-
-            for offset in 0..rrsig_rrset.record_count {
-                let record_index = rrsig_rrset.first_record + u32::from(offset);
-                let record = self.image_records[record_index as usize];
-                let rdata = rdata_from_arena(&self.rdata, record.rdata);
-                if rrsig_type_covered_rdata(rdata) != Some(covered_type) {
-                    continue;
-                }
-                relations.push(ImageRrsetRelation {
-                    kind: ImageRrsetRelationKind::Rrsig,
-                    rrset_id: index.rrset_id,
-                    record_index,
-                    rdata_len: record.rdata.len,
-                    owner_wire_len: checked_u8(
-                        blob_len(rrsig_rrset.owner_wire),
-                        "selected RRSIG owner wire length",
-                    )?,
-                });
-            }
+            relations.push(ImageRrsetRelation {
+                kind: ImageRrsetRelationKind::Rrsig,
+                rrset_id: rrsig_rrset_id,
+                record_index,
+                rdata_len: record.rdata.len,
+                owner_wire_len: checked_u8(
+                    blob_len(rrsig_rrset.owner_wire),
+                    "selected RRSIG owner wire length",
+                )?,
+            });
         }
         Ok(())
     }
@@ -4654,7 +4701,7 @@ impl ZoneImageBuilder {
 
         let mut resolved = SmallVec::<[ZoneImageRrsetId; 4]>::new();
         for offset in 0..rrset.record_count {
-            let record = self.image_records[(rrset.first_record + u32::from(offset)) as usize];
+            let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
             let rdata = rdata_from_arena(&self.rdata, record.rdata);
             let Some(target_wire) = additional_address_target_wire_rdata(rr_type, rdata) else {
                 continue;
@@ -4694,7 +4741,7 @@ impl ZoneImageBuilder {
         }
         let mut resolved = SmallVec::<[ZoneImageRrsetId; 4]>::new();
         for offset in 0..rrset.record_count {
-            let record = self.image_records[(rrset.first_record + u32::from(offset)) as usize];
+            let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
             let rdata = rdata_from_arena(&self.rdata, record.rdata);
             let Some(target_wire) = single_name_rdata_wire(rdata) else {
                 continue;
@@ -4741,7 +4788,7 @@ impl ZoneImageBuilder {
             relations.push(ImageRrsetRelation {
                 kind: ImageRrsetRelationKind::DelegationDs,
                 rrset_id: ds,
-                record_index: u32::MAX,
+                record_index: u64::MAX,
                 rdata_len: 0,
                 owner_wire_len: 0,
             });
@@ -4751,7 +4798,7 @@ impl ZoneImageBuilder {
             relations.push(ImageRrsetRelation {
                 kind: ImageRrsetRelationKind::DelegationNsec,
                 rrset_id: nsec,
-                record_index: u32::MAX,
+                record_index: u64::MAX,
                 rdata_len: 0,
                 owner_wire_len: 0,
             });
@@ -4789,7 +4836,7 @@ impl ZoneImageBuilder {
                 relations.push(ImageRrsetRelation {
                     kind,
                     rrset_id,
-                    record_index: u32::MAX,
+                    record_index: u64::MAX,
                     rdata_len: 0,
                     owner_wire_len: 0,
                 });
@@ -4955,13 +5002,10 @@ fn push_blob(
     name: &'static str,
 ) -> Result<BlobRange, ZoneImageBuildError> {
     let offset =
-        u32::try_from(arena.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
+        u64::try_from(arena.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
     let len =
         u32::try_from(bytes.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
     arena.extend_from_slice(bytes);
-    if arena.len() > u32::MAX as usize {
-        return Err(ZoneImageBuildError::ArenaTooLarge { name });
-    }
     Ok(BlobRange { offset, len })
 }
 
@@ -4982,7 +5026,7 @@ fn push_canonical_order_name_arena_key(
         return Ok(None);
     }
 
-    let offset = u32::try_from(arena.len())
+    let offset = u64::try_from(arena.len())
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     for (start, len) in labels.iter().rev() {
         let start = source_start + *start;
@@ -4996,9 +5040,6 @@ fn push_canonical_order_name_arena_key(
         }
     }
     arena.push(0);
-    if arena.len() > u32::MAX as usize {
-        return Err(ZoneImageBuildError::ArenaTooLarge { name: arena_name });
-    }
     let len = u32::try_from(arena.len() - offset as usize)
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     Ok(Some(BlobRange { offset, len }))
@@ -5017,7 +5058,7 @@ fn push_canonical_order_wire_key(
         return Ok(None);
     }
 
-    let offset = u32::try_from(arena.len())
+    let offset = u64::try_from(arena.len())
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     for (start, len) in labels.iter().rev() {
         let label = &wire_name[*start..*start + *len];
@@ -5025,9 +5066,6 @@ fn push_canonical_order_wire_key(
         arena.extend(label.iter().map(u8::to_ascii_lowercase));
     }
     arena.push(0);
-    if arena.len() > u32::MAX as usize {
-        return Err(ZoneImageBuildError::ArenaTooLarge { name: arena_name });
-    }
     let len = u32::try_from(arena.len() - offset as usize)
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     Ok(Some(BlobRange { offset, len }))
@@ -5128,7 +5166,7 @@ fn push_direct_answer_body(
     if rdatas.len() <= 1 {
         return Ok(DIRECT_ANSWER_BODY_RECORDS_FALLBACK);
     }
-    let offset = checked_u32(wire.len(), "wire")?;
+    let offset = wire.len();
     let record_prefix = direct_answer_record_prefix(fixed_fields);
     for rdata in rdatas {
         let rdlength =
@@ -5139,7 +5177,7 @@ fn push_direct_answer_body(
     }
     let len = checked_u32(
         wire.len()
-            .checked_sub(offset as usize)
+            .checked_sub(offset)
             .ok_or(ZoneImageBuildError::TooManyItems {
                 kind: "direct answer body bytes",
             })?,
@@ -5250,7 +5288,7 @@ fn build_node_low_rrtype_bitmaps(
             }
         }
         nodes[node_index].low_rrtype_bitmap =
-            checked_u16(bitmaps.len(), "node low RRtype bitmap index")?;
+            checked_u32_index(bitmaps.len(), "node low RRtype bitmap index")?;
         bitmaps.push(bitmap);
     }
     Ok(bitmaps)
@@ -5287,50 +5325,106 @@ fn build_child_hashes(
     nodes: &mut [NameNode],
     edges: &[NameEdge],
     labels: &[u8],
-) -> Result<(Vec<ImageChildHash>, Vec<u16>), ZoneImageBuildError> {
+) -> Result<BuiltChildHashes, ZoneImageBuildError> {
     let mut hashes = Vec::new();
-    let mut slots = Vec::new();
+    let mut slots_u16 = Vec::new();
+    let mut slots_u32 = Vec::new();
 
     for node in nodes.iter_mut() {
-        let edge_count = usize::from(node.edge_count);
+        let edge_count = node.edge_count as usize;
         if edge_count < CHILD_HASH_FANOUT_THRESHOLD {
             continue;
         }
         let first_edge = node.first_edge as usize;
 
         let slot_count = edge_count.saturating_mul(2).next_power_of_two();
-        let first_slot = checked_u32(slots.len(), "child hash slots")?;
         let slot_count_u32 = checked_u32(slot_count, "child hash slots")?;
-        slots.resize(slots.len() + slot_count, u16::MAX);
         let mask = slot_count - 1;
-
-        for edge_offset in 0..edge_count {
-            let edge = edges[first_edge + edge_offset];
-            let label = blob_from_arena(labels, edge.label);
-            let mut slot = child_label_hash(label) & mask;
-            loop {
-                let slot_index = first_slot as usize + slot;
-                if slots[slot_index] == u16::MAX {
-                    slots[slot_index] = checked_u16(edge_offset, "child hash edge offsets")?;
-                    break;
+        let wide_slots = edge_count > u16::MAX as usize;
+        let first_slot = if wide_slots {
+            let first_slot = checked_u32(slots_u32.len(), "wide child hash slots")?;
+            let slot_end =
+                checked_compact_array_end(slots_u32.len(), slot_count, "wide child hash slots")?;
+            slots_u32.resize(slot_end, u32::MAX);
+            for edge_offset in 0..edge_count {
+                let edge = edges[first_edge + edge_offset];
+                let label = blob_from_arena(labels, edge.label);
+                let mut slot = child_label_hash(label) & mask;
+                loop {
+                    let slot_index = first_slot as usize + slot;
+                    if slots_u32[slot_index] == u32::MAX {
+                        slots_u32[slot_index] =
+                            checked_u32(edge_offset, "wide child hash edge offsets")?;
+                        break;
+                    }
+                    slot = (slot + 1) & mask;
                 }
-                slot = (slot + 1) & mask;
             }
-        }
+            first_slot
+        } else {
+            let first_slot = checked_u32(slots_u16.len(), "narrow child hash slots")?;
+            let slot_end =
+                checked_compact_array_end(slots_u16.len(), slot_count, "narrow child hash slots")?;
+            slots_u16.resize(slot_end, u16::MAX);
+            for edge_offset in 0..edge_count {
+                let edge = edges[first_edge + edge_offset];
+                let label = blob_from_arena(labels, edge.label);
+                let mut slot = child_label_hash(label) & mask;
+                loop {
+                    let slot_index = first_slot as usize + slot;
+                    if slots_u16[slot_index] == u16::MAX {
+                        slots_u16[slot_index] =
+                            checked_u16(edge_offset, "narrow child hash edge offsets")?;
+                        break;
+                    }
+                    slot = (slot + 1) & mask;
+                }
+            }
+            first_slot
+        };
 
-        let hash_index = checked_u32(hashes.len(), "child hashes")?;
+        let hash_index = checked_u32_index(hashes.len(), "child hashes")?;
         node.child_hash = hash_index;
         hashes.push(ImageChildHash {
             first_slot,
             slot_mask: slot_count_u32 - 1,
+            wide_slots,
         });
     }
 
-    Ok((hashes, slots))
+    Ok(BuiltChildHashes {
+        hashes,
+        slots_u16,
+        slots_u32,
+    })
 }
 
 fn checked_u32(value: usize, kind: &'static str) -> Result<u32, ZoneImageBuildError> {
     u32::try_from(value).map_err(|_| ZoneImageBuildError::TooManyItems { kind })
+}
+
+fn checked_compact_array_end(
+    start: usize,
+    len: usize,
+    kind: &'static str,
+) -> Result<usize, ZoneImageBuildError> {
+    let end = start
+        .checked_add(len)
+        .ok_or(ZoneImageBuildError::TooManyItems { kind })?;
+    checked_u32(end, kind)?;
+    Ok(end)
+}
+
+fn checked_u32_index(value: usize, kind: &'static str) -> Result<u32, ZoneImageBuildError> {
+    let value = checked_u32(value, kind)?;
+    if value == u32::MAX {
+        return Err(ZoneImageBuildError::TooManyItems { kind });
+    }
+    Ok(value)
+}
+
+fn checked_u64(value: usize, kind: &'static str) -> Result<u64, ZoneImageBuildError> {
+    u64::try_from(value).map_err(|_| ZoneImageBuildError::TooManyItems { kind })
 }
 
 fn checked_u16(value: usize, kind: &'static str) -> Result<u16, ZoneImageBuildError> {

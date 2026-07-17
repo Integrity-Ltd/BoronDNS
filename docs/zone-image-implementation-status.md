@@ -37,6 +37,14 @@ promotion work is to broaden physical evidence on a separate client/NIC setup
 and then reduce remaining offline-oracle reliance until the old query-time
 layout can be phased out.
 
+Layout note: the chronological evidence entries below retain the structure
+sizes and bytes-per-record values measured by each historical experiment. The
+selective global-`u64` migration supersedes those old size budgets. Current
+64-bit sizes are `BlobRange`/`RdataRange`/`ImageRecord` 16 bytes,
+`ImageRrsetRelation` 16 bytes, `ImageRrset` 72 bytes, and `PlanAnswer` 40 bytes.
+Current capacity limits are normative in
+`docs/zone-image-capacity-limits.md`.
+
 ## Phase 0: Baseline And Evidence Harness
 
 - [x] Retain current-path benchmark artifacts for comparison.
@@ -79,6 +87,15 @@ layout can be phased out.
 - [x] Support ANY-class direct answers where current semantics allow it.
 - [x] Add exact-lookup differential tests against the current snapshot model.
 - [x] Emit shape and byte statistics for the prototype benchmark.
+- [x] Remove reachable 16-bit flat-zone and multi-RRset-name ceilings with
+  `u32` node cardinality/bitmap indexes and adaptive `u16`/`u32` child-hash
+  slots.
+- [x] Remove global `u32` capacity ceilings with selective `u64` arena offsets
+  and record/relation ordinals. Two-host CPU, memory, and physical-link evidence
+  is retained in `docs/zone-image-large-zone-design.md`; exact enforced limits
+  are in `docs/zone-image-capacity-limits.md`.
+- [x] Reject and remove the canonical range-sharding prototype after selective
+  `u64` showed no measurable unsaturated UDP service penalty.
 - [x] Keep packed lookup in safe Rust.
 
 ## Phase 3: Full Name Semantics
@@ -445,8 +462,9 @@ layout can be phased out.
   reparsing wire-name lengths for every emitted record, and copy-RDATA records
   now write their validated rdlength and bytes directly without entering the
   compressed-RDATA placeholder/patch path. The shape tag is packed into the
-  existing `RdataRange` padding so `ImageRecord` remains 8 bytes and the retained
-  hot-bytes-per-record gate stays flat. The retained first-step
+  then-existing `RdataRange` padding so `ImageRecord` remained 8 bytes before
+  the later global-`u64` migration and the retained hot-bytes-per-record gate
+  stayed flat. The retained first-step
   `target/zone-image-bench/rdata-encoding-precomputed.tsv` checker passed at
   `target/zone-image-bench/rdata-encoding-precomputed-check.tsv` with zero
   validation/packet mismatches, byte parity, mixed planning ratio `0.132`, mixed
@@ -645,7 +663,8 @@ layout can be phased out.
   instead of slicing immutable RRset wire or rebuilding TTL bytes from scalar
   fields on the composer path. The first full negative-field version exceeded
   the stress bytes/record gate, so the retained layout stores only the negative
-  TTL bytes and keeps `ImageRrset` bounded at 48 bytes. Focused ZoneImage tests
+  TTL bytes and kept the then-current `ImageRrset` bounded at 48 bytes. Focused
+  ZoneImage tests
   and invariant audit passed. The checker passed at
   `target/zone-image-bench/compiled-rrset-fixed-fields-check.tsv` with zero
   validation/packet mismatches, byte parity, main image bytes/record `174`,
@@ -725,6 +744,10 @@ layout can be phased out.
 - [x] RRSIG augmentation uses compile-time precomputed per-RRset relation spans,
   avoiding query-time scans of the RRSIG covered-type index and query-time
   RRSIG type-covered parsing for selected signatures.
+- [x] RRSIG relation compilation resolves covered RRsets through one completed
+  index and scans only the selected owner's RRSIG records. The former global
+  per-RRset scan was measured as quadratic; the retained indexed builder is
+  documented in `docs/zone-image-large-zone-design.md`.
 - [x] Selected RRSIG records are kept as immutable `ZoneImage` record references
   in lookup plans instead of being copied into per-query synthesized record
   buffers; synthesized and selected records share the same per-section dynamic
@@ -1462,6 +1485,11 @@ layout can be phased out.
   and `65536` slot bytes; the delegation/DNAME stress fixture reports one child
   hash, `16384` slots, and `32768` slot bytes. Both checker rows validate that
   slot bytes match `u16` storage.
+- [x] Supersede the global `u16` child-slot capacity limit with adaptive slots:
+  ordinary nodes retain the measured `u16` representation above, while nodes
+  with more than 65,535 edges use a separate `u32` slot arena. This preserves
+  the ordinary-zone memory benefit and removes the reachable flat-zone cap;
+  two-host cost evidence is in `docs/zone-image-large-zone-design.md`.
 - [x] Add retained lowercase child-hash label-compare evidence:
   `target/zone-image-bench/lowercase-child-hash-label-eq.tsv` and rerun
   `target/zone-image-bench/lowercase-child-hash-label-eq-rerun.tsv` compare
@@ -3142,7 +3170,8 @@ layout can be phased out.
   `target/zone-image-bench/fixed-field-rrset-ownerless-len.tsv` moves the
   remaining owner-override non-owner byte derivation into compiled `ImageRrset`
   metadata, while removing duplicate scalar `rr_type`/`class` fields and reading
-  TYPE/CLASS from carried fixed fields. This keeps `ImageRrset` at 48 bytes and
+  TYPE/CLASS from carried fixed fields. This kept the then-current `ImageRrset`
+  at 48 bytes and
   keeps owner-override planning on a direct metadata read instead of deriving
   non-owner byte counts from stored full-owner RRset wire. The earlier naive
   `target/zone-image-bench/ownerless-wire-len-precompute.tsv` field-add remains
@@ -3801,8 +3830,8 @@ layout can be phased out.
   image bytes per record from 160 to 168 and worsened retained local packet
   timings across mixed, hot, trace, optioned, boundary, and UDP-ceiling packet
   cases, so that hot-metadata version was reverted. This rejection is superseded
-  only by the later retained compact `RdataRange` packing that keeps
-  `ImageRecord` at 8 bytes.
+  only by the later retained compact `RdataRange` packing that kept
+  `ImageRecord` at 8 bytes before the global-`u64` migration.
 - [x] Measure and reject per-node IN delegation/DNAME covering handles:
   `target/zone-image-bench/in-covering-handles.tsv` moved ordinary IN-class
   delegation and DNAME ancestor discovery into each compiled trie node. It
@@ -5815,7 +5844,8 @@ layout can be phased out.
   `PlanAnswer` size, alignment, and owner-override behavior, and the invariant
   audit guards the explicit DNS-count bound at the push sites. The checker
   passed at `target/zone-image-bench/plan-answer-compact-indexes-check.tsv`
-  with zero validation/packet mismatches, byte parity, `PlanAnswer` size `28`
+  with zero validation/packet mismatches, byte parity, then-current `PlanAnswer`
+  size `28`
   bytes, main image bytes per record `174.000`, stress bytes per record
   `256.000`, mixed planning ratio `0.139`, mixed wire ratio `0.161`, mixed
   packet ratio `0.999`, hot packet ratio `0.896`, trace packet ratio `1.000`,

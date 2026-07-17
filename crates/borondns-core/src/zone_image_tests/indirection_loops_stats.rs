@@ -282,11 +282,19 @@
                 ),
                 Rrset::new(
                     qname.clone(),
+                    RecordType::Dnskey as u16,
+                    1,
+                    300,
+                    vec![vec![1, 1, 3, 8, 0xaa]],
+                ),
+                Rrset::new(
+                    qname.clone(),
                     RecordType::Rrsig as u16,
                     1,
                     300,
                     vec![
                         rrsig_rdata(RecordType::A),
+                        rrsig_rdata(RecordType::Dnskey),
                         rrsig_rdata(RecordType::Rrsig),
                         rrsig_rdata(RecordType::Nsec),
                     ],
@@ -301,10 +309,18 @@
         let rrsig_rrset = image
             .find_rrset(&qname, RecordType::Rrsig as u16, 1)
             .expect("RRSIG rrset exists");
+        let dnskey_rrset = image
+            .find_rrset(&qname, RecordType::Dnskey as u16, 1)
+            .expect("DNSKEY rrset exists");
 
         assert_eq!(precomputed.len(), 1);
         assert!(image.has_precomputed_rrsig_relations(a_rrset.0 as usize));
         assert!(!image.has_precomputed_rrsig_relations(rrsig_rrset.0 as usize));
+        assert_eq!(
+            image.precomputed_rrsig_records(dnskey_rrset).count(),
+            1,
+            "covered RRsets sorted after RRSIG must resolve through the completed index"
+        );
         assert!(
             image
                 .precomputed_rrsig_records(rrsig_rrset)
@@ -520,4 +536,3 @@
         assert_eq!(image.soa_rrset(1), Some(apex_soa));
         assert_eq!(image.soa_rrset(255), Some(apex_soa));
     }
-

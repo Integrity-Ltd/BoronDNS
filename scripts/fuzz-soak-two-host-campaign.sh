@@ -1878,6 +1878,12 @@ load_plan() {
     local executing_repo_root="$repo_root"
     [[ -n "$evidence_dir" ]] || die "--evidence-dir is required for $command"
     campaign_require_real_directory "$evidence_dir" "campaign plan directory" || die "unsafe campaign plan directory: $evidence_dir"
+    # Plans persist absolute command paths, while the documented status,
+    # collect, resume, and cleanup examples intentionally accept a path
+    # relative to the checkout. Resolve the already-validated real directory
+    # before comparing it with those immutable absolute paths.
+    evidence_dir="$(realpath -e -- "$evidence_dir")" ||
+        die "cannot canonicalize campaign plan directory: $evidence_dir"
     campaign_require_real_directory "$evidence_dir/commands" "campaign commands directory" || die "unsafe campaign commands directory"
     campaign_require_owned_nonwritable_plan_tree "$evidence_dir" "fuzz campaign plan tree" ||
         die "campaign plan tree is not exclusively writable by its owner: $evidence_dir"

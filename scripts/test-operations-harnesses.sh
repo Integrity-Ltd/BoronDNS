@@ -7986,6 +7986,12 @@ grep -Fqx h1 "$status_probe_log"
 grep -Fqx h2 "$status_probe_log"
 PATH="$tool_drift_bin:$PATH" TOOL_DRIFT_BIN="$tool_drift_bin" \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" status --evidence-dir "$fuzz_status_plan"
+(
+    cd "$(dirname "$fuzz_status_plan")"
+    PATH="$tool_drift_bin:$PATH" TOOL_DRIFT_BIN="$tool_drift_bin" \
+        "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" status \
+        --evidence-dir "$(basename "$fuzz_status_plan")"
+)
 if "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
     --evidence-dir "$workdir/colliding-fuzz-host-plan" --campaign-id colliding-hosts \
     --host 'user@host' --host user_host --duration 1 --target dns_datagram; then

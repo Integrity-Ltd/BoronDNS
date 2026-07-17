@@ -25,16 +25,20 @@ these targets:
   expiry, replacement, and removal. It checks query visibility, readiness
   aggregates, exact control metadata, and the cached active count after every
   transition.
-- `zone_store_concurrent`: four-worker adversarial publication, visibility,
-  expiry, and removal sequences against shared zones. It checks the cached
-  active count and published/control views after all concurrent mutations join.
+- `zone_store_concurrent`: four persistent-worker adversarial publication,
+  visibility, expiry, and removal sequences against shared zones. Reusing the
+  workers bounds sanitizer thread bookkeeping across multi-day campaigns while
+  retaining real concurrent mutation. The target checks the cached active count
+  and published/control views after all four workers complete each input.
 - `server_lifecycle`: bounded state-machine sequences through the real server
   refresh registry, transfer-plan generations, catalog-style add/remove and
   reassignment, catalog/scheduled/control-plane/NOTIFY dequeue validation,
   validation-to-spawn remove/readd boundaries, request coalescing/overflow,
   attempt success/failure/drop, and
-  expiry/scheduler transitions. It checks that removed zones cannot be
-  recreated by stale work and that queue/plan/store/registry invariants agree.
+  expiry/scheduler transitions. Expensive full-capacity overflow probes are
+  bounded per input so repeated equivalent opcodes cannot become multi-second
+  slow units. The target checks that removed zones cannot be recreated by stale
+  work and that queue/plan/store/registry invariants agree.
 
 Run a compile check with a nightly cargo on `PATH`, without executing a long
 fuzzing campaign:

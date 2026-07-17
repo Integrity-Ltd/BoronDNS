@@ -182,20 +182,21 @@ emits small synthesized records into the worker-owned response buffer.
 
 ### Arenas
 
-Use segmented arenas. A single 32-bit offset into one large blob is too small
-for generated and large operator zones.
+Use monolithic arenas with `u64` global offsets. A single 32-bit offset into one
+large blob is too small for generated, registry, and other dense operator zones.
+Keeping one arena per data family avoids segment selection on the query path.
 
 Recommended baseline:
 
 ```text
 BlobRange
-  segment: u16
-  offset: u32
+  offset: u64
   length: u32
 ```
 
-Use narrower compact references only after build statistics prove they cover the
-common case without special-case complexity.
+The `u32` length is local to one DNS object or prebuilt RRset range; individual
+RDATA remains bounded by DNS's 16-bit RDLENGTH. Exact limits are listed in
+`docs/zone-image-capacity-limits.md`.
 
 ### Hot And Cold Split
 
@@ -4662,8 +4663,8 @@ packet encoder writes those bytes directly instead of rebuilding scalar
 network-order fields. Stored RRsets reuse the already-existing immutable RRset
 wire arena for those bytes, preserving the then-current persistent
 `ImageRrset` layout; synthesized records store their fixed bytes when they are
-pushed into the plan. The later retained compiled-RRset fixed-field slice moves
-that metadata into `ImageRrset` and defines the current 48-byte layout. The
+pushed into the plan. The later retained compiled-RRset fixed-field slice moved
+that metadata into `ImageRrset` and defined the then-current 48-byte layout. The
 checker artifact
 `target/zone-image-bench/wire-record-fixed-fields-check.tsv` passed with zero
 validation and packet mismatches, byte parity, mixed planning ratio `0.147`,
@@ -4721,7 +4722,7 @@ authority emission now consume carried bytes instead of recovering fixed fields
 from immutable RRset wire or rebuilding negative TTL bytes from scalar fields.
 A full negative-fixed-field variant was measured first and rejected because it
 pushed the stress fixture over the retained 256 bytes/record gate; the retained
-layout keeps `ImageRrset` at 48 bytes by storing only the negative TTL bytes.
+layout kept `ImageRrset` at 48 bytes by storing only the negative TTL bytes.
 The checker artifact
 `target/zone-image-bench/compiled-rrset-fixed-fields-check.tsv` passed with zero
 validation and packet mismatches, byte parity, main image bytes/record `174`,

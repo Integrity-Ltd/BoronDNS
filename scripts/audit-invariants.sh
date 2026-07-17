@@ -3236,6 +3236,15 @@ push_rrsig_text = (
     if push_rrsig_start >= 0 and push_rrsig_end >= 0
     else ""
 )
+rrsig_by_covered_start = zone_image_text.find("    fn rrsig_rrsets_by_covered(")
+rrsig_by_covered_end = zone_image_text.find(
+    "    fn push_single_name_target_relation_for_rrset", rrsig_by_covered_start
+)
+rrsig_by_covered_text = (
+    zone_image_text[rrsig_by_covered_start:rrsig_by_covered_end]
+    if rrsig_by_covered_start >= 0 and rrsig_by_covered_end >= 0
+    else ""
+)
 push_rrsig_runtime_start = zone_image_text.find("    fn push_rrsig_for_rrset(")
 push_rrsig_runtime_end = zone_image_text.find("    fn precomputed_rrsig_records", push_rrsig_runtime_start)
 push_rrsig_runtime_text = (
@@ -3283,11 +3292,15 @@ if "owner_wire_len: u8" not in relation_struct_text:
     selected_record_failures.append("RRSIG relation does not carry precomputed owner wire length")
 if "usize::from(relation.owner_wire_len)" not in selected_from_relation_text or "usize::from(relation.rdata_len)" not in selected_from_relation_text:
     selected_record_failures.append("selected-record handle does not use relation-carried owner/RDATA lengths")
-if 'checked_u8(\n                        blob_len(rrsig_rrset.owner_wire),\n                        "selected RRSIG owner wire length",' not in push_rrsig_text:
+if (
+    "owner_wire_len: checked_u8(" not in push_rrsig_text
+    or "blob_len(rrsig_rrset.owner_wire)" not in push_rrsig_text
+    or '"selected RRSIG owner wire length"' not in push_rrsig_text
+):
     selected_record_failures.append("RRSIG relation owner wire length is not checked and copied from immutable metadata")
 if "rdata_len: record.rdata.len" not in push_rrsig_text:
     selected_record_failures.append("RRSIG relation RDATA length is not copied from immutable record metadata")
-if "let covered_type = covered_rrset.rr_type();" not in push_rrsig_text or "covered_type == RecordType::Rrsig as u16" not in push_rrsig_text:
+if "covered.covered_type == RecordType::Rrsig as u16" not in rrsig_by_covered_text:
     selected_record_failures.append("RRSIG relation compiler does not skip RRSIG RRsets")
 if "covered_rrset.rr_type() == RecordType::Rrsig as u16" in push_rrsig_runtime_text:
     selected_record_failures.append("runtime RRSIG augmentation reintroduced a covered-RRSIG type guard instead of trusting empty relation slices")
@@ -4254,7 +4267,7 @@ if "if let [edge] = edges" not in find_child_text:
     child_lookup_failures.append("find_child does not bypass binary search for single-child nodes")
 if "lowercase_stored_label_eq_with_ascii_lowercase_hint" not in find_child_text:
     child_lookup_failures.append("single-child lookup does not preserve hinted case-insensitive label comparison")
-if "const SMALL_CHILD_LINEAR_SCAN_THRESHOLD: u16 = 4" not in zone_image_text:
+if "const SMALL_CHILD_LINEAR_SCAN_THRESHOLD: u32 = 4" not in zone_image_text:
     child_lookup_failures.append("small-child linear scan threshold is not fixed at fanout 4")
 if "if node.edge_count <= SMALL_CHILD_LINEAR_SCAN_THRESHOLD" not in find_child_text:
     child_lookup_failures.append("find_child does not use the small-child linear scan before hash/binary lookup")
@@ -4298,7 +4311,7 @@ rrset_lookup_text = (
 rrset_lookup_failures = []
 if "if node.rrset_count == 0" not in rrset_lookup_text:
     rrset_lookup_failures.append("find_rrset_at_node does not preserve empty-node handling before slicing RRsets")
-if "low_rrtype_bitmap: u16" not in zone_image_text:
+if "low_rrtype_bitmap: u32" not in zone_image_text:
     rrset_lookup_failures.append("NameNode does not carry a compact node-local low-RRtype bitmap handle")
 if "node_low_rrtype_bitmaps: Box<[u64]>" not in zone_image_text:
     rrset_lookup_failures.append("ZoneImage does not carry sparse node-local low-RRtype bitmaps")

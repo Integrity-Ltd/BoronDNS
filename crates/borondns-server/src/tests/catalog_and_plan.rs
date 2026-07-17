@@ -1388,6 +1388,21 @@ fn lifecycle_fuzz_models_shutdown_queue_drop_and_expired_current_reactivation() 
     assert_eq!(stats.reactivations, 1);
 }
 
+#[test]
+fn lifecycle_fuzz_reactivates_an_already_expired_control_view() {
+    let seed = [
+        0, 0, 0, // add zone
+        3, 0, 0, // queue a refresh
+        6, 0, 0, // begin it
+        7, 0, 2, // publish a serial-bearing ACTIVE snapshot
+        11, 0, 0, // expire it through the refresh registry
+        16, 0, 0, // confirm the synthesized EXPIRED control view current
+    ];
+
+    let stats = run_lifecycle_fuzz_sequence(&seed);
+    assert_eq!(stats.reactivations, 1);
+}
+
 #[tokio::test]
 async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let config = ServerConfig::from_toml_str(
