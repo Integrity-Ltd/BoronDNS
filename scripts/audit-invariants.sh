@@ -2661,8 +2661,8 @@ if "zone_image_last_non_soa_authority_index(&kept_authorities, kept_authorities.
     one_pass_composer_failures.append("truncation scratch collection still scans authority records for the initial removable index after collection")
 if "zone_image_last_non_soa_authority_index(" in truncation_text:
     one_pass_composer_failures.append("truncation retry still rescans authority records for removable non-SOA indices")
-if "SmallVec::<[u16; 4]>::new()" not in truncation_text:
-    one_pass_composer_failures.append("truncation retry removable authority index stack is not compact u16 storage")
+if "SmallVec::<[usize; 4]>::new()" not in truncation_text:
+    one_pass_composer_failures.append("truncation retry removable authority index stack is not native usize storage")
 if "if removable_authority" not in truncation_text:
     one_pass_composer_failures.append("truncation scratch collection does not use plan-carried authority removability")
 if (
@@ -2671,10 +2671,10 @@ if (
     or "response_sizing.with_edns_sizing(stripped_edns_sizing)" not in truncation_text
 ):
     one_pass_composer_failures.append("truncation EDE stripping does not carry stripped EDNS sizing into record-removal retry")
-if "removable_authority_indices.push(kept_authorities.len() as u16)" not in truncation_text:
+if "removable_authority_indices.push(kept_authorities.len())" not in truncation_text:
     one_pass_composer_failures.append("truncation scratch collection does not retain removable authority indices while collecting")
-if "truncation authority index is bounded by DNS section count" not in truncation_text:
-    one_pass_composer_failures.append("truncation removable authority u16 index bound is not explicit")
+if "kept_authorities.len() as u16" in truncation_text:
+    one_pass_composer_failures.append("truncation removable authority index reintroduced a release-mode narrowing cast")
 if "original_authority_rrset_count: u16" not in zone_image_text:
     one_pass_composer_failures.append("DNSSEC original authority prefix count is not compact u16 scratch storage")
 if "original_authority_rrset_count: u16::try_from(plan.authority_rrsets.len())" not in zone_image_text:

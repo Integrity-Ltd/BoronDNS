@@ -104,9 +104,15 @@ Current capacity limits are normative in
 - [x] Specialize retained snapshot name-existence indexes to membership sets
   for production IN-only zones while preserving general multi-class maps for
   synthetic/oracle inputs.
+- [x] Expose each active zone's indexed versus conservative-fallback NSEC and
+  NSEC3 range-group counts in the opt-in shape metrics and log the same counts
+  when the immutable image is compiled.
 - [x] Reject generic hot-path compression and remove the measured owner/RDATA
   interning prototype after negligible savings; retain per-arena benchmark
   metrics instead.
+- [~] Scope the retained `ZoneSnapshot` narrowing track by responsibility and
+  acceptance gate in `docs/zone-snapshot-narrowing-design.md`; implementation
+  remains a separate lifecycle and memory project.
 
 ## Phase 3: Full Name Semantics
 

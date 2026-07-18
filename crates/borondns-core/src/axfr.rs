@@ -32,6 +32,12 @@ use crate::{
 // - BDS-FR-RR-001 BDS-FR-RR-002 BDS-FR-RR-003 BDS-FR-RR-004
 // - BDS-FR-RR-005 BDS-FR-RR-006 BDS-FR-RR-007
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum TcpFrameError {
+    #[error("DNS message length {length} exceeds the 65,535-byte TCP frame limit")]
+    MessageTooLong { length: usize },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum AxfrError {
     #[error("AXFR response stream is empty")]
     EmptyResponse,
@@ -294,11 +300,14 @@ fn append_record_parts(
     message.extend_from_slice(rdata);
 }
 
-pub fn frame_tcp_message(message: &[u8]) -> Vec<u8> {
+pub fn frame_tcp_message(message: &[u8]) -> Result<Vec<u8>, TcpFrameError> {
+    let length = u16::try_from(message.len()).map_err(|_| TcpFrameError::MessageTooLong {
+        length: message.len(),
+    })?;
     let mut framed = Vec::with_capacity(message.len() + 2);
-    framed.extend_from_slice(&(message.len() as u16).to_be_bytes());
+    framed.extend_from_slice(&length.to_be_bytes());
     framed.extend_from_slice(message);
-    framed
+    Ok(framed)
 }
 
 pub fn parse_axfr_response(
@@ -1946,8 +1955,19 @@ mod tests {
 
     #[test]
     fn frames_tcp_message_with_length_prefix() {
-        let framed = frame_tcp_message(&[1, 2, 3]);
+        let framed = frame_tcp_message(&[1, 2, 3]).expect("short message fits TCP frame");
         assert_eq!(framed, vec![0, 3, 1, 2, 3]);
+    }
+
+    #[test]
+    fn rejects_oversized_tcp_message_frame() {
+        let message = vec![0; usize::from(u16::MAX) + 1];
+        assert_eq!(
+            frame_tcp_message(&message),
+            Err(TcpFrameError::MessageTooLong {
+                length: message.len()
+            })
+        );
     }
 
     #[test]

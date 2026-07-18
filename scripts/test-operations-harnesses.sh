@@ -11733,8 +11733,10 @@ repro_fixture_repo="$workdir/repro-dirty-repo"
 repro_fixture_bin="$workdir/repro-fake-bin"
 repro_fixture_evidence="$workdir/repro-dirty-evidence"
 mkdir -p "$repro_fixture_repo/scripts" "$repro_fixture_bin"
-cp "$repo_root/scripts/reproducible-build-compare.sh" "$repro_fixture_repo/scripts/"
-chmod +x "$repro_fixture_repo/scripts/reproducible-build-compare.sh"
+cp "$repo_root/scripts/reproducible-build-compare.sh" \
+    "$repo_root/scripts/package-common.sh" "$repro_fixture_repo/scripts/"
+chmod +x "$repro_fixture_repo/scripts/reproducible-build-compare.sh" \
+    "$repro_fixture_repo/scripts/package-common.sh"
 printf '%s\n' '[workspace]' 'members = []' >"$repro_fixture_repo/Cargo.toml"
 printf '%s\n' '# fake lock' >"$repro_fixture_repo/Cargo.lock"
 git -C "$repro_fixture_repo" init -q

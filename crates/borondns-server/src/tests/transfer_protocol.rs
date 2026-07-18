@@ -32,6 +32,7 @@ fn zone_metadata_for(snapshot: &ZoneSnapshot) -> ZoneMetadata {
         soa_timers: snapshot.soa_timers,
         shape: None,
         shape_histograms: None,
+        zone_image_stats: None,
     }
 }
 

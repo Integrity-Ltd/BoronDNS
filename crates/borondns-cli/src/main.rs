@@ -649,6 +649,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | TransferError::Axfr(_)
                 | TransferError::Ixfr(_)
                 | TransferError::Soa(_)
+                | TransferError::TcpFrame(_)
                 | TransferError::RandomQueryId(_)
                 | TransferError::Tsig(_)
                 | TransferError::TlsHandshake { .. }

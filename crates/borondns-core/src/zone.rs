@@ -12,13 +12,13 @@ use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
 use smallvec::SmallVec;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::dns::{
     AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
     RecordType,
 };
-use crate::zone_image::{ZoneImage, ZoneImageBuildError};
+use crate::zone_image::{ZoneImage, ZoneImageBuildError, ZoneImageStats};
 
 // BDS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
@@ -1302,6 +1302,7 @@ pub struct ZoneMetadata {
     pub soa_timers: Option<SoaTimers>,
     pub shape: Option<ZoneShapeSummary>,
     pub shape_histograms: Option<ZoneShapeHistogramSummary>,
+    pub zone_image_stats: Option<ZoneImageStats>,
 }
 
 impl TransferZoneSnapshot {
@@ -2119,7 +2120,21 @@ impl ZoneStoreEntry {
         incarnation: u64,
     ) -> Result<Self, ZoneImageBuildError> {
         let image = if snapshot.state == ZoneState::Active {
-            Some(Arc::new(ZoneImage::compile(&snapshot)?))
+            let image = ZoneImage::compile(&snapshot)?;
+            let stats = image.stats();
+            info!(
+                zone = %snapshot.origin,
+                nsec_indexed_groups = stats.nsec_indexed_range_group_count,
+                nsec_fallback_groups = stats
+                    .nsec_range_group_count
+                    .saturating_sub(stats.nsec_indexed_range_group_count),
+                nsec3_indexed_groups = stats.nsec3_indexed_range_group_count,
+                nsec3_fallback_groups = stats
+                    .nsec3_range_group_count
+                    .saturating_sub(stats.nsec3_indexed_range_group_count),
+                "compiled ZoneImage DNSSEC denial lookup indexes"
+            );
+            Some(Arc::new(image))
         } else {
             None
         };
@@ -2153,6 +2168,7 @@ impl ZoneStoreEntry {
             soa_timers: self.soa_timers,
             shape: self.shape,
             shape_histograms: self.shape_histograms.clone(),
+            zone_image_stats: self.image.as_deref().map(ZoneImage::stats),
         }
     }
 
@@ -2166,6 +2182,7 @@ impl ZoneStoreEntry {
             soa_timers: self.soa_timers,
             shape: None,
             shape_histograms: None,
+            zone_image_stats: None,
         }
     }
 

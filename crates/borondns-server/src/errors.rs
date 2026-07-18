@@ -115,6 +115,9 @@ pub enum TransferError {
     #[error("AXFR response validation failed: {0}")]
     Axfr(#[from] AxfrError),
 
+    #[error("failed to frame outbound DNS-over-TCP message: {0}")]
+    TcpFrame(#[from] axfr::TcpFrameError),
+
     #[error("IXFR response validation failed: {0}")]
     Ixfr(#[from] axfr::IxfrError),
 

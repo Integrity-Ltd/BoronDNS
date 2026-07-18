@@ -11,7 +11,7 @@ use std::{
 
 use borondns_core::{
     ServerConfig,
-    axfr::{IxfrResponse, frame_tcp_message},
+    axfr::{IxfrResponse, frame_tcp_message as try_frame_tcp_message},
     config::{
         ConfigSecretString, DEFAULT_HEALTH_MAX_CONNECTIONS, HealthConfig,
         LatencyHistogramBucketSeconds, MAX_LATENCY_HISTOGRAM_BUCKETS, MAX_RUNTIME_DURATION_SECS,
@@ -29,6 +29,10 @@ use borondns_core::{
     },
     zone::{ResourceRecord, Rrset, SoaTimers, ZoneMetadata, ZoneSnapshot, ZoneState, ZoneStore},
 };
+
+fn frame_tcp_message(message: &[u8]) -> Vec<u8> {
+    try_frame_tcp_message(message).expect("test DNS message fits TCP frame")
+}
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpSocket, TcpStream, UdpSocket},

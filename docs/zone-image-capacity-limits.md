@@ -1,7 +1,7 @@
 # BoronDNS ZoneImage Capacity Limits
 
 Status: normative implementation limits for the current immutable zone image,
-2026-07-17.
+2026-07-18.
 
 This document distinguishes encoded limits from deployment limits. `u64`
 removes the former 4 GiB global-arena and 4.29-billion-record ceilings, but it
@@ -25,6 +25,24 @@ does not make memory or transfer ingestion unlimited.
 The builder uses checked conversions and reserves every `u32::MAX` “none”
 sentinel. Crossing one of these compact limits returns `ZoneImageBuildError`
 instead of wrapping or aliasing a valid object.
+
+### 16-bit audit cross-check
+
+The July 2026 capacity audit's two shape-dependent findings are covered by the
+global table above:
+
+- F-01: `NameNode.first_edge` and `NameNode.edge_count` are `u32`, with a
+  checked start-plus-count bound. Child-hash descriptors and slot-arena starts
+  are also `u32`. Per-node hash slots retain `u16` edge offsets only while the
+  fanout fits; larger sibling sets select the `u32` slot arena.
+- F-02: `NameNode.low_rrtype_bitmap` is a `u32` bitmap-table handle with
+  `u32::MAX` reserved for “none”. It does not cap multi-RRset owner names at
+  65,535 across a zone.
+
+Consequently, the 161-million-name projection is not restricted to
+single-RRset shapes by either finding. The remaining 65,535 RRset limit is
+local to one owner name, as listed below; it is not a zone-wide count of owners
+that carry multiple RRset types.
 
 ## Local And DNS-Format Limits
 

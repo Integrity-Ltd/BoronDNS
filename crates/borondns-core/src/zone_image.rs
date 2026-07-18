@@ -18,6 +18,10 @@ use crate::{
 };
 
 const LABEL_INLINE_CAPACITY: usize = 64;
+// Relation offsets are zero-based while `relation_count` is end-exclusive.
+// Therefore a full `u16::MAX` relations still uses only offsets 0..=u16::MAX-1,
+// leaving this value unambiguous as the missing-kind sentinel. Keep the
+// assertion in `ImageRrsetRelationSpan::new` coupled to that invariant.
 const NO_RELATION_OFFSET: u16 = u16::MAX;
 const PLAN_FLAG_ANSWER_HAS_RECORDS: u8 = 1 << 0;
 const PLAN_FLAG_AUTHORITY_HAS_SOA: u8 = 1 << 1;
@@ -471,6 +475,8 @@ impl ImageRrsetRelationSpan {
         relation_count: u16,
         relations: &[ImageRrsetRelation],
     ) -> Result<Self, ZoneImageBuildError> {
+        debug_assert_eq!(relations.len(), usize::from(relation_count));
+        debug_assert!(relations.len() <= usize::from(NO_RELATION_OFFSET));
         Ok(Self {
             first_relation,
             relation_count,

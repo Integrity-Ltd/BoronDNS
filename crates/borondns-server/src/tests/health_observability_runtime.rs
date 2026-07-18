@@ -1262,6 +1262,63 @@ fn metrics_body_reports_loading_duration_seconds() {
 }
 
 #[test]
+fn metrics_body_reports_denial_index_fallback_per_zone() {
+    let zones = ZoneStore::new();
+    let origin = DomainName::from_absolute_str("fallback.test.").unwrap();
+    let first = DomainName::from_absolute_str("a.fallback.test.").unwrap();
+    let second = DomainName::from_absolute_str("b.fallback.test.").unwrap();
+    let mut malformed_next = second.to_wire();
+    malformed_next.extend_from_slice(&[0, 1, 0x40]);
+    zones.insert_snapshot(ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![
+            Rrset::new(
+                origin,
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                first,
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![malformed_next.clone()],
+            ),
+            Rrset::new(
+                second,
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![malformed_next],
+            ),
+        ],
+    ));
+
+    let metrics = metrics_body(
+        &zones,
+        &RuntimeMetrics::new(),
+        &CatalogManager::default(),
+        &ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        ),
+        0,
+        true,
+    );
+
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"fallback.test.\",proof=\"nsec\",mode=\"indexed\"} 0"
+    ));
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"fallback.test.\",proof=\"nsec\",mode=\"fallback\"} 1"
+    ));
+}
+
+#[test]
 fn metrics_body_reports_catalog_membership() {
     let zones = ZoneStore::new();
     let refresh_registry = ZoneRefreshRegistry::without_jitter(
@@ -1567,6 +1624,18 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
     ));
     assert!(metrics.contains(
         "borondns_zone_shape_rrsets_per_owner_names{zone=\"example.test.\",bucket=\"1\"} 1"
+    ));
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"example.test.\",proof=\"nsec\",mode=\"indexed\"} 0"
+    ));
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"example.test.\",proof=\"nsec\",mode=\"fallback\"} 0"
+    ));
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"example.test.\",proof=\"nsec3\",mode=\"indexed\"} 0"
+    ));
+    assert!(metrics.contains(
+        "borondns_zone_image_denial_range_groups{zone=\"example.test.\",proof=\"nsec3\",mode=\"fallback\"} 0"
     ));
     assert!(metrics.contains(
         "borondns_zone_shape_rdata_records_per_rrset{zone=\"example.test.\",bucket=\"1\"} 1"

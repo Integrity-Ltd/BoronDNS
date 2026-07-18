@@ -1975,7 +1975,7 @@ fn build_truncated_zone_image_response(
         SmallVec::with_capacity(usize::from(response_shape.additional_count));
     let mut section_counts = ZoneImageRetrySectionCounts::from_response_shape(response_shape);
     let mut body_wire_upper_bound = response_shape.body_wire_upper_bound;
-    let mut removable_authority_indices = SmallVec::<[u16; 4]>::new();
+    let mut removable_authority_indices = SmallVec::<[usize; 4]>::new();
     image.visit_plan_record_sections_with_authority_removability(
         plan,
         |record| {
@@ -1983,11 +1983,7 @@ fn build_truncated_zone_image_response(
         },
         |record, removable_authority| {
             if removable_authority {
-                debug_assert!(
-                    kept_authorities.len() <= u16::MAX as usize,
-                    "truncation authority index is bounded by DNS section count"
-                );
-                removable_authority_indices.push(kept_authorities.len() as u16);
+                removable_authority_indices.push(kept_authorities.len());
             }
             kept_authorities.push(record);
         },
@@ -2019,7 +2015,6 @@ fn build_truncated_zone_image_response(
             section_counts.decrement_additional();
             Some(record)
         } else if let Some(index) = removable_authority_indices.pop() {
-            let index = usize::from(index);
             let removed = if index + 1 == kept_authorities.len() {
                 kept_authorities.pop()
             } else {

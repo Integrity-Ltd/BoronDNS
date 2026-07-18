@@ -2265,7 +2265,9 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
          # HELP borondns_zone_shape_rdata_records_per_rrset RRsets grouped by RDATA record count.\n\
          # TYPE borondns_zone_shape_rdata_records_per_rrset gauge\n\
          # HELP borondns_zone_shape_rdata_payload_bytes_per_rrset RRsets grouped by total RDATA payload bytes.\n\
-         # TYPE borondns_zone_shape_rdata_payload_bytes_per_rrset gauge\n",
+         # TYPE borondns_zone_shape_rdata_payload_bytes_per_rrset gauge\n\
+         # HELP borondns_zone_image_denial_range_groups DNSSEC denial range groups by proof type and indexed or fallback lookup mode.\n\
+         # TYPE borondns_zone_image_denial_range_groups gauge\n",
     );
 
     for metadata in zones.zone_metadata() {
@@ -2318,6 +2320,31 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
             ),
         ] {
             body.push_str(&format!("{metric}{{zone=\"{zone}\"}} {value}\n"));
+        }
+
+        if let Some(stats) = metadata.zone_image_stats {
+            for (proof, mode, value) in [
+                ("nsec", "indexed", stats.nsec_indexed_range_group_count),
+                (
+                    "nsec",
+                    "fallback",
+                    stats
+                        .nsec_range_group_count
+                        .saturating_sub(stats.nsec_indexed_range_group_count),
+                ),
+                ("nsec3", "indexed", stats.nsec3_indexed_range_group_count),
+                (
+                    "nsec3",
+                    "fallback",
+                    stats
+                        .nsec3_range_group_count
+                        .saturating_sub(stats.nsec3_indexed_range_group_count),
+                ),
+            ] {
+                body.push_str(&format!(
+                    "borondns_zone_image_denial_range_groups{{zone=\"{zone}\",proof=\"{proof}\",mode=\"{mode}\"}} {value}\n"
+                ));
+            }
         }
 
         let Some(histograms) = metadata.shape_histograms.as_ref() else {

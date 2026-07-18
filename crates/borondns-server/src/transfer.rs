@@ -261,7 +261,7 @@ async fn poll_soa_from_primary_tcp_inner(
     let mut stream =
         connect_transfer_stream(primary, transfer_source, connect_timeout, None).await?;
     let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig)?;
-    let framed_query = axfr::frame_tcp_message(&query.message);
+    let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)
         .await
@@ -1155,7 +1155,7 @@ async fn transfer_ixfr_from_primary_inner(
         axfr::build_ixfr_query_from_soa_view(qid, zone_apex, qclass, current_soa)?,
         session.tsig,
     )?;
-    let framed_query = axfr::frame_tcp_message(&query.message);
+    let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)
         .await
@@ -1644,7 +1644,7 @@ async fn transfer_axfr_from_primary_inner(
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), session.tsig)?;
-    let framed_query = axfr::frame_tcp_message(&query.message);
+    let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)
         .await

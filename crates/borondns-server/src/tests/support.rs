@@ -1893,6 +1893,7 @@ fn telemetry_zone_metadata(serial: Option<u32>, soa_timers: Option<SoaTimers>) -
         soa_timers,
         shape: None,
         shape_histograms: None,
+        zone_image_stats: None,
     }
 }
 

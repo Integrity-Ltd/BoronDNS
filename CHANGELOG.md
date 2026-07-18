@@ -21,6 +21,10 @@ full evidence pointers and sign-off.
   selective `u64`.
 - Added code-aligned ZoneImage capacity documentation covering encoded,
   DNS-format, transfer-ingest, and reload-memory limits.
+- Added opt-in per-zone NSEC/NSEC3 indexed-versus-fallback gauges and matching
+  ZoneImage compilation log fields.
+- Made DNS-over-TCP framing reject messages larger than 65,535 bytes instead of
+  truncating the length prefix.
 
 ### Fixed
 
@@ -35,6 +39,8 @@ full evidence pointers and sign-off.
 - Canonicalized validated saved-plan paths before fuzz campaign management so
   the documented relative `status`, `collect`, `resume`, and `cleanup` commands
   match immutable absolute command paths.
+- Removed a release-only truncating authority scratch-index cast and documented
+  the relation-offset sentinel/end-exclusive count invariant.
 
 ## 0.9.0 - 2026-07-16
 

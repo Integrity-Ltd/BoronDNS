@@ -123,6 +123,10 @@ The metrics endpoint exposes these implemented metric families:
 - opt-in active-zone shape gauges and fixed-bucket layout histograms under
   `borondns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
   RDATA records per RRset, and RDATA payload bytes per RRset;
+- opt-in per-zone DNSSEC denial lookup-mode gauges under
+  `borondns_zone_image_denial_range_groups{proof,mode}`, where `proof` is
+  `nsec` or `nsec3` and `mode` is `indexed` or `fallback`; a non-zero fallback
+  value makes a conservatively scanned malformed or incomplete ring visible;
 - immutable-zone-image serving counters under `borondns_zone_image_serve_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
 
