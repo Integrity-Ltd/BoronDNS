@@ -1135,7 +1135,15 @@ fn main() {
     println!("zone_image_records\t{}", stats.record_count);
     println!("zone_image_hot_bytes\t{}", stats.hot_bytes);
     println!("zone_image_cold_bytes\t{}", stats.cold_bytes);
+    println!("zone_image_label_bytes\t{}", stats.label_bytes);
+    println!("zone_image_name_bytes\t{}", stats.name_bytes);
+    println!("zone_image_rdata_bytes\t{}", stats.rdata_bytes);
+    println!("zone_image_wire_bytes\t{}", stats.wire_bytes);
     println!("zone_image_bytes_per_record\t{}", stats.bytes_per_record);
+    println!(
+        "zone_snapshot_in_only_class_index_bytes_saved\t{}",
+        snapshot.shape_summary().in_only_class_index_bytes_saved
+    );
     let stress_stats = stress_image.stats();
     println!(
         "zone_image_delegation_dname_stress_nodes\t{}",

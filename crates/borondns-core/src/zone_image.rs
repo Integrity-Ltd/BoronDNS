@@ -62,8 +62,10 @@ pub struct ZoneImage {
     rrset_relation_spans: Box<[ImageRrsetRelationSpan]>,
     single_name_targets: Box<[ImageSingleNameTarget]>,
     nsec_ranges: Box<[ImageNsecRange]>,
+    nsec_range_groups: Box<[ImageNsecRangeGroup]>,
     nsec3_param_sets: Box<[ImageNsec3ParamSet]>,
     nsec3_ranges: Box<[ImageNsec3Range]>,
+    nsec3_range_groups: Box<[ImageNsec3RangeGroup]>,
     apex_in_soa_rrset: Option<ZoneImageRrsetId>,
     dnssec_augmentation_possible: bool,
     dnssec_denial_augmentation_possible: bool,
@@ -92,8 +94,14 @@ pub struct ZoneImageStats {
     pub max_rrsets_per_name: usize,
     pub max_depth: usize,
     pub average_depth_times_1000: usize,
+    pub label_bytes: usize,
+    pub name_bytes: usize,
     pub rdata_bytes: usize,
     pub wire_bytes: usize,
+    pub nsec_range_group_count: usize,
+    pub nsec_indexed_range_group_count: usize,
+    pub nsec3_range_group_count: usize,
+    pub nsec3_indexed_range_group_count: usize,
     pub hot_bytes: usize,
     pub cold_bytes: usize,
     pub bytes_per_record: usize,
@@ -385,6 +393,14 @@ struct ImageNsecRange {
     owner_before_next: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageNsecRangeGroup {
+    first_range: u64,
+    range_count: u64,
+    class: u16,
+    indexed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageNsec3ParamSet {
     hash_algorithm: u8,
@@ -399,6 +415,15 @@ struct ImageNsec3Range {
     param_set: u16,
     owner_hash: [u8; 20],
     next_hash: [u8; 20],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageNsec3RangeGroup {
+    first_range: u64,
+    range_count: u64,
+    class: u16,
+    param_set: u16,
+    indexed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2946,20 +2971,49 @@ impl ZoneImage {
         name: NameLabelView<'_>,
         qclass: u16,
     ) -> Option<ZoneImageRrsetId> {
-        for range in &self.nsec_ranges {
-            if !qclass_matches(range.class, qclass) {
+        for group in &self.nsec_range_groups {
+            if !qclass_matches(group.class, qclass) {
                 continue;
             }
-            if nsec_range_keys_cover_label_view(
-                self.blob(&self.names, range.owner_key),
-                self.blob(&self.names, range.next_key),
-                range.owner_before_next,
-                name,
-            ) {
+            let ranges = self.nsec_ranges_for_group(group)?;
+            if group.indexed {
+                let insertion = ranges.partition_point(|range| {
+                    cmp_canonical_order_wire_key_to_label_view(
+                        self.blob(&self.names, range.owner_key),
+                        name,
+                    ) == Ordering::Less
+                });
+                let candidate = if insertion == 0 {
+                    ranges.last()
+                } else {
+                    ranges.get(insertion - 1)
+                };
+                if candidate.is_some_and(|range| self.nsec_range_covers(range, name)) {
+                    return candidate.map(|range| range.rrset_id);
+                }
+            } else if let Some(range) = ranges
+                .iter()
+                .find(|range| self.nsec_range_covers(range, name))
+            {
                 return Some(range.rrset_id);
             }
         }
         None
+    }
+
+    fn nsec_ranges_for_group(&self, group: &ImageNsecRangeGroup) -> Option<&[ImageNsecRange]> {
+        let first = usize::try_from(group.first_range).ok()?;
+        let count = usize::try_from(group.range_count).ok()?;
+        self.nsec_ranges.get(first..first.checked_add(count)?)
+    }
+
+    fn nsec_range_covers(&self, range: &ImageNsecRange, name: NameLabelView<'_>) -> bool {
+        nsec_range_keys_cover_label_view(
+            self.blob(&self.names, range.owner_key),
+            self.blob(&self.names, range.next_key),
+            range.owner_before_next,
+            name,
+        )
     }
 
     fn push_nsec3_for_name(
@@ -3056,31 +3110,29 @@ impl ZoneImage {
     ) -> Option<ZoneImageRrsetId> {
         let mut hash_cache = SmallVec::<[(u16, Option<[u8; 20]>); 1]>::new();
         let mut covering_rrset = None;
-        for range in &self.nsec3_ranges {
-            if !qclass_matches(range.class, qclass) {
+        for group in &self.nsec3_range_groups {
+            if !qclass_matches(group.class, qclass) {
                 continue;
             }
-            let param_set = self.nsec3_param_set(range.param_set);
+            let param_set = self.nsec3_param_set(group.param_set);
             if param_set.iterations > nsec3_max_iterations {
                 *nsec3_iterations_exceeded = true;
                 continue;
             }
             let hash_index = self.nsec3_hash_wire_name_param_cache_index(
                 wire_name,
-                range.param_set,
+                group.param_set,
                 param_set,
                 &mut hash_cache,
             );
             let Some(hash) = hash_cache[hash_index].1.as_ref() else {
                 continue;
             };
-            if hash == &range.owner_hash {
-                return Some(range.rrset_id);
-            }
-            if covering_rrset.is_none()
-                && nsec3_range_covers_hash(&range.owner_hash, &range.next_hash, hash)
-            {
-                covering_rrset = Some(range.rrset_id);
+            if let Some((rrset_id, exact)) = self.nsec3_range_match(group, hash) {
+                if exact {
+                    return Some(rrset_id);
+                }
+                covering_rrset.get_or_insert(rrset_id);
             }
         }
 
@@ -3096,35 +3148,70 @@ impl ZoneImage {
     ) -> Option<ZoneImageRrsetId> {
         let mut hash_cache = SmallVec::<[(u16, Option<[u8; 20]>); 1]>::new();
         let mut covering_rrset = None;
-        for range in &self.nsec3_ranges {
-            if !qclass_matches(range.class, qclass) {
+        for group in &self.nsec3_range_groups {
+            if !qclass_matches(group.class, qclass) {
                 continue;
             }
-            let param_set = self.nsec3_param_set(range.param_set);
+            let param_set = self.nsec3_param_set(group.param_set);
             if param_set.iterations > nsec3_max_iterations {
                 *nsec3_iterations_exceeded = true;
                 continue;
             }
             let hash_index = self.nsec3_hash_label_view_param_cache_index(
                 name,
-                range.param_set,
+                group.param_set,
                 param_set,
                 &mut hash_cache,
             );
             let Some(hash) = hash_cache[hash_index].1.as_ref() else {
                 continue;
             };
-            if hash == &range.owner_hash {
-                return Some(range.rrset_id);
-            }
-            if covering_rrset.is_none()
-                && nsec3_range_covers_hash(&range.owner_hash, &range.next_hash, hash)
-            {
-                covering_rrset = Some(range.rrset_id);
+            if let Some((rrset_id, exact)) = self.nsec3_range_match(group, hash) {
+                if exact {
+                    return Some(rrset_id);
+                }
+                covering_rrset.get_or_insert(rrset_id);
             }
         }
 
         covering_rrset
+    }
+
+    fn nsec3_range_match(
+        &self,
+        group: &ImageNsec3RangeGroup,
+        hash: &[u8; 20],
+    ) -> Option<(ZoneImageRrsetId, bool)> {
+        let first = usize::try_from(group.first_range).ok()?;
+        let count = usize::try_from(group.range_count).ok()?;
+        let ranges = self.nsec3_ranges.get(first..first.checked_add(count)?)?;
+        if group.indexed {
+            return match ranges.binary_search_by_key(hash, |range| range.owner_hash) {
+                Ok(index) => Some((ranges[index].rrset_id, true)),
+                Err(insertion) => {
+                    let range = if insertion == 0 {
+                        ranges.last()?
+                    } else {
+                        ranges.get(insertion - 1)?
+                    };
+                    nsec3_range_covers_hash(&range.owner_hash, &range.next_hash, hash)
+                        .then_some((range.rrset_id, false))
+                }
+            };
+        }
+
+        let mut covering = None;
+        for range in ranges {
+            if hash == &range.owner_hash {
+                return Some((range.rrset_id, true));
+            }
+            if covering.is_none()
+                && nsec3_range_covers_hash(&range.owner_hash, &range.next_hash, hash)
+            {
+                covering = Some((range.rrset_id, false));
+            }
+        }
+        covering
     }
 
     fn nsec3_param_set(&self, param_set: u16) -> &ImageNsec3ParamSet {
@@ -4029,8 +4116,10 @@ struct ZoneImageBuilder {
     rrset_relation_spans: Vec<ImageRrsetRelationSpan>,
     single_name_targets: Vec<ImageSingleNameTarget>,
     nsec_ranges: Vec<ImageNsecRange>,
+    nsec_range_groups: Vec<ImageNsecRangeGroup>,
     nsec3_param_sets: Vec<ImageNsec3ParamSet>,
     nsec3_ranges: Vec<ImageNsec3Range>,
+    nsec3_range_groups: Vec<ImageNsec3RangeGroup>,
     labels: Vec<u8>,
     names: Vec<u8>,
     rdata: Vec<u8>,
@@ -4054,8 +4143,10 @@ impl ZoneImageBuilder {
             rrset_relation_spans: Vec::new(),
             single_name_targets: Vec::new(),
             nsec_ranges: Vec::new(),
+            nsec_range_groups: Vec::new(),
             nsec3_param_sets: Vec::new(),
             nsec3_ranges: Vec::new(),
+            nsec3_range_groups: Vec::new(),
             labels: Vec::new(),
             names: Vec::new(),
             rdata: Vec::new(),
@@ -4304,8 +4395,10 @@ impl ZoneImageBuilder {
             + self.rrset_relation_spans.len() * mem::size_of::<ImageRrsetRelationSpan>()
             + self.single_name_targets.len() * mem::size_of::<ImageSingleNameTarget>()
             + self.nsec_ranges.len() * mem::size_of::<ImageNsecRange>()
+            + self.nsec_range_groups.len() * mem::size_of::<ImageNsecRangeGroup>()
             + self.nsec3_param_sets.len() * mem::size_of::<ImageNsec3ParamSet>()
-            + self.nsec3_ranges.len() * mem::size_of::<ImageNsec3Range>();
+            + self.nsec3_ranges.len() * mem::size_of::<ImageNsec3Range>()
+            + self.nsec3_range_groups.len() * mem::size_of::<ImageNsec3RangeGroup>();
         let single_name_target_cold_bytes = self
             .single_name_targets
             .iter()
@@ -4387,8 +4480,22 @@ impl ZoneImageBuilder {
                 .max()
                 .unwrap_or_default(),
             average_depth_times_1000,
+            label_bytes: labels.len(),
+            name_bytes: self.names.len(),
             rdata_bytes: self.rdata.len(),
             wire_bytes: self.wire.len(),
+            nsec_range_group_count: self.nsec_range_groups.len(),
+            nsec_indexed_range_group_count: self
+                .nsec_range_groups
+                .iter()
+                .filter(|group| group.indexed)
+                .count(),
+            nsec3_range_group_count: self.nsec3_range_groups.len(),
+            nsec3_indexed_range_group_count: self
+                .nsec3_range_groups
+                .iter()
+                .filter(|group| group.indexed)
+                .count(),
             hot_bytes,
             cold_bytes,
             bytes_per_record: (hot_bytes + cold_bytes)
@@ -4414,8 +4521,10 @@ impl ZoneImageBuilder {
             rrset_relation_spans: self.rrset_relation_spans.into_boxed_slice(),
             single_name_targets: self.single_name_targets.into_boxed_slice(),
             nsec_ranges: self.nsec_ranges.into_boxed_slice(),
+            nsec_range_groups: self.nsec_range_groups.into_boxed_slice(),
             nsec3_param_sets: self.nsec3_param_sets.into_boxed_slice(),
             nsec3_ranges: self.nsec3_ranges.into_boxed_slice(),
+            nsec3_range_groups: self.nsec3_range_groups.into_boxed_slice(),
             apex_in_soa_rrset,
             dnssec_augmentation_possible,
             dnssec_denial_augmentation_possible,
@@ -4506,6 +4615,31 @@ impl ZoneImageBuilder {
                 });
             }
         }
+        let names = &self.names;
+        self.nsec_ranges.sort_by(|left, right| {
+            left.class.cmp(&right.class).then_with(|| {
+                cmp_canonical_order_key_wires(
+                    blob_from_arena(names, left.owner_key),
+                    blob_from_arena(names, right.owner_key),
+                )
+            })
+        });
+        let mut first = 0usize;
+        while first < self.nsec_ranges.len() {
+            let class = self.nsec_ranges[first].class;
+            let mut end = first + 1;
+            while end < self.nsec_ranges.len() && self.nsec_ranges[end].class == class {
+                end += 1;
+            }
+            let indexed = nsec_range_group_is_indexable(&self.nsec_ranges[first..end], names);
+            self.nsec_range_groups.push(ImageNsecRangeGroup {
+                first_range: checked_u64(first, "NSEC range groups")?,
+                range_count: checked_u64(end - first, "NSEC range groups")?,
+                class,
+                indexed,
+            });
+            first = end;
+        }
         Ok(())
     }
 
@@ -4550,6 +4684,33 @@ impl ZoneImageBuilder {
                 owner_hash,
                 next_hash,
             });
+        }
+        self.nsec3_ranges.sort_by(|left, right| {
+            left.class
+                .cmp(&right.class)
+                .then_with(|| left.param_set.cmp(&right.param_set))
+                .then_with(|| left.owner_hash.cmp(&right.owner_hash))
+        });
+        let mut first = 0usize;
+        while first < self.nsec3_ranges.len() {
+            let class = self.nsec3_ranges[first].class;
+            let param_set = self.nsec3_ranges[first].param_set;
+            let mut end = first + 1;
+            while end < self.nsec3_ranges.len()
+                && self.nsec3_ranges[end].class == class
+                && self.nsec3_ranges[end].param_set == param_set
+            {
+                end += 1;
+            }
+            let indexed = nsec3_range_group_is_indexable(&self.nsec3_ranges[first..end]);
+            self.nsec3_range_groups.push(ImageNsec3RangeGroup {
+                first_range: checked_u64(first, "NSEC3 range groups")?,
+                range_count: checked_u64(end - first, "NSEC3 range groups")?,
+                class,
+                param_set,
+                indexed,
+            });
+            first = end;
         }
         Ok(())
     }
@@ -5911,6 +6072,45 @@ fn nsec_range_keys_cover_label_view(
     } else {
         owner_vs_name == Ordering::Less || next_vs_name == Ordering::Greater
     }
+}
+
+fn nsec_range_group_is_indexable(ranges: &[ImageNsecRange], names: &[u8]) -> bool {
+    if ranges.is_empty() {
+        return false;
+    }
+    for index in 0..ranges.len() {
+        let current = &ranges[index];
+        let next = &ranges[(index + 1) % ranges.len()];
+        let current_owner = blob_from_arena(names, current.owner_key);
+        let next_owner = blob_from_arena(names, next.owner_key);
+        if ranges.len() > 1
+            && index + 1 < ranges.len()
+            && cmp_canonical_order_key_wires(current_owner, next_owner) != Ordering::Less
+        {
+            return false;
+        }
+        if blob_from_arena(names, current.next_key) != next_owner {
+            return false;
+        }
+    }
+    true
+}
+
+fn nsec3_range_group_is_indexable(ranges: &[ImageNsec3Range]) -> bool {
+    if ranges.is_empty() {
+        return false;
+    }
+    for index in 0..ranges.len() {
+        let current = &ranges[index];
+        let next = &ranges[(index + 1) % ranges.len()];
+        if ranges.len() > 1 && index + 1 < ranges.len() && current.owner_hash >= next.owner_hash {
+            return false;
+        }
+        if current.next_hash != next.owner_hash {
+            return false;
+        }
+    }
+    true
 }
 
 fn cmp_canonical_order_key_wires(left: &[u8], right: &[u8]) -> Ordering {

@@ -43,6 +43,7 @@ and slowly diverging.
 | Where is the next data-plane design detailed? | `memory-io-data-plane-design.md` | Keep packed `ZoneImage`, packet-I/O, metric, benchmark, and tuning details here; summarize only the deferred-track boundary elsewhere. |
 | Where is ZoneImage implementation status tracked? | `zone-image-implementation-status.md` | Keep checklist state, remaining layout work, and old query-layout retirement status here; keep detailed design rationale in `memory-io-data-plane-design.md`. |
 | What are the exact ZoneImage capacity limits? | `zone-image-capacity-limits.md` | Keep encoded, DNS-format, transfer-ingest, and reload-memory limits here; keep benchmark rationale in `zone-image-large-zone-design.md`. |
+| How were the July 2026 denial, memory, and class-index proposals resolved? | `zone-image-proposal-disposition-2026-07.md` | Keep the measured accepted/rejected/alternative-implemented decisions and reproduction command here. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | What is the richer optional JSON observability API? | `observability-api.md` | Keep observability paths, response shapes, reduced-metrics behavior, and config knobs here. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
@@ -72,6 +73,8 @@ and slowly diverging.
   `u64` fields and rejection of range sharding.
 - `zone-image-capacity-limits.md`: exact encoded, DNS-format, transfer-ingest,
   and practical reload limits for one immutable zone image.
+- `zone-image-proposal-disposition-2026-07.md`: measured disposition of indexed
+  denial lookup, compression/interning, and IN-only class-index specialization.
 - `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
   header, gzip, and rate-limit contract for `BDS-IF-HEALTH`.
 - `observability-api.md`: optional in-process JSON observability API for richer

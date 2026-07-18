@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    mem,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -46,8 +47,8 @@ pub struct ZoneSnapshot {
     pub soa_timers: Option<SoaTimers>,
     origin_key: NameKey,
     rrsets: HashMap<RrsetKey, Rrset>,
-    name_classes: HashMap<NameKey, ClassSet>,
-    empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
+    name_classes: NameClassIndex,
+    empty_non_terminal_classes: NameClassIndex,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
 }
@@ -72,6 +73,7 @@ pub struct ZoneShapeSummary {
     pub name_key_logical_bytes: usize,
     pub name_key_unique_bytes: usize,
     pub name_key_deduplicated_bytes: usize,
+    pub in_only_class_index_bytes_saved: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,8 +192,8 @@ impl ZoneSnapshot {
             soa_timers: None,
             origin_key,
             rrsets: HashMap::new(),
-            name_classes: HashMap::new(),
-            empty_non_terminal_classes: HashMap::new(),
+            name_classes: NameClassIndex::in_only(),
+            empty_non_terminal_classes: NameClassIndex::in_only(),
             delegation_rrsets: Vec::new(),
             dname_rrsets: Vec::new(),
         }
@@ -281,6 +283,8 @@ impl ZoneSnapshot {
             rrset_count: self.rrsets.len(),
             owner_name_count: self.name_classes.len(),
             empty_non_terminal_name_count: self.empty_non_terminal_classes.len(),
+            in_only_class_index_bytes_saved: self.name_classes.value_bytes_saved()
+                + self.empty_non_terminal_classes.value_bytes_saved(),
             ..ZoneShapeSummary::default()
         };
 
@@ -845,17 +849,12 @@ impl ZoneSnapshot {
     }
 
     fn name_exists_key(&self, name_key: &str, qclass: u16) -> bool {
-        self.name_classes
-            .get(name_key)
-            .is_some_and(|classes| classes_match(classes, qclass))
+        self.name_classes.contains(name_key, qclass)
     }
 
     fn name_exists_or_is_empty_non_terminal_key(&self, name_key: &str, qclass: u16) -> bool {
         self.name_exists_key(name_key, qclass)
-            || self
-                .empty_non_terminal_classes
-                .get(name_key)
-                .is_some_and(|classes| classes_match(classes, qclass))
+            || self.empty_non_terminal_classes.contains(name_key, qclass)
     }
 
     fn soa_rrset(&self, qclass: u16) -> Option<&Rrset> {
@@ -936,14 +935,87 @@ fn parent_name_key(name_key: &str) -> Option<String> {
 }
 
 struct ZoneSnapshotIndexes {
-    name_classes: HashMap<NameKey, ClassSet>,
-    empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
+    name_classes: NameClassIndex,
+    empty_non_terminal_classes: NameClassIndex,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
 }
 
 type ClassSet = SmallVec<[u16; 1]>;
 type NameKey = Arc<str>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NameClassIndex {
+    InOnly(HashSet<NameKey>),
+    MultiClass(HashMap<NameKey, ClassSet>),
+}
+
+impl NameClassIndex {
+    fn in_only() -> Self {
+        Self::InOnly(HashSet::new())
+    }
+
+    fn for_rrsets(rrsets: &HashMap<RrsetKey, Rrset>) -> Self {
+        if rrsets.values().all(|rrset| rrset.class == 1) {
+            Self::in_only()
+        } else {
+            Self::MultiClass(HashMap::new())
+        }
+    }
+
+    fn insert(&mut self, name: NameKey, class: u16) {
+        match self {
+            Self::InOnly(names) => {
+                debug_assert_eq!(class, 1);
+                names.insert(name);
+            }
+            Self::MultiClass(names) => {
+                names
+                    .entry(name)
+                    .and_modify(|classes| insert_class(classes, class))
+                    .or_insert_with(|| class_set(class));
+            }
+        }
+    }
+
+    fn contains(&self, name: &str, qclass: u16) -> bool {
+        match self {
+            Self::InOnly(names) => matches!(qclass, 1 | 255) && names.contains(name),
+            Self::MultiClass(names) => names
+                .get(name)
+                .is_some_and(|classes| classes_match(classes, qclass)),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::InOnly(names) => names.len(),
+            Self::MultiClass(names) => names.len(),
+        }
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &NameKey> {
+        let in_only = match self {
+            Self::InOnly(names) => Some(names.iter()),
+            Self::MultiClass(_) => None,
+        };
+        let multi_class = match self {
+            Self::MultiClass(names) => Some(names.keys()),
+            Self::InOnly(_) => None,
+        };
+        in_only
+            .into_iter()
+            .flatten()
+            .chain(multi_class.into_iter().flatten())
+    }
+
+    fn value_bytes_saved(&self) -> usize {
+        match self {
+            Self::InOnly(names) => names.len().saturating_mul(mem::size_of::<ClassSet>()),
+            Self::MultiClass(_) => 0,
+        }
+    }
+}
 
 impl ZoneSnapshotIndexes {
     fn build(
@@ -952,19 +1024,15 @@ impl ZoneSnapshotIndexes {
         name_interner: &mut NameInterner,
     ) -> Self {
         let mut indexes = Self {
-            name_classes: HashMap::new(),
-            empty_non_terminal_classes: HashMap::new(),
+            name_classes: NameClassIndex::for_rrsets(rrsets),
+            empty_non_terminal_classes: NameClassIndex::for_rrsets(rrsets),
             delegation_rrsets: Vec::new(),
             dname_rrsets: Vec::new(),
         };
         let origin_key = origin.canonical_key();
 
         for (key, rrset) in rrsets {
-            indexes
-                .name_classes
-                .entry(key.owner.clone())
-                .and_modify(|classes| insert_class(classes, rrset.class))
-                .or_insert_with(|| class_set(rrset.class));
+            indexes.name_classes.insert(key.owner.clone(), rrset.class);
             indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class, name_interner);
 
             if rrset.rr_type == RecordType::Ns as u16 && key.owner.as_ref() != origin_key {
@@ -991,9 +1059,7 @@ impl ZoneSnapshotIndexes {
             }
 
             self.empty_non_terminal_classes
-                .entry(name_interner.intern_domain(&name))
-                .and_modify(|classes| insert_class(classes, class))
-                .or_insert_with(|| class_set(class));
+                .insert(name_interner.intern_domain(&name), class);
 
             if name == *origin {
                 break;
@@ -2258,6 +2324,81 @@ impl RrsetKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem;
+
+    #[test]
+    fn in_only_class_removal_does_not_shrink_core_rrset_layouts() {
+        #[allow(dead_code)]
+        struct ClasslessRrsetKey {
+            owner: NameKey,
+            rr_type: u16,
+        }
+        #[allow(dead_code)]
+        struct ClasslessRrset {
+            owner: DomainName,
+            rr_type: u16,
+            ttl: u32,
+            rdatas: SmallVec<[Vec<u8>; 1]>,
+        }
+
+        assert_eq!(
+            mem::size_of::<RrsetKey>(),
+            mem::size_of::<ClasslessRrsetKey>()
+        );
+        assert_eq!(mem::size_of::<Rrset>(), mem::size_of::<ClasslessRrset>());
+        assert_eq!(mem::size_of::<ClassSet>(), 24);
+    }
+
+    #[test]
+    fn name_class_index_compacts_in_only_zones_and_preserves_multiclass_semantics() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let in_only = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        );
+        assert!(matches!(in_only.name_classes, NameClassIndex::InOnly(_)));
+        assert!(in_only.name_exists(&origin, 1));
+        assert!(in_only.name_exists(&origin, 255));
+        assert!(!in_only.name_exists(&origin, 3));
+        assert_eq!(
+            in_only.shape_summary().in_only_class_index_bytes_saved,
+            mem::size_of::<ClassSet>()
+        );
+
+        let chaos = DomainName::from_absolute_str("chaos.example.test.").unwrap();
+        let multiclass = ZoneSnapshot::active(
+            origin.clone(),
+            Some(2),
+            vec![
+                Rrset::new(origin, RecordType::Soa as u16, 1, 300, vec![soa_rdata()]),
+                Rrset::new(
+                    chaos.clone(),
+                    RecordType::Txt as u16,
+                    3,
+                    300,
+                    vec![vec![3, b'c', b'h', b'a']],
+                ),
+            ],
+        );
+        assert!(matches!(
+            multiclass.name_classes,
+            NameClassIndex::MultiClass(_)
+        ));
+        assert!(multiclass.name_exists(&chaos, 3));
+        assert!(multiclass.name_exists(&chaos, 255));
+        assert!(!multiclass.name_exists(&chaos, 1));
+        assert_eq!(
+            multiclass.shape_summary().in_only_class_index_bytes_saved,
+            0
+        );
+    }
 
     #[test]
     fn active_snapshot_extracts_soa_timers() {

@@ -272,8 +272,73 @@
             .expect("NSEC rrset exists");
 
         assert_eq!(image.nsec_ranges.len(), 1);
+        assert_eq!(image.stats().nsec_range_group_count, 1);
+        assert_eq!(image.stats().nsec_indexed_range_group_count, 0);
         assert_eq!(image.nsec_ranges[0].rrset_id, nsec);
         assert_eq!(image.nsec_rrset_covering_name(&covered, 1), Some(nsec));
+    }
+
+    #[test]
+    fn nsec_canonical_ring_uses_indexed_predecessor_lookup() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let owners = ["a.example.test.", "m.example.test.", "z.example.test."]
+            .map(|name| DomainName::from_absolute_str(name).unwrap());
+        let mut rrsets = vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            600,
+            vec![soa_rdata()],
+        )];
+        for index in 0..owners.len() {
+            rrsets.push(Rrset::new(
+                owners[index].clone(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata(&owners[(index + 1) % owners.len()].to_string())],
+            ));
+        }
+        let image = ZoneImage::compile(&ZoneSnapshot::active(origin, Some(53), rrsets))
+            .expect("zone image compiles");
+        let a_nsec = image
+            .find_rrset(&owners[0], RecordType::Nsec as u16, 1)
+            .expect("a NSEC exists");
+        let m_nsec = image
+            .find_rrset(&owners[1], RecordType::Nsec as u16, 1)
+            .expect("m NSEC exists");
+        let z_nsec = image
+            .find_rrset(&owners[2], RecordType::Nsec as u16, 1)
+            .expect("z NSEC exists");
+
+        assert_eq!(image.stats().nsec_range_group_count, 1);
+        assert_eq!(image.stats().nsec_indexed_range_group_count, 1);
+        assert_eq!(
+            image.nsec_rrset_covering_name(
+                &DomainName::from_absolute_str("b.example.test.").unwrap(),
+                1,
+            ),
+            Some(a_nsec)
+        );
+        assert_eq!(
+            image.nsec_rrset_covering_name(
+                &DomainName::from_absolute_str("y.example.test.").unwrap(),
+                1,
+            ),
+            Some(m_nsec)
+        );
+        assert_eq!(
+            image.nsec_rrset_covering_name(
+                &DomainName::from_absolute_str("0.example.test.").unwrap(),
+                1,
+            ),
+            Some(z_nsec)
+        );
+        assert_eq!(
+            image.nsec_rrset_covering_name(&owners[1], 1),
+            None,
+            "an NSEC owner is not covered by the preceding interval"
+        );
     }
 
     #[test]
@@ -489,6 +554,8 @@
 
         assert_eq!(image.nsec3_ranges.len(), 2);
         assert_eq!(image.nsec3_param_sets.len(), 1);
+        assert_eq!(image.stats().nsec3_range_group_count, 1);
+        assert_eq!(image.stats().nsec3_indexed_range_group_count, 0);
         assert!(
             image.nsec3_ranges.iter().all(|range| range.param_set == 0),
             "NSEC3 ranges with shared algorithm/iterations/salt should share one parameter set"
@@ -543,6 +610,63 @@
             Some(nsec3)
         );
         assert!(!iterations_exceeded);
+    }
+
+    #[test]
+    fn nsec3_hash_ring_uses_indexed_exact_predecessor_and_wrap_lookup() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let hashes = [[0x10; 20], [0x80; 20], [0xf0; 20]];
+        let owners = hashes.map(|hash| {
+            DomainName::from_absolute_str(&format!(
+                "{}.example.test.",
+                base32hex_no_padding_lower(&hash)
+            ))
+            .unwrap()
+        });
+        let mut rrsets = vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            600,
+            vec![soa_rdata()],
+        )];
+        for index in 0..hashes.len() {
+            rrsets.push(Rrset::new(
+                owners[index].clone(),
+                RecordType::Nsec3 as u16,
+                1,
+                300,
+                vec![nsec3_rdata_with_next_hash(
+                    1,
+                    0,
+                    &[],
+                    &hashes[(index + 1) % hashes.len()],
+                )],
+            ));
+        }
+        let image = ZoneImage::compile(&ZoneSnapshot::active(origin, Some(54), rrsets))
+            .expect("zone image compiles");
+        let ids = owners.map(|owner| {
+            image
+                .find_rrset(&owner, RecordType::Nsec3 as u16, 1)
+                .expect("NSEC3 rrset exists")
+        });
+        let group = &image.nsec3_range_groups[0];
+
+        assert_eq!(image.stats().nsec3_range_group_count, 1);
+        assert_eq!(image.stats().nsec3_indexed_range_group_count, 1);
+        assert_eq!(
+            image.nsec3_range_match(group, &hashes[1]),
+            Some((ids[1], true))
+        );
+        assert_eq!(
+            image.nsec3_range_match(group, &[0x90; 20]),
+            Some((ids[1], false))
+        );
+        assert_eq!(
+            image.nsec3_range_match(group, &[0x05; 20]),
+            Some((ids[2], false))
+        );
     }
 
     #[test]

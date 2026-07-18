@@ -97,6 +97,16 @@ Current capacity limits are normative in
 - [x] Reject and remove the canonical range-sharding prototype after selective
   `u64` showed no measurable unsaturated UDP service penalty.
 - [x] Keep packed lookup in safe Rust.
+- [x] Index valid closed NSEC/NSEC3 denial rings for binary predecessor/exact
+  lookup while preserving a linear fallback for malformed or incomplete
+  groups; focused 100k-record evidence is retained in
+  `docs/zone-image-proposal-disposition-2026-07.md`.
+- [x] Specialize retained snapshot name-existence indexes to membership sets
+  for production IN-only zones while preserving general multi-class maps for
+  synthetic/oracle inputs.
+- [x] Reject generic hot-path compression and remove the measured owner/RDATA
+  interning prototype after negligible savings; retain per-arena benchmark
+  metrics instead.
 
 ## Phase 3: Full Name Semantics
 

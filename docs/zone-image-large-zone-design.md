@@ -138,8 +138,11 @@ The projected shape has 644 million RRsets and 4.83 billion records. Its RRset
 and node counts fit the compact `u32` ID space, while its record ordinal and
 arenas exceed `u32`; selective `u64` removes exactly those structural ceilings.
 
-The next memory improvement should compact or deduplicate stored wire bodies
-and then replay a representative registry corpus. Sharding is not part of the
+The July 2026 follow-up rejected generic compression and owner/RDATA interning,
+implemented query-neutral IN-only snapshot class-index compaction, and added
+per-arena benchmark reporting. Any future wire-body redesign must first replay
+a representative registry corpus and preserve physical-link performance; see
+`docs/zone-image-proposal-disposition-2026-07.md`. Sharding is not part of the
 planned query architecture. If a deployment cannot hold the source snapshot,
 builder workspace, and immutable generations required for reload, it needs a
 larger-memory host or a separately designed storage architecture rather than a

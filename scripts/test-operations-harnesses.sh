@@ -2268,7 +2268,11 @@ sed -e 's/^User=codex$/User=tibi/' \
     "$fragment_runtime_pair" >"$fragment_portable_user"
 campaign_validate_systemd_fragment_schema "$fragment_portable_user" "$campaign_published_runner"
 grep -Fq 'GIT_CONFIG_KEY_0=safe.directory' "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
+# Assert literal generated-shell expressions.
+# shellcheck disable=SC2016
 grep -Fq 'GIT_CONFIG_VALUE_0="$source_dir"' "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
+# Assert literal generated-shell expressions.
+# shellcheck disable=SC2016
 grep -Fq 'size_target_setup_reserve "$((${#targets[@]} * target_repeat))"' \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
 grep -Fq 'fuzz_internal_artifact_dir' "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"

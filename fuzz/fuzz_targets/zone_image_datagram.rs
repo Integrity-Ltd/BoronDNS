@@ -123,7 +123,12 @@ fn assert_zone_image_matches_offline_oracle(
         options.any_response,
     );
     let image_summary = image.plan_summary(&plan).expect("image plan summarizes");
-    let oracle_lookup = fixture().snapshot.offline_oracle().lookup_with_options(
+    let snapshot = fixture()
+        .snapshots
+        .iter()
+        .find(|snapshot| question.qname.is_equal_or_subdomain_of(&snapshot.origin))
+        .expect("shaped query has a fixture snapshot");
+    let oracle_lookup = snapshot.offline_oracle().lookup_with_options(
         &question.qname,
         question.qtype,
         question.qclass,
@@ -136,17 +141,22 @@ fn assert_zone_image_matches_offline_oracle(
 
 struct Fixture {
     store: ZoneStore,
-    snapshot: ZoneSnapshot,
+    snapshots: Vec<ZoneSnapshot>,
 }
 
 fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let apex = DomainName::from_absolute_str("zoneimage.test.").expect("static apex is valid");
-        let snapshot = zone_snapshot(apex);
+        let snapshots = vec![
+            zone_snapshot(apex),
+            nsec3_zone_snapshot(name("nsec3.test.")),
+        ];
         let store = ZoneStore::new();
-        store.insert_snapshot(snapshot.clone());
-        Fixture { store, snapshot }
+        for snapshot in &snapshots {
+            store.insert_snapshot(snapshot.clone());
+        }
+        Fixture { store, snapshots }
     })
 }
 
@@ -170,8 +180,8 @@ fn exercise_regression_seeds_once() {
     });
 }
 
-fn regression_seeds() -> [[u8; 32]; 10] {
-    let mut seeds = [[0u8; 32]; 10];
+fn regression_seeds() -> [[u8; 32]; 11] {
+    let mut seeds = [[0u8; 32]; 11];
 
     // CNAME, wildcard synthesis, DNAME synthesis, referral, ANY/full,
     // DNSSEC/EDNS denial, UDP truncation, and QCLASS=ANY.
@@ -199,6 +209,10 @@ fn regression_seeds() -> [[u8; 32]; 10] {
         0x74, 0x50, 0x06, 0x10, 0x74, 0x50, 0x06, 0x10, 0xff, 0xff, 0xff, 0x64, 0xa2, 0x03, 0x00,
         0xff, 0xff, 0xff, 0x64, 0xa2, 0x03, 0x00, 0x0a,
     ]);
+    // NSEC3 NXDOMAIN with EDNS DO reaches the indexed hash-ring proof path.
+    seeds[10][4] = 17;
+    seeds[10][13] = 1;
+    seeds[10][16] = 1;
     seeds
 }
 
@@ -357,10 +371,40 @@ fn zone_snapshot(apex: DomainName) -> ZoneSnapshot {
             rrset(
                 &apex,
                 RecordType::Nsec,
-                vec![nsec_rdata("www.zoneimage.test.")],
+                vec![nsec_rdata("a.zoneimage.test.")],
             ),
             rrset(
                 &apex,
+                RecordType::Rrsig,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+            rrset(
+                &name("a.zoneimage.test."),
+                RecordType::Nsec,
+                vec![nsec_rdata("m.zoneimage.test.")],
+            ),
+            rrset(
+                &name("a.zoneimage.test."),
+                RecordType::Rrsig,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+            rrset(
+                &name("m.zoneimage.test."),
+                RecordType::Nsec,
+                vec![nsec_rdata("z.zoneimage.test.")],
+            ),
+            rrset(
+                &name("m.zoneimage.test."),
+                RecordType::Rrsig,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+            rrset(
+                &name("z.zoneimage.test."),
+                RecordType::Nsec,
+                vec![nsec_rdata("zoneimage.test.")],
+            ),
+            rrset(
+                &name("z.zoneimage.test."),
                 RecordType::Rrsig,
                 vec![rrsig_rdata(RecordType::Nsec)],
             ),
@@ -388,6 +432,42 @@ fn zone_snapshot(apex: DomainName) -> ZoneSnapshot {
             ),
         ],
     )
+}
+
+fn nsec3_zone_snapshot(apex: DomainName) -> ZoneSnapshot {
+    let hashes = [[0x10; 20], [0x80; 20], [0xf0; 20]];
+    let owners = hashes.map(|hash| {
+        name(&format!(
+            "{}.nsec3.test.",
+            base32hex_no_padding_lower(&hash)
+        ))
+    });
+    let mut rrsets = vec![
+        rrset(
+            &apex,
+            RecordType::Soa,
+            vec![soa_rdata_for("nsec3.test.", 2)],
+        ),
+        rrset(&apex, RecordType::Ns, vec![name_wire("ns1.nsec3.test.")]),
+        rrset(
+            &name("ns1.nsec3.test."),
+            RecordType::A,
+            vec![vec![192, 0, 2, 54]],
+        ),
+    ];
+    for index in 0..hashes.len() {
+        rrsets.push(rrset(
+            &owners[index],
+            RecordType::Nsec3,
+            vec![nsec3_rdata(&hashes[(index + 1) % hashes.len()])],
+        ));
+        rrsets.push(rrset(
+            &owners[index],
+            RecordType::Rrsig,
+            vec![rrsig_rdata_for(RecordType::Nsec3, "nsec3.test.")],
+        ));
+    }
+    ZoneSnapshot::active(apex, Some(2), rrsets)
 }
 
 fn rrset(owner: &DomainName, rr_type: RecordType, rdatas: Vec<Vec<u8>>) -> Rrset {
@@ -441,6 +521,8 @@ fn shaped_query_packet(data: &[u8]) -> Vec<u8> {
         "absent.zoneimage.test.",
         "bulk.zoneimage.test.",
         "*.zoneimage.test.",
+        "absent.nsec3.test.",
+        "deep.absent.nsec3.test.",
     ];
     let qtypes = [
         RecordType::A as u16,
@@ -512,9 +594,13 @@ fn append_opt(packet: &mut Vec<u8>, data: &[u8]) {
 }
 
 fn soa_rdata(serial: u32) -> Vec<u8> {
+    soa_rdata_for("zoneimage.test.", serial)
+}
+
+fn soa_rdata_for(origin: &str, serial: u32) -> Vec<u8> {
     let mut rdata = Vec::new();
-    rdata.extend_from_slice(&name_wire("ns1.zoneimage.test."));
-    rdata.extend_from_slice(&name_wire("hostmaster.zoneimage.test."));
+    rdata.extend_from_slice(&name_wire(&format!("ns1.{origin}")));
+    rdata.extend_from_slice(&name_wire(&format!("hostmaster.{origin}")));
     rdata.extend_from_slice(&serial.to_be_bytes());
     rdata.extend_from_slice(&3600u32.to_be_bytes());
     rdata.extend_from_slice(&600u32.to_be_bytes());
@@ -547,13 +633,17 @@ fn txt_rdata(text: &[u8]) -> Vec<u8> {
 }
 
 fn rrsig_rdata(type_covered: RecordType) -> Vec<u8> {
+    rrsig_rdata_for(type_covered, "zoneimage.test.")
+}
+
+fn rrsig_rdata_for(type_covered: RecordType, signer: &str) -> Vec<u8> {
     let mut rdata = (type_covered as u16).to_be_bytes().to_vec();
     rdata.extend_from_slice(&[8, 2]);
     rdata.extend_from_slice(&300u32.to_be_bytes());
     rdata.extend_from_slice(&1_700_086_400u32.to_be_bytes());
     rdata.extend_from_slice(&1_700_000_000u32.to_be_bytes());
     rdata.extend_from_slice(&1u16.to_be_bytes());
-    rdata.extend_from_slice(&name_wire("zoneimage.test."));
+    rdata.extend_from_slice(&name_wire(signer));
     rdata.extend_from_slice(b"signature");
     rdata
 }
@@ -562,6 +652,35 @@ fn nsec_rdata(next_owner: &str) -> Vec<u8> {
     let mut rdata = name_wire(next_owner);
     rdata.extend_from_slice(&[0, 1, 0x40]);
     rdata
+}
+
+fn nsec3_rdata(next_hash: &[u8]) -> Vec<u8> {
+    let mut rdata = vec![1, 0];
+    rdata.extend_from_slice(&0u16.to_be_bytes());
+    rdata.push(0);
+    rdata.push(next_hash.len() as u8);
+    rdata.extend_from_slice(next_hash);
+    rdata.extend_from_slice(&[0, 1, 0x40]);
+    rdata
+}
+
+fn base32hex_no_padding_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+    let mut output = String::new();
+    let mut accumulator = 0u32;
+    let mut bits = 0u8;
+    for byte in bytes {
+        accumulator = (accumulator << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(ALPHABET[((accumulator >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits != 0 {
+        output.push(ALPHABET[((accumulator << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    output
 }
 
 fn name(value: &str) -> DomainName {
