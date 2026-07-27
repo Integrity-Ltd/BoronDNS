@@ -104,6 +104,8 @@ path/to/config.toml`, remain supported and take precedence.
 - `borondns-cli`: command-line entrypoint.
 - `boron-gun`: BoronDNS test-tool DNS load generator with portable UDP self-tests
   and an explicit Linux AF_XDP backend for lab hosts.
+- `boron-gen`: deterministic bounded-memory synthetic catalog/primary server for
+  very large AXFR, NSEC3, mixed-record, and RRset tests.
 
 The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 
@@ -117,6 +119,8 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)
 - [BoronGun load generator](docs/boron-gun.md)
+- [BoronGen large-zone primary](docs/boron-gen.md)
+- [BoronGen July 2026 validation](docs/boron-gen-validation-2026-07.md)
 - [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Implemented feature scope](docs/implemented-feature-scope.md)

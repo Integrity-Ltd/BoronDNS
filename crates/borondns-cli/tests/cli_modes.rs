@@ -626,6 +626,7 @@ fn dump_config_includes_borondns_environment_overrides() {
         .env("BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192")
         .env("BORONDNS_TSIG_FUDGE_SECONDS", "30")
         .env("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600")
+        .env("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES", "1000000")
         .env("BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200")
         .env("BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200")
         .output()
@@ -643,6 +644,7 @@ fn dump_config_includes_borondns_environment_overrides() {
     assert!(stdout.contains("max_entry_length_bytes = 8192"));
     assert!(stdout.contains("fudge_seconds = 30"));
     assert!(stdout.contains("max_transfer_ingest_bytes = 104857600"));
+    assert!(stdout.contains("max_transfer_ingest_messages = 1000000"));
     assert!(stdout.contains("zsm_max_interval_secs = 43200"));
     assert!(stdout.contains("zsm_loading_warning_threshold_secs = 1200"));
 

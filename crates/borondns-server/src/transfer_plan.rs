@@ -28,6 +28,7 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) tsig_key_name: Option<DomainName>,
     pub(crate) tsig_fudge_seconds: u16,
     pub(crate) max_transfer_ingest_bytes: u64,
+    pub(crate) max_transfer_ingest_messages: u64,
     pub(crate) transfer_sources: Vec<SocketAddr>,
     generation: u64,
     cancellation: watch::Sender<bool>,
@@ -74,6 +75,7 @@ impl ZoneTransferPlan {
             tsig_key_name: self.tsig_key_name.clone(),
             tsig_fudge_seconds: self.tsig_fudge_seconds,
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
+            max_transfer_ingest_messages: self.max_transfer_ingest_messages,
             transfer_sources: self.transfer_sources.clone(),
             generation: 0,
             cancellation: fresh_cancellation(),
@@ -87,6 +89,7 @@ impl ZoneTransferPlan {
             && self.tsig_key_name == other.tsig_key_name
             && self.tsig_fudge_seconds == other.tsig_fudge_seconds
             && self.max_transfer_ingest_bytes == other.max_transfer_ingest_bytes
+            && self.max_transfer_ingest_messages == other.max_transfer_ingest_messages
             && self.transfer_sources == other.transfer_sources
     }
 }
@@ -116,6 +119,7 @@ impl TransferPlan {
                 zone,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
+                config.limits.max_transfer_ingest_messages,
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -127,6 +131,7 @@ impl TransferPlan {
                 catalog_zone,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
+                config.limits.max_transfer_ingest_messages,
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -136,6 +141,7 @@ impl TransferPlan {
                 catalog_zone,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
+                config.limits.max_transfer_ingest_messages,
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -368,6 +374,7 @@ fn transfer_plan_from_zone_config(
     zone: &ZoneConfig,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    max_transfer_ingest_messages: u64,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -388,6 +395,7 @@ fn transfer_plan_from_zone_config(
         tsig_key_name,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
+        max_transfer_ingest_messages,
         transfer_sources: transfer_sources.to_vec(),
         generation: 0,
         cancellation: fresh_cancellation(),
@@ -398,6 +406,7 @@ fn transfer_plan_from_catalog_zone_config(
     zone: &CatalogZoneConfig,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    max_transfer_ingest_messages: u64,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -413,6 +422,7 @@ fn transfer_plan_from_catalog_zone_config(
         &zone,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
+        max_transfer_ingest_messages,
         transfer_sources,
         primary_start_index,
     )
@@ -422,6 +432,7 @@ fn transfer_plan_from_catalog_member_config(
     zone: &CatalogZoneConfig,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    max_transfer_ingest_messages: u64,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -437,6 +448,7 @@ fn transfer_plan_from_catalog_member_config(
         &zone,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
+        max_transfer_ingest_messages,
         transfer_sources,
         primary_start_index,
     )

@@ -1165,6 +1165,7 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
 
     let mut ingest = TransferIngestTracker::new("IXFR", primary.addr, session.max_ingest_bytes)
+        .with_message_limit(session.max_ingest_messages)
         .with_ingest_budget(session.ingest_budget);
     // Declare retained messages after the tracker so Rust drops the message
     // buffers before releasing their aggregate-budget reservations.
@@ -1328,6 +1329,7 @@ impl<'a> TransferTsig<'a> {
 pub(crate) struct TransferSession<'a> {
     tsig: TransferTsig<'a>,
     max_ingest_bytes: u64,
+    max_ingest_messages: u64,
     ingest_budget: Option<&'a TransferIngestBudget>,
     transfer_source: Option<SocketAddr>,
     xot_client_config: Option<&'a XotClientConfig>,
@@ -1338,6 +1340,7 @@ impl<'a> TransferSession<'a> {
         Self {
             tsig,
             max_ingest_bytes,
+            max_ingest_messages: DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT,
             ingest_budget: None,
             transfer_source: None,
             xot_client_config: None,
@@ -1350,6 +1353,11 @@ impl<'a> TransferSession<'a> {
 
     pub(crate) fn with_transfer_source(mut self, transfer_source: Option<SocketAddr>) -> Self {
         self.transfer_source = transfer_source;
+        self
+    }
+
+    pub(crate) fn with_max_ingest_messages(mut self, max_ingest_messages: u64) -> Self {
+        self.max_ingest_messages = max_ingest_messages;
         self
     }
 
@@ -1494,6 +1502,11 @@ impl<'a> TransferIngestTracker<'a> {
         ingest_budget: Option<&'a TransferIngestBudget>,
     ) -> Self {
         self.ingest_budget = ingest_budget;
+        self
+    }
+
+    pub(crate) fn with_message_limit(mut self, limit_messages: u64) -> Self {
+        self.limit_messages = limit_messages;
         self
     }
 
@@ -1654,6 +1667,7 @@ async fn transfer_axfr_from_primary_inner(
         })?;
 
     let mut ingest = TransferIngestTracker::new("AXFR", primary.addr, session.max_ingest_bytes)
+        .with_message_limit(session.max_ingest_messages)
         .with_ingest_budget(session.ingest_budget);
     // Keep the reservation owner alive until after all retained wire messages
     // have been freed on success, error, timeout, or cancellation.

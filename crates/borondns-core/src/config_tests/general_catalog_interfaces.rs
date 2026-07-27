@@ -94,6 +94,7 @@
             config.limits.max_transfer_ingest_bytes,
             4 * 1024 * 1024 * 1024
         );
+        assert_eq!(config.limits.max_transfer_ingest_messages, 4_096);
         assert_eq!(config.limits.notify_dedup_secs, 1);
         assert_eq!(config.limits.notify_log_rate_window_secs, 60);
         assert_eq!(config.limits.notify_log_max_keys, 100_000);

@@ -536,6 +536,11 @@ impl ServerConfig {
                 "limits.max_transfer_ingest_bytes must be at least 1".to_owned(),
             ));
         }
+        if self.limits.max_transfer_ingest_messages == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_transfer_ingest_messages must be at least 1".to_owned(),
+            ));
+        }
         self.cookie.validate()?;
         self.health.validate()?;
         self.rrl.validate()?;
@@ -2259,6 +2264,8 @@ pub struct Limits {
     pub ixfr_disabled_cooldown_secs: u64,
     #[serde(default = "default_max_transfer_ingest_bytes")]
     pub max_transfer_ingest_bytes: u64,
+    #[serde(default = "default_max_transfer_ingest_messages")]
+    pub max_transfer_ingest_messages: u64,
     #[serde(default = "default_notify_dedup_secs")]
     pub notify_dedup_secs: u64,
     #[serde(default = "default_notify_log_rate_window_secs")]
@@ -2308,6 +2315,7 @@ impl Default for Limits {
             ixfr_timeout_secs: default_ixfr_timeout_secs(),
             ixfr_disabled_cooldown_secs: default_ixfr_disabled_cooldown_secs(),
             max_transfer_ingest_bytes: default_max_transfer_ingest_bytes(),
+            max_transfer_ingest_messages: default_max_transfer_ingest_messages(),
             notify_dedup_secs: default_notify_dedup_secs(),
             notify_log_rate_window_secs: default_notify_log_rate_window_secs(),
             notify_log_max_keys: default_notify_log_max_keys(),
@@ -3815,6 +3823,10 @@ fn default_ixfr_disabled_cooldown_secs() -> u64 {
 
 fn default_max_transfer_ingest_bytes() -> u64 {
     4 * 1024 * 1024 * 1024
+}
+
+fn default_max_transfer_ingest_messages() -> u64 {
+    4_096
 }
 
 fn default_notify_dedup_secs() -> u64 {

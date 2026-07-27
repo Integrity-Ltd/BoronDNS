@@ -5,6 +5,7 @@ members = [
   "crates/borondns-server",
   "crates/borondns-cli",
   "crates/boron-gun",
+  "crates/boron-gen",
 ]
 exclude = ["fuzz", "crates/boron-gun-ebpf", "crates/borondns-server-ebpf"]
 

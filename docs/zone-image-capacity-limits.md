@@ -40,16 +40,15 @@ global table above:
   65,535 across a zone.
 
 Consequently, the 161-million-name projection is not restricted to
-single-RRset shapes by either finding. The remaining 65,535 RRset limit is
-local to one owner name, as listed below; it is not a zone-wide count of owners
-that carry multiple RRset types.
+single-RRset shapes by either finding. RRset membership uses a `u32` count and
+does not inherit the DNS message header's 16-bit section-count width.
 
 ## Local And DNS-Format Limits
 
 | Resource | Exact limit | Reason |
 |---|---:|---|
 | RDATA in one record | 65,535 bytes | DNS RDLENGTH is `u16` |
-| Records in one RRset | 65,535 | `ImageRrset.record_count` is `u16` |
+| Records in one RRset | 4,294,967,295 encoded; lower effective limit | `ImageRrset.record_count` is `u32`; the RRset's `u32` wire-range length, platform memory, and transfer policy are reached first |
 | RRsets attached to one owner | 65,535 | `NameNode.rrset_count` is `u16` |
 | Precomputed relations for one RRset | 65,535 | Relation count and local offsets are `u16`; `u16::MAX` is reserved as a missing-kind offset, so valid relation positions end at 65,534 |
 | Distinct NSEC3 parameter sets in one image | 65,536 | Parameter-set IDs use all `u16` values 0 through 65,535 |
@@ -59,6 +58,14 @@ that carry multiple RRset types.
 | Uncompressed domain name | 255 bytes including length octets and root | DNS wire format |
 | Labels in a valid name | 127 maximum | Follows from the 255-byte name and non-empty labels |
 | Records represented in one DNS section header | 65,535 | DNS ANCOUNT/NSCOUNT/ARCOUNT fields are `u16`; normal response size limits are reached first |
+
+The RRset count is deliberately distinct from DNS response capacity. RFC 1035
+uses 16-bit section counts, RDLENGTH values, and TCP message lengths, but does
+not define a 65,535-member RRset limit. BoronGen therefore exercises publication
+and AXFR above the former boundary. An RRset that cannot fit in one DNS response
+still cannot be returned whole: UDP reports truncation, while classic DNS over
+TCP cannot carry a message beyond 65,535 octets. This wire limitation does not
+justify rejecting the zone during transfer or publication.
 
 A child hash maintains at most a 0.5 load factor and rounds its slot count to a
 power of two. Consequently, the exact representable fanout for one hashed node
@@ -71,6 +78,14 @@ far beyond a physically realistic allocation but is still checked.
 not a ZoneImage offset limit. It is a `u64`, defaults to 4,294,967,296 bytes
 (4 GiB), and must be raised explicitly for larger transfers. The equivalent
 environment override is `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES`.
+
+`[limits].max_transfer_ingest_messages` is the independent per-session DNS
+response-message guard. It is a `u64`, defaults to 4,096, and must also be
+raised for a transfer requiring more frames even when the byte allowance is
+sufficient. The equivalent environment override is
+`BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES`. Keeping separate byte and
+message bounds prevents a hostile primary from evading the byte-oriented
+resource policy with an unbounded stream of tiny messages.
 
 The usable zone size is bounded by peak reload memory, not merely the final
 image size. Capacity planning must include:
@@ -98,6 +113,7 @@ record ordinals and arena offsets. Its measured-shape memory projection is
 approximately 646.7 GB after selective widening; that number is a synthetic
 capacity bound, not a claim about the real `.com` corpus.
 
-For zones whose image or transfer can exceed 4 GiB, deploy a 64-bit BoronDNS
-build. A 32-bit process cannot exploit the `u64` encoded range because all
-arenas and record tables are backed by address-space-sized Rust vectors.
+For zones whose image or transfer can exceed 4 GiB or 4,096 transfer messages,
+deploy a 64-bit BoronDNS build and raise the applicable guards explicitly. A
+32-bit process cannot exploit the `u64` encoded range because all arenas and
+record tables are backed by address-space-sized Rust vectors.

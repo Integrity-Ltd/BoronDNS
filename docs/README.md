@@ -46,6 +46,9 @@ and slowly diverging.
 | How were the July 2026 denial, memory, and class-index proposals resolved? | `zone-image-proposal-disposition-2026-07.md` | Keep the measured accepted/rejected/alternative-implemented decisions and reproduction command here. |
 | How will the retained ZoneSnapshot be narrowed? | `zone-snapshot-narrowing-design.md` | Keep responsibility separation, migration stages, and the signed-registry replay gate here; keep current implementation status in the ZoneImage tracker. |
 | How were Tibor's remaining July ZoneImage audit items closed? | `zone-image-action-items-2026-07.md` | Keep the code disposition, matched performance evidence, and remaining non-claims here. |
+| How does the synthetic large-zone primary remain deterministic and bounded? | `boron-gen-design.md` | Keep BoronGen generation, NSEC3, protocol-scope, and resource-safety contracts here. |
+| How is BoronGen run and validated under a cgroup limit? | `boron-gen.md` | Keep CLI examples, profiles, bounded-harness controls, and evidence interpretation here. |
+| What evidence qualified BoronGen for large-scale internal testing? | `boron-gen-validation-2026-07.md` | Keep the July functional, scale, containment, fuzz-disposition, and final 32 GiB results here. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | What is the richer optional JSON observability API? | `observability-api.md` | Keep observability paths, response shapes, reduced-metrics behavior, and config knobs here. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
@@ -82,6 +85,12 @@ and slowly diverging.
   reducing the retained source snapshot.
 - `zone-image-action-items-2026-07.md`: closure report for the July capacity,
   robustness, observability, documentation, and performance follow-up.
+- `boron-gen-design.md`: deterministic on-the-fly primary design for bounded
+  large-zone, catalog, AXFR, and synthetic ordered-NSEC3 testing.
+- `boron-gen.md`: BoronGen profiles, commands, bounded local load harness,
+  containment outcomes, and validation workflow.
+- `boron-gen-validation-2026-07.md`: retained BoronGen functional, scale,
+  capacity, containment, fuzz-disposition, and final 32 GiB validation results.
 - `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
   header, gzip, and rate-limit contract for `BDS-IF-HEALTH`.
 - `observability-api.md`: optional in-process JSON observability API for richer
@@ -115,6 +124,8 @@ and slowly diverging.
 - `boron-gun-mvp-plan.md`: phased path from the current prototype toward a
   useful MVP aligned with the SRS.
 - `boron-gun.md`: BoronGun load-generator and XDP lab notes (operational usage).
+- `boron-gen.md`: BoronGen deterministic synthetic-primary usage and safety
+  notes for large catalog, AXFR, and NSEC3 load tests.
 - `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
   and XDP evidence campaign runbook for the local physical hosts.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,

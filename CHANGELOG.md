@@ -25,6 +25,9 @@ full evidence pointers and sign-off.
   ZoneImage compilation log fields.
 - Made DNS-over-TCP framing reject messages larger than 65,535 bytes instead of
   truncating the length prefix.
+- Widened the per-RRset record count from `u16` to `u32` without increasing
+  ZoneImage metadata size, separating zone publication and AXFR capacity from
+  the 16-bit DNS message section-count limit.
 
 ### Fixed
 

@@ -681,6 +681,26 @@
     }
 
     #[test]
+    fn parses_custom_transfer_ingest_message_cap() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_ingest_messages = 1000000
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.max_transfer_ingest_messages, 1_000_000);
+    }
+
+    #[test]
     fn rejects_zero_transfer_concurrency_limit() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -740,4 +760,28 @@
         .expect_err("zero transfer ingest size cap must fail");
 
         assert!(error.to_string().contains("max_transfer_ingest_bytes"));
+    }
+
+    #[test]
+    fn rejects_zero_transfer_ingest_message_cap() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_ingest_messages = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero transfer ingest message cap must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("max_transfer_ingest_messages")
+        );
     }

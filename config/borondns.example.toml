@@ -202,6 +202,10 @@ ixfr_disabled_cooldown_secs = 3600
 # guard is derived as this value times max_concurrent_transfers, so concurrent
 # sessions do not compete for one session's allowance. Default: 4 GiB.
 max_transfer_ingest_bytes = 4294967296
+# Per-session AXFR/IXFR DNS message-count cap. This separately bounds streams
+# made from many small messages. Raise it deliberately for synthetic large-zone
+# tests alongside max_transfer_ingest_bytes. Default: 4096.
+max_transfer_ingest_messages = 4096
 # Per-zone accepted NOTIFY deduplication window. Default: 1 second.
 notify_dedup_secs = 1
 # Window for rate-limited unauthorized/TSIG-failed NOTIFY warning logs. Default: 60 seconds.

@@ -244,6 +244,7 @@ and are included in `--dump-config` output:
 - `BORONDNS_TRANSFER_REQUIRE_TSIG`
 - `BORONDNS_EDNS_EXTENDED_DNS_ERRORS`
 - `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
+- `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES`
 - `BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS`
 - `BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS`
 - `BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS`
@@ -722,11 +723,12 @@ boundary while final target-hardware evidence is collected.
 
 Large-zone operators should use
 `docs/zone-image-capacity-limits.md` for exact encoded and DNS-format limits,
-the default 4 GiB transfer-ingest guard, and reload working-set planning. Zones
-whose transfers exceed that default must raise
-`limits.max_transfer_ingest_bytes` deliberately and provision enough memory for
-the decoded snapshot, builder workspace, new image, and still-referenced prior
-generation.
+the default 4 GiB/4,096-message transfer-ingest guards, and reload working-set
+planning. Zones whose transfers exceed either default must raise
+`limits.max_transfer_ingest_bytes` and/or
+`limits.max_transfer_ingest_messages` deliberately and provision enough memory
+for the decoded snapshot, builder workspace, new image, and still-referenced
+prior generation.
 
 SRS v0.9.1 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained

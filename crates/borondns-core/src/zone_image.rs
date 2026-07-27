@@ -342,7 +342,7 @@ struct ImageRrset {
     fixed_fields: ZoneImageRecordFixedFields,
     negative_ttl_bytes: [u8; 4],
     first_record: u64,
-    record_count: u16,
+    record_count: u32,
     owner_label_count: u16,
     relation_span: u32,
     direct_answer_body_len: u32,
@@ -1213,10 +1213,11 @@ impl ZoneImage {
             rrset.record_count, 0,
             "eligible direct-answer RRset must contain at least one record"
         );
+        let dns_record_count = u16::try_from(rrset.record_count).ok()?;
         let (body, body_wire_len) =
             if rrset.direct_answer_body_len == DIRECT_ANSWER_BODY_RECORDS_FALLBACK {
                 let first_record = rrset.first_record as usize;
-                let record_count = usize::from(rrset.record_count);
+                let record_count = rrset.record_count as usize;
                 let records = self
                     .records
                     .get(first_record..first_record.checked_add(record_count)?)?;
@@ -1243,9 +1244,9 @@ impl ZoneImage {
             };
         Some(ZoneImageDirectRrset {
             body_wire_len,
-            section_count_header_bytes: section_count_header_bytes(rrset.record_count, 0, 0),
+            section_count_header_bytes: section_count_header_bytes(dns_record_count, 0, 0),
             section_count_header_bytes_with_edns: section_count_header_bytes(
-                rrset.record_count,
+                dns_record_count,
                 0,
                 1,
             ),
@@ -1763,7 +1764,7 @@ impl ZoneImage {
         owner_wire_len_override: Option<usize>,
     ) -> (usize, usize) {
         let rrset = self.rrsets[rrset_id.0 as usize];
-        let record_count = usize::from(rrset.record_count);
+        let record_count = rrset.record_count as usize;
         let bytes = if let Some(owner_wire_len) = owner_wire_len_override {
             let original_owner_wire_bytes = blob_len(rrset.owner_wire).saturating_mul(record_count);
             let non_owner_wire_bytes =
@@ -1868,7 +1869,7 @@ impl ZoneImage {
         let rr_type = rrset.rr_type();
         ZoneImageRrsetPlanMetrics {
             rr_type,
-            record_count: usize::from(rrset.record_count),
+            record_count: rrset.record_count as usize,
             wire_upper_bound: blob_len(rrset.wire),
         }
     }
@@ -1880,7 +1881,7 @@ impl ZoneImage {
     ) -> ZoneImageRrsetPlanMetrics {
         let rrset = self.rrsets[rrset_id.0 as usize];
         let rr_type = rrset.rr_type();
-        let record_count = usize::from(rrset.record_count);
+        let record_count = rrset.record_count as usize;
         ZoneImageRrsetPlanMetrics {
             rr_type,
             record_count,
@@ -4209,7 +4210,7 @@ impl ZoneImageBuilder {
         } else {
             ttl
         };
-        let record_count = checked_u16(rdatas.len(), "records")?;
+        let record_count = checked_u32(rdatas.len(), "records")?;
         let ownerless_wire_len = ownerless_wire_len(
             direct_answer_body_len,
             usize::try_from(wire_end - wire_start).map_err(|_| {
@@ -4218,7 +4219,7 @@ impl ZoneImageBuilder {
                 }
             })?,
             owner_wire.len(),
-            usize::from(record_count),
+            record_count as usize,
         )?;
         self.image_rrsets.push(ImageRrset {
             owner_wire: owner_wire_ref,

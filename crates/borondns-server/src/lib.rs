@@ -6012,6 +6012,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                             TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                             plan.max_transfer_ingest_bytes,
                         )
+                        .with_max_ingest_messages(plan.max_transfer_ingest_messages)
                         .with_ingest_budget(&transfer_ingest_budget)
                         .with_transfer_source(transfer_source)
                         .with_xot_client_config(primary_target.xot_client_config.as_ref()),
@@ -6202,6 +6203,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                 TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 plan.max_transfer_ingest_bytes,
             )
+            .with_max_ingest_messages(plan.max_transfer_ingest_messages)
             .with_ingest_budget(&transfer_ingest_budget)
             .with_xot_client_config(primary_target.xot_client_config.as_ref()),
             transfer_source,

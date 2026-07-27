@@ -1906,7 +1906,22 @@ fn build_zone_image_response(
         return Some(response);
     }
 
-    let response_shape = plan.response_shape()?;
+    let Some(response_shape) = plan.response_shape() else {
+        if options.transport == Transport::Udp {
+            return Some(build_empty_response_inner(
+                header,
+                plan.rcode(),
+                plan.authoritative(),
+                true,
+                Some(question),
+                &metadata,
+                options,
+                response_sizing.udp_ceiling,
+                response_sizing.edns,
+            ));
+        }
+        return None;
+    };
     let response = build_zone_image_response_from_plan_records(
         header,
         question,

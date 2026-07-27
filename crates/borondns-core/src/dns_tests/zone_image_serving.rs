@@ -105,6 +105,93 @@
     }
 
     #[test]
+    fn zone_image_publishes_rrset_beyond_u16_and_separates_udp_from_tcp_limits() {
+        let qname = DomainName::from_absolute_str("wide.example.test.").unwrap();
+        let rdatas = (0..=u32::from(u16::MAX))
+            .map(|value| value.to_be_bytes().to_vec())
+            .collect();
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                qname.clone(),
+                RecordType::A as u16,
+                1,
+                300,
+                rdatas,
+            )],
+        );
+        let image = ZoneImage::compile(&snapshot).expect("wide RRset publishes");
+        let plan = image.lookup_response_plan(
+            &qname,
+            RecordType::A as u16,
+            1,
+            DEFAULT_MAX_CNAME_CHAIN,
+            AnyResponseMode::Minimal,
+        );
+        assert_eq!(
+            plan.section_record_counts(),
+            (usize::from(u16::MAX) + 1, 0, 0)
+        );
+        assert!(
+            image.direct_rrset_wire(plan.answer_rrsets()[0]).is_none(),
+            "direct response metadata cannot encode a u16-overflowing ANCOUNT"
+        );
+
+        let packet = query(
+            b"\x04wide\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let header = Header::parse(&packet).unwrap();
+        let question = Question::parse(&packet).unwrap();
+        let metadata = RequestMetadata::parse(&header, &packet, &question).unwrap();
+        let udp_options = AnswerOptions::udp(1232);
+        let udp_sizing = zone_image_response_sizing(
+            &question,
+            metadata.udp_ceiling(udp_options),
+            &metadata,
+            udp_options,
+        );
+        let udp_response = build_zone_image_response(
+            &header,
+            &question,
+            &image,
+            &plan,
+            metadata,
+            udp_options,
+            true,
+            udp_sizing,
+        )
+        .expect("UDP can report truncation");
+        let udp_flags = u16::from_be_bytes([udp_response[2], udp_response[3]]);
+        assert_ne!(udp_flags & 0x0200, 0, "TC must report the oversized RRset");
+        assert_eq!(u16::from_be_bytes([udp_response[6], udp_response[7]]), 0);
+
+        let tcp_options = AnswerOptions::tcp();
+        let tcp_sizing = zone_image_response_sizing(
+            &question,
+            metadata.udp_ceiling(tcp_options),
+            &metadata,
+            tcp_options,
+        );
+        assert!(
+            build_zone_image_response(
+                &header,
+                &question,
+                &image,
+                &plan,
+                metadata,
+                tcp_options,
+                true,
+                tcp_sizing,
+            )
+            .is_none(),
+            "classic DNS-over-TCP cannot encode more than u16 section records"
+        );
+    }
+
+    #[test]
     fn zone_image_reuses_rejected_direct_plan_for_generic_response() {
         let alias = DomainName::from_absolute_str("alias.example.test.").unwrap();
         let snapshot = ZoneSnapshot::active(
@@ -1782,4 +1869,3 @@
             vec![pointer_like_rdata]
         );
     }
-

@@ -1,0 +1,24 @@
+[package]
+name = "boron-gen"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "boron-gen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+borondns-core = { path = "../borondns-core" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

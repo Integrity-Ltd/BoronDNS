@@ -243,6 +243,30 @@ fn transfer_ingest_tracker_enforces_message_count_cap() {
 }
 
 #[test]
+fn transfer_ingest_tracker_honors_explicit_large_zone_message_count_cap() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let mut ingest =
+        TransferIngestTracker::new("AXFR", primary, u64::MAX).with_message_limit(4_098);
+    for _ in 0..4_098 {
+        ingest
+            .record_message(0)
+            .expect("message remains below configured cap");
+    }
+
+    let error = ingest
+        .record_message(0)
+        .expect_err("configured cap remains enforced");
+    assert!(matches!(
+        error,
+        TransferError::IngestMessageLimit {
+            received_messages: 4_099,
+            limit_messages: 4_098,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn transfer_ingest_global_budget_releases_after_success() {
     let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
     let budget = TransferIngestBudget::new(16);

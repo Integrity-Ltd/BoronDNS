@@ -130,7 +130,7 @@
             rrset.direct_answer_body_len, 0,
             "wildcard A answer should have a compiled direct-copy body template"
         );
-        let record_count = usize::from(rrset.record_count);
+        let record_count = rrset.record_count as usize;
         assert_eq!(
             rrset.ownerless_wire_len as usize,
             record_count * (8 + 2 + 4),
@@ -623,4 +623,3 @@
                 .is_empty()
         );
     }
-

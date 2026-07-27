@@ -495,6 +495,11 @@ where
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
+            "BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES" => {
+                let value = env_value_to_string(&name, value)?;
+                config.limits.max_transfer_ingest_messages = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
+            }
             "BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.zsm_max_interval_secs = parse_env_value(&name, &value)?;
@@ -1632,6 +1637,7 @@ mod tests {
                 ("BORONDNS_TSIG_FUDGE_SECONDS", "30"),
                 ("BORONDNS_TRANSFER_REQUIRE_TSIG", "true"),
                 ("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
+                ("BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES", "1000000"),
                 ("BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
                 ("BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200"),
             ]
@@ -1662,6 +1668,7 @@ mod tests {
         assert_eq!(config.tsig.fudge_seconds, 30);
         assert!(config.transfer.require_tsig);
         assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
+        assert_eq!(config.limits.max_transfer_ingest_messages, 1_000_000);
         assert_eq!(config.limits.zsm_max_interval_secs, 43_200);
         assert_eq!(config.limits.zsm_loading_warning_threshold_secs, 1200);
     }
