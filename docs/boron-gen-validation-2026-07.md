@@ -101,9 +101,34 @@ Evidence is retained in:
 - `target/evidence/boron-gen-large-rrset-65536-rejected-20260727-r4`
 - `target/evidence/boron-gen-contained-oom-512m-20260727-r4`
 
-The two large-RRset paths above predate the `u32` correction. A new
-post-correction 65,536-record ready run is required before release evidence is
-complete.
+The two large-RRset paths above predate the `u32` correction. Commit
+`fd7cea5963c78163a86b5897bfb556fd1acf43ab` then widened the count and was
+validated through the bounded post-correction matrix below.
+
+| Scenario | Retained member records | BoronDNS peak bytes | BoronGen peak bytes | Result |
+| --- | ---: | ---: | ---: | --- |
+| One 65,536-member A RRset | 65,543 | 35,827,712 | 6,172,672 | Ready; 5,000/5,000 probe responses |
+| One 1,000,000-member A RRset | 1,000,007 | 380,985,344 | 5,455,872 | Ready; 10,000/10,000 probe responses |
+| Mixed, 250,000 names and 16 A records per name | 5,250,006 | 3,048,583,168 | 6,643,712 | Ready; 20,000/20,000 probe responses |
+| Registry NSEC3, 32 zones of 20,000 names | 5,824,256 | 4,843,151,360 | 7,155,712 | Ready; 20,000/20,000 probe responses |
+| Registry NSEC3, one zone of 2,000,000 names | 18,200,008 | 22,324,887,552 | 7,483,392 | Ready; 20,000/20,000 probe responses |
+| Registry NSEC3 under a 512 MiB hard cap | 910,008 attempted | 536,870,912 | 6,000,640 | BoronDNS OOM-contained as expected; BoronGen survived |
+
+Every positive query probe reported zero errors and zero unanswered packets.
+Both registry runs required indexed NSEC3 publication with zero fallback
+groups. The largest positive run used `MemoryHigh=30G`, `MemoryMax=32G`, and
+`MemorySwapMax=0`. The negative run ended BoronDNS with systemd result
+`oom-kill` and signal 9 at the exact hard limit while the separately bounded
+generator stayed active.
+
+Post-correction evidence is retained in:
+
+- `target/evidence/boron-gen-post-u32-wide-20260727`
+- `target/evidence/boron-gen-wide-rrset-1m-20260727`
+- `target/evidence/boron-gen-mixed-dense-250k-r16-20260727`
+- `target/evidence/boron-gen-registry-32x20k-20260727`
+- `target/evidence/boron-gen-registry-nsec3-2m-post-u32-20260727`
+- `target/evidence/boron-gen-contained-oom-post-u32-20260727`
 
 ## Fuzz campaign prerequisite
 
