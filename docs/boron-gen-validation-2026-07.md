@@ -202,6 +202,14 @@ requires positive packet deltas on both physical NICs, and rejects new NIC
 error/drop counters. Remote cleanup removes only the exact uploaded files and
 then uses `rmdir`; it never recursively deletes the configured directory.
 
+The open-loop saturation runner accepts at most 100 dropped queries per
+thousand by default. This is deliberately distinct from NIC error/drop
+counters, which must not increase: client timeouts below the bound represent
+offered load above server throughput, while the response rate remains the
+measured capacity. The earlier 10-per-thousand policy rejected a healthy
+128–132 kQPS first row whose offered rate was 136–140 kQPS, preventing the
+size curve from measuring saturation at all.
+
 Oxidedns intentionally has no private key for oxidegun. The production
 two-host path therefore uses `external` mode: the bounded harness publishes a
 request after the quiescence gate and waits for a completion marker, while
