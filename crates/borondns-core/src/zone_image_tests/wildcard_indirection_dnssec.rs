@@ -132,7 +132,7 @@
         );
         let record_count = rrset.record_count as usize;
         assert_eq!(
-            rrset.ownerless_wire_len as usize,
+            rrset_ownerless_wire_len(rrset),
             record_count * (8 + 2 + 4),
             "compiled ownerless wire length should carry TYPE/CLASS/TTL, RDLENGTH, and A RDATA bytes"
         );

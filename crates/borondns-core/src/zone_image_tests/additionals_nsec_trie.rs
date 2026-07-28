@@ -351,7 +351,7 @@
             &mut names,
             BlobRange {
                 offset: 0,
-                len: owner_wire.len() as u32,
+                len: owner_wire.len() as u64,
             },
             "names",
         )

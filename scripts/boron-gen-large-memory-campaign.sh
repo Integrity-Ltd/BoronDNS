@@ -14,6 +14,20 @@ minimum_disk_bytes="${BORON_CAMPAIGN_MIN_DISK_BYTES:-53687091200}"
 recovery_timeout_seconds="${BORON_CAMPAIGN_RECOVERY_TIMEOUT_SECONDS:-1800}"
 transfer_bytes="${BORON_CAMPAIGN_MAX_TRANSFER_BYTES:-274877906944}"
 transfer_messages="${BORON_CAMPAIGN_MAX_TRANSFER_MESSAGES:-2000000}"
+dns_listen="${BORON_CAMPAIGN_DNS_LISTEN:-127.0.0.1:15300}"
+performance_mode="${BORON_CAMPAIGN_PERFORMANCE_MODE:-off}"
+performance_server_device="${BORON_CAMPAIGN_PERFORMANCE_SERVER_DEVICE:-auto}"
+performance_client_bind="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_BIND:-}"
+performance_client_source_cidr="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOURCE_CIDR:-}"
+performance_client_device="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_DEVICE:-auto}"
+performance_remote_ssh="${BORON_CAMPAIGN_PERFORMANCE_REMOTE_SSH:-}"
+performance_warmup="${BORON_CAMPAIGN_PERFORMANCE_WARMUP_SECONDS:-15}"
+performance_duration="${BORON_CAMPAIGN_PERFORMANCE_DURATION_SECONDS:-60}"
+performance_repetitions="${BORON_CAMPAIGN_PERFORMANCE_REPETITIONS:-3}"
+performance_client_threads="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_THREADS:-32}"
+performance_client_window="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_WINDOW:-256}"
+performance_client_sockets="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:-4}"
+performance_client_cpu_list="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_CPU_LIST:-}"
 
 usage() {
     cat <<'EOF'
@@ -25,7 +39,8 @@ Commands:
 
 The run command is intended for the 750 GiB oxidedns host. It requires cgroup
 v2, an active systemd-oomd service, at least 720 GiB total RAM, at least
-700 GiB available before every scenario, and at least 50 GiB available disk.
+700 GiB available before every scenario, at least 50 GiB available disk, and
+non-interactive sudo for dedicated system-level load slices.
 EOF
 }
 
@@ -44,9 +59,33 @@ for pair in \
     "BORON_CAMPAIGN_MIN_DISK_BYTES:$minimum_disk_bytes" \
     "BORON_CAMPAIGN_RECOVERY_TIMEOUT_SECONDS:$recovery_timeout_seconds" \
     "BORON_CAMPAIGN_MAX_TRANSFER_BYTES:$transfer_bytes" \
-    "BORON_CAMPAIGN_MAX_TRANSFER_MESSAGES:$transfer_messages"; do
+    "BORON_CAMPAIGN_MAX_TRANSFER_MESSAGES:$transfer_messages" \
+    "BORON_CAMPAIGN_PERFORMANCE_WARMUP_SECONDS:$performance_warmup" \
+    "BORON_CAMPAIGN_PERFORMANCE_DURATION_SECONDS:$performance_duration" \
+    "BORON_CAMPAIGN_PERFORMANCE_REPETITIONS:$performance_repetitions" \
+    "BORON_CAMPAIGN_PERFORMANCE_CLIENT_THREADS:$performance_client_threads" \
+    "BORON_CAMPAIGN_PERFORMANCE_CLIENT_WINDOW:$performance_client_window" \
+    "BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:$performance_client_sockets"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
+case "$performance_mode" in
+off | local | ssh | external) ;;
+*)
+    printf 'BORON_CAMPAIGN_PERFORMANCE_MODE must be off, local, ssh, or external\n' >&2
+    exit 64
+    ;;
+esac
+if [[ "$performance_mode" == "ssh" || "$performance_mode" == "external" ]]; then
+    if [[ -z "$performance_client_source_cidr" ]]; then
+        printf '%s performance mode requires BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOURCE_CIDR\n' \
+            "$performance_mode" >&2
+        exit 64
+    fi
+    if [[ "$dns_listen" == 127.0.0.1:* || "$dns_listen" == localhost:* ]]; then
+        echo "SSH performance mode requires a non-loopback BORON_CAMPAIGN_DNS_LISTEN" >&2
+        exit 64
+    fi
+fi
 
 if (($# > 1)); then
     usage >&2
@@ -64,7 +103,7 @@ plan | run) ;;
     ;;
 esac
 
-for tool in cargo curl dig git jq journalctl python3 sha256sum systemctl systemd-run; do
+for tool in cargo curl dig git jq journalctl python3 sha256sum sudo systemctl systemd-run; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf 'missing required tool: %s\n' "$tool" >&2
         exit 69
@@ -87,8 +126,12 @@ scenario_rows() {
 04-catalog-128x100k	registry-nsec3	128	100000	4	100000	91	120G	144G	86400	180	100000	116481024
 05-catalog-512x100k	registry-nsec3	512	100000	4	100000	362	420G	480G	172800	300	100000	465924096
 06-nsec3-heavy-10m-100m	registry-nsec3	1	10000000	4	100000000	320	400G	460G	172800	300	100000	271000008
-07-registry-balanced-40m	registry-nsec3	1	40000000	4	40000000	390	460G	520G	172800	300	100000	364000008
-08-registry-balanced-65m	registry-nsec3	1	65000000	4	65000000	633	640G	680G	259200	600	200000	591500008
+07-registry-balanced-1m	registry-nsec3	1	1000000	4	1000000	12	20G	28G	43200	180	100000	9100008
+08-registry-balanced-10m	registry-nsec3	1	10000000	4	10000000	120	144G	168G	86400	180	100000	91000008
+09-registry-balanced-20m	registry-nsec3	1	20000000	4	20000000	240	280G	320G	129600	180	100000	182000008
+10-registry-balanced-40m	registry-nsec3	1	40000000	4	40000000	480	520G	560G	172800	300	100000	364000008
+11-registry-balanced-50m	registry-nsec3	1	50000000	4	50000000	590	620G	650G	216000	300	100000	455000008
+12-registry-balanced-60m	registry-nsec3	1	60000000	4	60000000	650	640G	680G	259200	300	100000	546000008
 EOF
 }
 
@@ -130,13 +173,91 @@ memory_value_bytes() {
 }
 
 active_load_units() {
-    systemctl --user list-units \
-        'boron-gen-load-*.service' \
-        'borondns-load-*.service' \
-        --state=running \
-        --no-legend \
-        --no-pager 2>/dev/null |
+    {
+        systemctl --user list-units \
+            'boron-gen-load-*.service' \
+            'borondns-load-*.service' \
+            --state=running \
+            --no-legend \
+            --no-pager 2>/dev/null || true
+        sudo -n systemctl list-units \
+            'boron-gen-load-*.service' \
+            'borondns-load-*.service' \
+            --state=running \
+            --no-legend \
+            --no-pager 2>/dev/null || true
+    } |
         awk 'NF { print $1 }'
+}
+
+sampled_server_peak() {
+    local samples="$1"
+    if [[ ! -r "$samples" ]]; then
+        printf 'null\n'
+        return 0
+    fi
+    awk -F '\t' '
+        NR > 1 && $3 ~ /^[0-9]+$/ {
+            if ($3 > peak) {
+                peak = $3
+            }
+        }
+        END {
+            if (peak == "") {
+                print "null"
+            } else {
+                printf "%.0f\n", peak
+            }
+        }
+    ' "$samples"
+}
+
+unit_file_peak() {
+    local evidence_dir="$1"
+    local prefix="$2"
+    local files=()
+    shopt -s nullglob
+    files=("$evidence_dir"/"$prefix"*-unit-final.txt)
+    shopt -u nullglob
+    if ((${#files[@]} == 0)); then
+        printf 'null\n'
+        return 0
+    fi
+    awk -F= '
+        $1 == "MemoryPeak" && $2 ~ /^[0-9]+$/ {
+            if ($2 > peak) {
+                peak = $2
+            }
+        }
+        END {
+            if (peak == "") {
+                print "null"
+            } else {
+                printf "%.0f\n", peak
+            }
+        }
+    ' "${files[@]}"
+}
+
+attempt_elapsed_seconds() {
+    local attempt_dir="$1"
+    python3 - "$attempt_dir/started-utc.txt" "$attempt_dir/finished-utc.txt" <<'PY'
+import datetime
+import pathlib
+import sys
+
+try:
+    started = datetime.datetime.fromisoformat(
+        pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip().replace("Z", "+00:00")
+    )
+    finished = datetime.datetime.fromisoformat(
+        pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").strip().replace("Z", "+00:00")
+    )
+except (OSError, ValueError):
+    print("null")
+else:
+    print(max(0, int((finished - started).total_seconds())))
+PY
 }
 
 wait_for_safe_baseline() {
@@ -192,6 +313,11 @@ write_host_facts() {
         printf 'cpus=%s\n' "$(nproc)"
         printf 'cgroup_filesystem=%s\n' "$(stat -fc %T /sys/fs/cgroup)"
         printf 'systemd_oomd=%s\n' "$(systemctl is-active systemd-oomd.service)"
+        printf 'dns_listen=%s\n' "$dns_listen"
+        printf 'performance_mode=%s\n' "$performance_mode"
+        printf 'performance_remote_ssh=%s\n' "${performance_remote_ssh:-none}"
+        printf 'performance_server_device=%s\n' "$performance_server_device"
+        printf 'performance_client_device=%s\n' "$performance_client_device"
         awk '/MemTotal|MemAvailable|SwapTotal/ { print }' /proc/meminfo
         df -B1 --output=target,size,avail "$artifact_root"
     } >"$artifact_root/host-facts.txt"
@@ -209,7 +335,7 @@ for result_path in sorted(root.glob("runs/*/attempt-*/result.json")):
     with result_path.open(encoding="utf-8") as source:
         results.append(json.load(source))
 summary = {
-    "format": "boron-gen-large-memory-campaign-v1",
+    "format": "boron-gen-large-memory-campaign-v2",
     "campaign_id": root.name.removeprefix("boron-gen-large-memory-"),
     "attempts": results,
     "scenario_attempts": len(results),
@@ -220,6 +346,13 @@ with (root / "campaign-summary.json").open("w", encoding="utf-8") as output:
     json.dump(summary, output, indent=2, sort_keys=True)
     output.write("\n")
 PY
+}
+
+write_performance_curve() {
+    "$repo_root/scripts/summarize-boron-gen-performance.py" \
+        --plan "$artifact_root/plan.tsv" \
+        --results "$artifact_root/results.tsv" \
+        --output "$artifact_root/performance-size-curve.tsv"
 }
 
 ensure_release_binaries
@@ -234,6 +367,10 @@ if [[ "$(stat -fc %T /sys/fs/cgroup)" != "cgroup2fs" ]]; then
 fi
 if ! systemctl is-active --quiet systemd-oomd.service; then
     echo "system systemd-oomd.service must be active" >&2
+    exit 69
+fi
+if ! sudo -n true; then
+    echo "large-memory campaign requires non-interactive sudo for system-level load slices" >&2
     exit 69
 fi
 total_bytes="$(memory_value_bytes MemTotal)"
@@ -256,13 +393,22 @@ fi
 
 git -C "$repo_root" rev-parse HEAD >"$artifact_root/source-commit.txt"
 git -C "$repo_root" status --short --branch >"$artifact_root/source-status.txt"
-sha256sum "$harness" "$repo_root/scripts/boron-gen-large-memory-campaign.sh" \
+sha256sum \
+    "$harness" \
+    "$repo_root/scripts/boron-gen-external-performance-coordinator.sh" \
+    "$repo_root/scripts/boron-gen-large-memory-campaign.sh" \
+    "$repo_root/scripts/boron-gen-query-performance.sh" \
+    "$repo_root/scripts/generate-boron-gen-query-trace.py" \
+    "$repo_root/scripts/summarize-boron-gen-performance.py" \
     >"$artifact_root/harnesses.sha256"
 write_host_facts
 validate_plan >"$artifact_root/plan.tsv"
+results_header='finished_utc	scenario	attempt	exit_status	result	server_peak_bytes	generator_peak_bytes	elapsed_seconds	median_qps	median_p99_us	median_server_cpu_percent	median_client_cpu_percent'
 if [[ ! -e "$artifact_root/results.tsv" ]]; then
-    printf 'finished_utc\tscenario\tattempt\texit_status\tresult\tserver_peak_bytes\tgenerator_peak_bytes\telapsed_seconds\n' \
-        >"$artifact_root/results.tsv"
+    printf '%s\n' "$results_header" >"$artifact_root/results.tsv"
+elif [[ "$(head -n 1 "$artifact_root/results.tsv")" != "$results_header" ]]; then
+    echo "existing campaign results use an incompatible schema; choose a new artifact directory" >&2
+    exit 65
 fi
 
 id=""
@@ -300,15 +446,42 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         BORON_LOAD_NSEC3_RECORDS_PER_ZONE="$nsec3" \
         BORON_LOAD_ORIGIN="${id}.load.borongen." \
         BORON_LOAD_CATALOG_ORIGIN="${id}.catalog.borongen." \
+        BORON_LOAD_DNS_LISTEN="$dns_listen" \
         BORON_LOAD_MAX_TRANSFER_BYTES="$transfer_bytes" \
         BORON_LOAD_MAX_TRANSFER_MESSAGES="$transfer_messages" \
         BORON_LOAD_READY_TIMEOUT_SECONDS="$timeout" \
         BORON_LOAD_HOLD_SECONDS="$hold" \
         BORON_LOAD_QUERY_PACKETS="$queries" \
         BORON_LOAD_QUERY_TARGET_QPS=20000 \
+        BORON_LOAD_HTTP_CONNECT_TIMEOUT_SECONDS=2 \
+        BORON_LOAD_HTTP_MAX_TIME_SECONDS=10 \
+        BORON_LOAD_QUIESCENCE_ENABLED=true \
+        BORON_LOAD_QUIESCENCE_WINDOW_SECONDS=30 \
+        BORON_LOAD_QUIESCENCE_TIMEOUT_SECONDS=900 \
+        BORON_LOAD_STABLE_MEMORY_DELTA_BYTES=268435456 \
+        BORON_LOAD_MIN_AVAILABLE_BYTES=68719476736 \
+        BORON_LOAD_MIN_CGROUP_HEADROOM_BYTES=4294967296 \
+        BORON_LOAD_MAX_IDLE_CPU_PERCENT=10 \
+        BORON_LOAD_MAX_MEMORY_PRESSURE_AVG10=10 \
+        BORON_LOAD_PERFORMANCE_MODE="$performance_mode" \
+        BORON_LOAD_PERFORMANCE_SERVER_DEVICE="$performance_server_device" \
+        BORON_LOAD_PERFORMANCE_CLIENT_BIND="$performance_client_bind" \
+        BORON_LOAD_PERFORMANCE_CLIENT_SOURCE_CIDR="$performance_client_source_cidr" \
+        BORON_LOAD_PERFORMANCE_CLIENT_DEVICE="$performance_client_device" \
+        BORON_LOAD_PERFORMANCE_REMOTE_SSH="$performance_remote_ssh" \
+        BORON_LOAD_PERFORMANCE_WARMUP_SECONDS="$performance_warmup" \
+        BORON_LOAD_PERFORMANCE_DURATION_SECONDS="$performance_duration" \
+        BORON_LOAD_PERFORMANCE_REPETITIONS="$performance_repetitions" \
+        BORON_LOAD_PERFORMANCE_CLIENT_THREADS="$performance_client_threads" \
+        BORON_LOAD_PERFORMANCE_CLIENT_WINDOW="$performance_client_window" \
+        BORON_LOAD_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD="$performance_client_sockets" \
+        BORON_LOAD_PERFORMANCE_CLIENT_CPU_LIST="$performance_client_cpu_list" \
+        BORON_LOAD_PERFORMANCE_EXTERNAL_TIMEOUT_SECONDS=7200 \
         BORON_LOAD_EXPECT_OUTCOME=ready \
         BORON_LOAD_MEMORY_HIGH="$high" \
         BORON_LOAD_MEMORY_MAX="$max" \
+        BORON_LOAD_SYSTEMD_MANAGER=system \
+        BORON_LOAD_OOMD_PRESSURE_LIMIT_PERCENT=80 \
         BORON_GEN_MEMORY_HIGH=768M \
         BORON_GEN_MEMORY_MAX=1G \
         "$harness" \
@@ -320,36 +493,60 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
     printf '%s\n' "$status" >"$attempt_dir/exit-status"
     printf '%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$attempt_dir/finished-utc.txt"
     if [[ -s "$attempt_dir/evidence/run-summary.json" ]]; then
-        server_peak="$(jq -er '.observed.server_memory_peak_bytes' "$attempt_dir/evidence/run-summary.json")"
-        generator_peak="$(jq -er '.observed.generator_memory_peak_bytes' "$attempt_dir/evidence/run-summary.json")"
-        elapsed="$(jq -er '.observed.elapsed_seconds' "$attempt_dir/evidence/run-summary.json")"
+        server_peak="$(jq -r '.observed.server_memory_peak_bytes // "null"' "$attempt_dir/evidence/run-summary.json")"
+        generator_peak="$(jq -r '.observed.generator_memory_peak_bytes // "null"' "$attempt_dir/evidence/run-summary.json")"
+        elapsed="$(jq -r '.observed.elapsed_seconds // "null"' "$attempt_dir/evidence/run-summary.json")"
         result="$(jq -er '.status' "$attempt_dir/evidence/run-summary.json")"
+        failure_reason="$(jq -r '.failure.reason // ""' "$attempt_dir/evidence/run-summary.json")"
+        median_qps="$(jq -r '.observed.performance.aggregate.median_responses_per_second // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_p99="$(jq -r '.observed.performance.aggregate.median_latency_us_p99 // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_server_cpu="$(jq -r '.observed.performance.aggregate.median_server_cpu_percent // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_client_cpu="$(jq -r '.observed.performance.aggregate.median_client_cpu_percent // "null"' "$attempt_dir/evidence/run-summary.json")"
     else
-        server_peak="null"
-        generator_peak="null"
-        elapsed="null"
-        result="failed_before_summary"
+        server_peak="$(sampled_server_peak "$attempt_dir/evidence/resource-samples.tsv")"
+        if [[ "$server_peak" == "null" ]]; then
+            server_peak="$(unit_file_peak "$attempt_dir/evidence" "borondns-load-")"
+        fi
+        generator_peak="$(unit_file_peak "$attempt_dir/evidence" "boron-gen-load-")"
+        elapsed="$(attempt_elapsed_seconds "$attempt_dir")"
+        result="failed_without_summary"
+        failure_reason="$(tail -n 1 "$attempt_dir/harness.stderr.log" 2>/dev/null || true)"
+        median_qps="null"
+        median_p99="null"
+        median_server_cpu="null"
+        median_client_cpu="null"
     fi
     jq -n \
         --arg scenario "$id" \
         --arg attempt "$attempt" \
         --arg result "$result" \
+        --arg failure_reason "$failure_reason" \
         --argjson exit_status "$status" \
         --argjson server_peak_bytes "$server_peak" \
         --argjson generator_peak_bytes "$generator_peak" \
         --argjson elapsed_seconds "$elapsed" \
+        --argjson median_qps "$median_qps" \
+        --argjson median_p99_us "$median_p99" \
+        --argjson median_server_cpu_percent "$median_server_cpu" \
+        --argjson median_client_cpu_percent "$median_client_cpu" \
         '{
             scenario: $scenario,
             attempt: $attempt,
             exit_status: $exit_status,
             result: $result,
+            failure_reason: (if $failure_reason == "" then null else $failure_reason end),
             server_peak_bytes: $server_peak_bytes,
             generator_peak_bytes: $generator_peak_bytes,
-            elapsed_seconds: $elapsed_seconds
+            elapsed_seconds: $elapsed_seconds,
+            median_qps: $median_qps,
+            median_p99_us: $median_p99_us,
+            median_server_cpu_percent: $median_server_cpu_percent,
+            median_client_cpu_percent: $median_client_cpu_percent
         }' >"$attempt_dir/result.json"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
         "$id" "$attempt" "$status" "$result" "$server_peak" "$generator_peak" "$elapsed" \
+        "$median_qps" "$median_p99" "$median_server_cpu" "$median_client_cpu" \
         >>"$artifact_root/results.tsv"
     if ((status == 0)); then
         printf '%s\n' "$attempt" >"$scenario_root/completed"
@@ -360,11 +557,14 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
             "$id" "$status" >&2
     fi
     write_campaign_summary
+    write_performance_curve
     wait_for_safe_baseline
 done < <(scenario_rows)
 
 write_campaign_summary
+write_performance_curve
 date -u '+%Y-%m-%dT%H:%M:%SZ' >"$artifact_root/completed-utc.txt"
 sha256sum "$artifact_root/plan.tsv" "$artifact_root/results.tsv" \
+    "$artifact_root/performance-size-curve.tsv" \
     "$artifact_root/campaign-summary.json" >"$artifact_root/campaign-summary.sha256"
 printf 'large-memory campaign completed; evidence: %s\n' "$artifact_root"

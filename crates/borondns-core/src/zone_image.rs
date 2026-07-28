@@ -346,7 +346,6 @@ struct ImageRrset {
     owner_label_count: u16,
     relation_span: u32,
     direct_answer_body_len: u32,
-    ownerless_wire_len: u32,
     wire: BlobRange,
 }
 
@@ -587,7 +586,7 @@ fn relation_kind_offset(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BlobRange {
     offset: u64,
-    len: u32,
+    len: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -601,7 +600,7 @@ impl RdataRange {
     fn blob_range(self) -> BlobRange {
         BlobRange {
             offset: self.offset,
-            len: u32::from(self.len),
+            len: u64::from(self.len),
         }
     }
 
@@ -1230,13 +1229,13 @@ impl ZoneImage {
                         .saturating_add(2usize.saturating_mul(record_count)),
                 )
             } else {
-                let body_offset = rrset.wire.offset.checked_add(u64::from(rrset.wire.len))?;
+                let body_offset = rrset.wire.offset.checked_add(rrset.wire.len)?;
                 (
                     ZoneImageDirectRrsetBody::Template(self.blob(
                         &self.wire,
                         BlobRange {
                             offset: body_offset,
-                            len: rrset.direct_answer_body_len,
+                            len: u64::from(rrset.direct_answer_body_len),
                         },
                     )),
                     rrset.direct_answer_body_len as usize,
@@ -1887,7 +1886,7 @@ impl ZoneImage {
             record_count,
             wire_upper_bound: owner_wire_len
                 .saturating_mul(record_count)
-                .saturating_add(rrset.ownerless_wire_len as usize),
+                .saturating_add(rrset_ownerless_wire_len(rrset)),
         }
     }
 
@@ -4211,16 +4210,6 @@ impl ZoneImageBuilder {
             ttl
         };
         let record_count = checked_u32(rdatas.len(), "records")?;
-        let ownerless_wire_len = ownerless_wire_len(
-            direct_answer_body_len,
-            usize::try_from(wire_end - wire_start).map_err(|_| {
-                ZoneImageBuildError::TooManyItems {
-                    kind: "ownerless rrset wire bytes",
-                }
-            })?,
-            owner_wire.len(),
-            record_count as usize,
-        )?;
         self.image_rrsets.push(ImageRrset {
             owner_wire: owner_wire_ref,
             fixed_fields,
@@ -4230,17 +4219,9 @@ impl ZoneImageBuilder {
             owner_label_count: checked_u16(owner.labels().len(), "owner labels")?,
             relation_span: u32::MAX,
             direct_answer_body_len,
-            ownerless_wire_len,
             wire: BlobRange {
                 offset: wire_start,
-                len: checked_u32(
-                    usize::try_from(wire_end - wire_start).map_err(|_| {
-                        ZoneImageBuildError::TooManyItems {
-                            kind: "RRset wire bytes",
-                        }
-                    })?,
-                    "RRset wire bytes",
-                )?,
+                len: wire_end - wire_start,
             },
         });
         if rr_type == RecordType::Nsec as u16 {
@@ -4671,7 +4652,7 @@ impl ZoneImageBuilder {
                     .offset
                     .checked_add(5)
                     .ok_or(ZoneImageBuildError::ArenaTooLarge { name: "rdata" })?,
-                len: checked_u32(params.salt.len(), "rdata")?,
+                len: checked_u64(params.salt.len(), "rdata")?,
             };
             let Some(next_hash) = nsec3_next_hash_bytes(rdata) else {
                 continue;
@@ -5172,7 +5153,7 @@ fn push_blob(
     let offset =
         u64::try_from(arena.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
     let len =
-        u32::try_from(bytes.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
+        u64::try_from(bytes.len()).map_err(|_| ZoneImageBuildError::ArenaTooLarge { name })?;
     arena.extend_from_slice(bytes);
     Ok(BlobRange { offset, len })
 }
@@ -5208,7 +5189,7 @@ fn push_canonical_order_name_arena_key(
         }
     }
     arena.push(0);
-    let len = u32::try_from(arena.len() - offset as usize)
+    let len = u64::try_from(arena.len() - offset as usize)
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     Ok(Some(BlobRange { offset, len }))
 }
@@ -5234,7 +5215,7 @@ fn push_canonical_order_wire_key(
         arena.extend(label.iter().map(u8::to_ascii_lowercase));
     }
     arena.push(0);
-    let len = u32::try_from(arena.len() - offset as usize)
+    let len = u64::try_from(arena.len() - offset as usize)
         .map_err(|_| ZoneImageBuildError::ArenaTooLarge { name: arena_name })?;
     Ok(Some(BlobRange { offset, len }))
 }
@@ -5331,7 +5312,7 @@ fn push_direct_answer_body(
     if !direct_copy_eligible {
         return Ok(0);
     }
-    if rdatas.len() <= 1 {
+    if rdatas.len() <= 1 || rdatas.len() > usize::from(u16::MAX) {
         return Ok(DIRECT_ANSWER_BODY_RECORDS_FALLBACK);
     }
     let offset = wire.len();
@@ -5359,40 +5340,19 @@ fn push_direct_answer_body(
     Ok(len)
 }
 
-fn ownerless_wire_len(
-    direct_answer_body_len: u32,
-    rrset_wire_len: usize,
-    owner_wire_len: usize,
-    record_count: usize,
-) -> Result<u32, ZoneImageBuildError> {
-    let len = if direct_answer_body_len != 0
-        && direct_answer_body_len != DIRECT_ANSWER_BODY_RECORDS_FALLBACK
+fn rrset_ownerless_wire_len(rrset: ImageRrset) -> usize {
+    let record_count = rrset.record_count as usize;
+    if rrset.direct_answer_body_len != 0
+        && rrset.direct_answer_body_len != DIRECT_ANSWER_BODY_RECORDS_FALLBACK
     {
-        let compressed_owner_bytes =
-            2usize
-                .checked_mul(record_count)
-                .ok_or(ZoneImageBuildError::TooManyItems {
-                    kind: "ownerless rrset wire bytes",
-                })?;
-        (direct_answer_body_len as usize).checked_sub(compressed_owner_bytes)
+        (rrset.direct_answer_body_len as usize).saturating_sub(2usize.saturating_mul(record_count))
     } else {
-        let owner_wire_bytes =
-            owner_wire_len
-                .checked_mul(record_count)
-                .ok_or(ZoneImageBuildError::TooManyItems {
-                    kind: "ownerless rrset wire bytes",
-                })?;
-        rrset_wire_len.checked_sub(owner_wire_bytes)
+        blob_len(rrset.wire).saturating_sub(blob_len(rrset.owner_wire).saturating_mul(record_count))
     }
-    .ok_or(ZoneImageBuildError::TooManyItems {
-        kind: "ownerless rrset wire bytes",
-    })?;
-
-    checked_u32(len, "ownerless rrset wire bytes")
 }
 
 fn direct_answer_non_owner_wire_len(rrset: &ImageRrset) -> usize {
-    rrset.ownerless_wire_len as usize
+    rrset_ownerless_wire_len(*rrset)
 }
 
 fn find_build_node_in_rrset(

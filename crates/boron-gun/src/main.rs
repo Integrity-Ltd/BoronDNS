@@ -1632,7 +1632,8 @@ fn run_std_udp_load(config: &FileConfig) -> Result<()> {
     let query_pool = query_pool(config)?;
     let source_selector = SourceSelector::portable_udp();
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind UDP socket")?;
-    socket.set_read_timeout(Some(Duration::from_millis(config.recv.response_timeout_ms)))?;
+    let response_timeout = Duration::from_millis(config.recv.response_timeout_ms);
+    socket.set_read_timeout(Some(response_timeout))?;
     let mut rng = XorShift64::new(config.run.seed);
     let mut stats = Stats::default();
     let start = Instant::now();
@@ -1666,7 +1667,7 @@ fn run_std_udp_load(config: &FileConfig) -> Result<()> {
         stats.tx_bytes += packet.len() as u64;
 
         if config.recv.mode == RecvMode::Process {
-            receive_one(&socket, id, sent_at, &mut stats)?;
+            receive_one(&socket, id, sent_at, response_timeout, &mut stats)?;
         }
 
         if config.log.flush_interval_ms > 0
@@ -1706,66 +1707,74 @@ fn receive_one(
     socket: &UdpSocket,
     expected_id: u16,
     sent_at: Instant,
+    response_timeout: Duration,
     stats: &mut Stats,
 ) -> Result<()> {
     let mut buf = [0_u8; 4096];
-    match socket.recv_from(&mut buf) {
-        Ok((len, _)) => {
-            stats.rx_packets += 1;
-            stats.rx_bytes += len as u64;
-            let response_class = classify_response(&buf[..len], expected_id);
-            match response_class {
-                ResponseClass::Positive => {
-                    stats.rx_dns_responses += 1;
-                    stats.positive += 1;
-                }
-                ResponseClass::Nxdomain => {
-                    stats.rx_dns_responses += 1;
-                    stats.nxdomain += 1;
-                }
-                ResponseClass::Nodata => {
-                    stats.rx_dns_responses += 1;
-                    stats.nodata += 1;
-                }
-                ResponseClass::Servfail => {
-                    stats.rx_dns_responses += 1;
-                    stats.servfail += 1;
-                }
-                ResponseClass::Refused => {
-                    stats.rx_dns_responses += 1;
-                    stats.refused += 1;
-                }
-                ResponseClass::OtherRcode => {
-                    stats.rx_dns_responses += 1;
-                    stats.other_rcode += 1;
-                }
-                ResponseClass::Truncated => {
-                    stats.rx_dns_responses += 1;
-                    stats.rx_truncated += 1;
-                }
-                ResponseClass::Unmatched => stats.rx_dns_unmatched += 1,
-                ResponseClass::Timeout => {}
-            }
-            if !matches!(
-                response_class,
-                ResponseClass::Unmatched | ResponseClass::Timeout
-            ) {
-                stats.latency.record(sent_at.elapsed());
-            }
-            Ok(())
-        }
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) =>
-        {
+    let deadline = sent_at.checked_add(response_timeout).unwrap_or(sent_at);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             stats.queries_unanswered += 1;
-            Ok(())
+            return Ok(());
         }
-        Err(error) => {
-            stats.errors += 1;
-            Err(error).context("failed to receive DNS response")
+        socket.set_read_timeout(Some(remaining))?;
+        match socket.recv_from(&mut buf) {
+            Ok((len, _)) => {
+                stats.rx_packets += 1;
+                stats.rx_bytes += len as u64;
+                let response_class = classify_response(&buf[..len], expected_id);
+                match response_class {
+                    ResponseClass::Positive => {
+                        stats.rx_dns_responses += 1;
+                        stats.positive += 1;
+                    }
+                    ResponseClass::Nxdomain => {
+                        stats.rx_dns_responses += 1;
+                        stats.nxdomain += 1;
+                    }
+                    ResponseClass::Nodata => {
+                        stats.rx_dns_responses += 1;
+                        stats.nodata += 1;
+                    }
+                    ResponseClass::Servfail => {
+                        stats.rx_dns_responses += 1;
+                        stats.servfail += 1;
+                    }
+                    ResponseClass::Refused => {
+                        stats.rx_dns_responses += 1;
+                        stats.refused += 1;
+                    }
+                    ResponseClass::OtherRcode => {
+                        stats.rx_dns_responses += 1;
+                        stats.other_rcode += 1;
+                    }
+                    ResponseClass::Truncated => {
+                        stats.rx_dns_responses += 1;
+                        stats.rx_truncated += 1;
+                    }
+                    ResponseClass::Unmatched => {
+                        stats.rx_dns_unmatched += 1;
+                        continue;
+                    }
+                    ResponseClass::Timeout => continue,
+                }
+                stats.latency.record(sent_at.elapsed());
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                stats.queries_unanswered += 1;
+                return Ok(());
+            }
+            Err(error) => {
+                stats.errors += 1;
+                return Err(error).context("failed to receive DNS response");
+            }
         }
     }
 }
@@ -2221,6 +2230,71 @@ mod tests {
         let response = build_self_test_response(&query).expect("response builds");
         assert_eq!(classify_response(&response, 7), ResponseClass::Positive);
         assert_eq!(classify_response(&response, 8), ResponseClass::Unmatched);
+    }
+
+    #[test]
+    fn std_udp_receive_skips_stale_response_before_expected_id() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
+        let sender = UdpSocket::bind("127.0.0.1:0").expect("sender binds");
+        let receiver_addr = receiver.local_addr().expect("receiver address");
+        let stale_query = build_dns_query(
+            &QueryTemplate {
+                qname: "stale.example.test.".to_owned(),
+                encoded_qname: encode_qname("stale.example.test.").expect("qname encodes"),
+                qtype_name: "A".to_owned(),
+                qtype: 1,
+                raw_payload: None,
+                edns_enabled: false,
+                edns_payload_size: 1232,
+                dnssec_ok: false,
+                recursion_desired: false,
+            },
+            7,
+        )
+        .expect("stale query builds");
+        let expected_query = build_dns_query(
+            &QueryTemplate {
+                qname: "expected.example.test.".to_owned(),
+                encoded_qname: encode_qname("expected.example.test.").expect("qname encodes"),
+                qtype_name: "A".to_owned(),
+                qtype: 1,
+                raw_payload: None,
+                edns_enabled: false,
+                edns_payload_size: 1232,
+                dnssec_ok: false,
+                recursion_desired: false,
+            },
+            8,
+        )
+        .expect("expected query builds");
+        sender
+            .send_to(
+                &build_self_test_response(&stale_query).expect("stale response builds"),
+                receiver_addr,
+            )
+            .expect("stale response sends");
+        sender
+            .send_to(
+                &build_self_test_response(&expected_query).expect("expected response builds"),
+                receiver_addr,
+            )
+            .expect("expected response sends");
+
+        let mut stats = Stats::default();
+        receive_one(
+            &receiver,
+            8,
+            Instant::now(),
+            Duration::from_secs(1),
+            &mut stats,
+        )
+        .expect("expected response is received after stale response");
+
+        assert_eq!(stats.rx_packets, 2);
+        assert_eq!(stats.rx_dns_unmatched, 1);
+        assert_eq!(stats.rx_dns_responses, 1);
+        assert_eq!(stats.positive, 1);
+        assert_eq!(stats.queries_unanswered, 0);
     }
 
     #[test]

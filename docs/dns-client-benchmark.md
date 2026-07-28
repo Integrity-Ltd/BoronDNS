@@ -487,7 +487,12 @@ deltas for the selected device; `network/ethtool-delta.tsv` is also written
 when ethtool data is available. `benchmark-results.tsv` also records Git,
 kernel, Rust toolchain, build profile, and local binary SHA-256 provenance. In
 SSH mode, `remote-client-command.txt` records the remote command plus the local
-and remote load-client binary digests.
+and remote load-client binary digests. SSH mode also retains client-side route,
+NIC, `/proc/net/dev`, CPU, softirq, interrupt, and optional ethtool snapshots
+under `remote-client-network/`. Physical-NIC runs require positive RX/TX packet
+deltas and no new client-side NIC errors or drops. The temporary remote
+directory must not already exist; cleanup removes only the uploaded binary,
+trace, and ownership marker before using `rmdir`, never recursive deletion.
 
 ## Large Catalog Benchmark
 

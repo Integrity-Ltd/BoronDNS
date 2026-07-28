@@ -17,7 +17,7 @@
         let above_u32 = u64::from(u32::MAX) + 1;
         let range = BlobRange {
             offset: above_u32,
-            len: 1,
+            len: above_u32,
         };
         let rdata = RdataRange {
             offset: above_u32,
@@ -33,7 +33,6 @@
             owner_label_count: 0,
             relation_span: u32::MAX,
             direct_answer_body_len: 0,
-            ownerless_wire_len: 0,
             wire: range,
         };
         let relation = ImageRrsetRelation {
@@ -47,10 +46,25 @@
             .expect("u64 relation ordinal is representable");
 
         assert_eq!(range.offset, above_u32);
+        assert_eq!(range.len, above_u32);
+        assert_eq!(blob_len(range), above_u32 as usize);
+        assert_eq!(rrset_ownerless_wire_len(rrset), above_u32 as usize);
         assert_eq!(rdata.offset, above_u32);
         assert_eq!(rrset.first_record, above_u32);
         assert_eq!(relation.record_index, above_u32);
         assert_eq!(span.first_relation, above_u32);
+    }
+
+    #[test]
+    fn direct_answer_template_falls_back_above_dns_section_count_capacity() {
+        let rdatas = vec![&[][..]; usize::from(u16::MAX) + 1];
+        let mut wire = Vec::new();
+
+        let result = push_direct_answer_body(&mut wire, true, [0; 8], &rdatas)
+            .expect("oversized direct answer falls back to records");
+
+        assert_eq!(result, DIRECT_ANSWER_BODY_RECORDS_FALLBACK);
+        assert!(wire.is_empty());
     }
 
     #[test]

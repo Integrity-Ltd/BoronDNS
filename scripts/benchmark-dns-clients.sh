@@ -19,6 +19,8 @@ udp_reuseport_workers="${BORONDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
 udp_worker_cpu_affinity="${BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
 udp_runtime="${BORONDNS_BENCH_UDP_RUNTIME:-tokio}"
 response_timeout_ms="${BORONDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
+http_connect_timeout="${BORONDNS_BENCH_HTTP_CONNECT_TIMEOUT_SECONDS:-2}"
+http_max_time="${BORONDNS_BENCH_HTTP_MAX_TIME_SECONDS:-10}"
 pipeline_timing_enabled="${BORONDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_shape_metrics_enabled="${BORONDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
 hot_path_detail="${BORONDNS_BENCH_HOT_PATH_DETAIL:-full}"
@@ -49,12 +51,15 @@ remote_client_ssh="${BORONDNS_BENCH_REMOTE_CLIENT_SSH:-}"
 remote_client_workdir="${BORONDNS_BENCH_REMOTE_CLIENT_WORKDIR:-/tmp/borondns-bench-$timestamp}"
 remote_client_ssh_connect_timeout="${BORONDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
 remote_client_allow_arch_mismatch="${BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH:-false}"
+remote_client_network_device="${BORONDNS_BENCH_REMOTE_CLIENT_NETWORK_DEVICE:-auto}"
 remote_client_local_arch="none"
 remote_client_remote_arch="none"
 remote_client_local_host_id="none"
 remote_client_remote_host_id="none"
 remote_client_same_host="none"
 remote_client_bin_sha256="none"
+remote_client_initialized=false
+remote_client_cleanup_status="not-applicable"
 git_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 git_status_output=""
 if git_status_output="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=normal 2>/dev/null)"; then
@@ -130,9 +135,18 @@ for pair in \
     "BORONDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:$udp_client_sockets_per_thread" \
     "BORONDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
     "BORONDNS_BENCH_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
-    "BORONDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
+    "BORONDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms" \
+    "BORONDNS_BENCH_HTTP_CONNECT_TIMEOUT_SECONDS:$http_connect_timeout" \
+    "BORONDNS_BENCH_HTTP_MAX_TIME_SECONDS:$http_max_time"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
+
+http_get() {
+    curl --fail --silent --show-error \
+        --connect-timeout "$http_connect_timeout" \
+        --max-time "$http_max_time" \
+        "$@"
+}
 if [[ -n "$udp_worker_cpu_affinity" ]]; then
     if [[ "$udp_runtime" != dedicated ]]; then
         printf 'BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY requires BORONDNS_BENCH_UDP_RUNTIME=dedicated\n' >&2
@@ -286,8 +300,9 @@ if [[ "$client_mode" == ssh ]]; then
         printf 'BORONDNS_BENCH_REMOTE_CLIENT_SSH must be non-empty and contain no whitespace when BORONDNS_BENCH_CLIENT_MODE=ssh\n' >&2
         exit 64
     fi
-    if [[ -z "$remote_client_workdir" || "$remote_client_workdir" =~ [[:space:]] ]]; then
-        printf 'BORONDNS_BENCH_REMOTE_CLIENT_WORKDIR must be non-empty and contain no whitespace when BORONDNS_BENCH_CLIENT_MODE=ssh\n' >&2
+    if [[ "$remote_client_workdir" != /* || "$remote_client_workdir" == "/" ||
+        "$remote_client_workdir" =~ [[:space:]] ]]; then
+        printf 'BORONDNS_BENCH_REMOTE_CLIENT_WORKDIR must be an absolute non-root path without whitespace when BORONDNS_BENCH_CLIENT_MODE=ssh\n' >&2
         exit 64
     fi
     for tool in ssh scp; do
@@ -335,6 +350,35 @@ if [[ "$client_mode" == ssh ]]; then
     fi
     if [[ "$require_non_loopback_device" == true && "$remote_client_same_host" == true ]]; then
         printf 'physical NIC evidence requested, but BORONDNS_BENCH_REMOTE_CLIENT_SSH appears to resolve to the local server host\n' >&2
+        exit 64
+    fi
+    if [[ "$remote_client_network_device" == auto ]]; then
+        # shellcheck disable=SC2029
+        remote_client_network_device="$(
+            ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+                "$remote_client_ssh" \
+                "ip route get $(printf '%q' "$client_server")" 2>/dev/null |
+                awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+        )"
+        remote_client_network_device="${remote_client_network_device:-unknown}"
+    fi
+    if [[ ! "$remote_client_network_device" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+        printf 'invalid BORONDNS_BENCH_REMOTE_CLIENT_NETWORK_DEVICE: %q\n' \
+            "$remote_client_network_device" >&2
+        exit 64
+    fi
+    # shellcheck disable=SC2029
+    if ! ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" \
+        "ip link show dev $(printf '%q' "$remote_client_network_device")" \
+        >/dev/null 2>&1; then
+        printf 'remote client network device does not exist: %s\n' \
+            "$remote_client_network_device" >&2
+        exit 69
+    fi
+    if [[ "$require_non_loopback_device" == true &&
+        "$remote_client_network_device" == lo ]]; then
+        echo "physical NIC evidence requested, but the remote client route is loopback" >&2
         exit 64
     fi
 fi
@@ -388,6 +432,7 @@ if [[ "$preflight_only" == true ]]; then
     printf 'remote_client_local_host_id=%s\n' "$remote_client_local_host_id"
     printf 'remote_client_remote_host_id=%s\n' "$remote_client_remote_host_id"
     printf 'remote_client_same_host=%s\n' "$remote_client_same_host"
+    printf 'remote_client_network_device=%s\n' "$remote_client_network_device"
     printf 'remote_client_allow_arch_mismatch=%s\n' "$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)"
     printf 'git_revision=%s\n' "$git_revision"
     printf 'git_dirty=%s\n' "$git_dirty"
@@ -411,6 +456,8 @@ mkdir -p "$artifact_dir" "$workdir" "$repo_root/target/benchmark-tools"
 
 cleanup() {
     local status=$?
+    local remote_status=0
+    trap - EXIT
     if [[ -n "${perf_stat_pid:-}" ]] && kill -0 "$perf_stat_pid" 2>/dev/null; then
         kill "$perf_stat_pid" 2>/dev/null || true
         wait "$perf_stat_pid" 2>/dev/null || true
@@ -431,6 +478,27 @@ cleanup() {
         kill "$primary_pid" 2>/dev/null || true
         wait "$primary_pid" 2>/dev/null || true
     fi
+    if [[ "$client_mode" == ssh && "$remote_client_initialized" == true ]]; then
+        remote_client_bin="${remote_client_bin:-$remote_client_workdir/dns-load-client}"
+        remote_trace_file="${remote_trace_file:-$remote_client_workdir/query-trace.tsv}"
+        remote_marker="${remote_marker:-$remote_client_workdir/.borondns-benchmark}"
+        # Remove only files created by this run, and remove the directory only
+        # if it is empty. No recursive remote deletion is used.
+        # shellcheck disable=SC2029
+        ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+            "$remote_client_ssh" \
+            "rm -f -- $(printf '%q' "$remote_client_bin") $(printf '%q' "$remote_trace_file") $(printf '%q' "$remote_marker") && rmdir -- $(printf '%q' "$remote_client_workdir")" ||
+            remote_status=$?
+        if ((remote_status == 0)); then
+            remote_client_cleanup_status="completed"
+            remote_client_initialized=false
+        else
+            remote_client_cleanup_status="failed"
+            status=1
+        fi
+        printf 'remote_client_cleanup_status=%s\n' "$remote_client_cleanup_status" \
+            >"$artifact_dir/remote-client-cleanup.txt"
+    fi
     if ((status != 0)); then
         [[ -f "$artifact_dir/fake-primary.log" ]] && {
             echo "---- fake-primary.log ----" >&2
@@ -445,6 +513,7 @@ cleanup() {
             tail -120 "$artifact_dir/client.log" >&2
         }
     fi
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -468,6 +537,7 @@ primary_log="$artifact_dir/fake-primary.log"
 server_log="$artifact_dir/borondns.log"
 client_log="$artifact_dir/client.log"
 network_dir="$artifact_dir/network"
+remote_network_dir="$artifact_dir/remote-client-network"
 packet_capture_dir="$artifact_dir/packet-capture"
 trace_file=""
 trace_source="generated-name-mode"
@@ -510,6 +580,7 @@ capture_network_snapshot() {
     } >"$network_dir/network-$label.txt" 2>&1
 
     [[ -r /proc/net/dev ]] && cp /proc/net/dev "$network_dir/proc-net-dev-$label.txt"
+    [[ -r /proc/stat ]] && cp /proc/stat "$network_dir/proc-stat-$label.txt"
     [[ -r /proc/softirqs ]] && cp /proc/softirqs "$network_dir/proc-softirqs-$label.txt"
     [[ -r /proc/interrupts ]] && cp /proc/interrupts "$network_dir/proc-interrupts-$label.txt"
 
@@ -529,6 +600,34 @@ capture_network_snapshot() {
             fi
         } >"$network_dir/ethtool-$network_device-$label.txt" 2>&1
     fi
+}
+
+capture_remote_client_network_snapshot() {
+    local label="$1"
+    [[ "$client_mode" == ssh ]] || return 0
+    mkdir -p "$remote_network_dir"
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" cat /proc/net/dev \
+        >"$remote_network_dir/proc-net-dev-$label.txt"
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" cat /proc/stat \
+        >"$remote_network_dir/proc-stat-$label.txt"
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" cat /proc/softirqs \
+        >"$remote_network_dir/proc-softirqs-$label.txt"
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" cat /proc/interrupts \
+        >"$remote_network_dir/proc-interrupts-$label.txt"
+    # shellcheck disable=SC2029
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" \
+        "date -u '+date_utc=%Y-%m-%dT%H:%M:%SZ'; uname -a; ip route get $(printf '%q' "$client_server"); ip -s link show dev $(printf '%q' "$remote_client_network_device")" \
+        >"$remote_network_dir/network-$label.txt" 2>&1
+    # shellcheck disable=SC2029
+    ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" \
+        "$remote_client_ssh" \
+        "if command -v ethtool >/dev/null 2>&1; then ethtool -S $(printf '%q' "$remote_client_network_device"); fi" \
+        >"$remote_network_dir/ethtool-$label.txt" 2>&1 || true
 }
 
 write_network_counter_deltas() {
@@ -612,6 +711,58 @@ for key in sorted(set(before) | set(after)):
         print(f"{key}\t{before[key]}\t{after[key]}\t{after[key] - before[key]}\tcount")
 PY
     fi
+}
+
+write_remote_client_network_counter_deltas() {
+    [[ "$client_mode" == ssh ]] || return 0
+    python3 - \
+        "$remote_client_network_device" \
+        "$remote_network_dir/proc-net-dev-before.txt" \
+        "$remote_network_dir/proc-net-dev-after.txt" \
+        "$remote_network_dir/proc-stat-before.txt" \
+        "$remote_network_dir/proc-stat-after.txt" \
+        >"$remote_network_dir/counter-delta.tsv" <<'PY'
+import sys
+
+device, net_before_path, net_after_path, cpu_before_path, cpu_after_path = sys.argv[1:]
+fields = [
+    "rx_bytes", "rx_packets", "rx_errs", "rx_drop", "rx_fifo", "rx_frame",
+    "rx_compressed", "rx_multicast", "tx_bytes", "tx_packets", "tx_errs",
+    "tx_drop", "tx_fifo", "tx_colls", "tx_carrier", "tx_compressed",
+]
+
+def read_dev(path):
+    with open(path, encoding="utf-8") as source:
+        for line in source:
+            if ":" not in line:
+                continue
+            name, data = line.split(":", 1)
+            if name.strip() == device:
+                values = [int(value) for value in data.split()]
+                return dict(zip(fields, values))
+    raise SystemExit(f"{path}: device {device!r} is absent")
+
+def read_cpu(path):
+    with open(path, encoding="utf-8") as source:
+        values = source.readline().split()
+    if not values or values[0] != "cpu":
+        raise SystemExit(f"{path}: aggregate CPU row is absent")
+    counters = [int(value) for value in values[1:]]
+    return sum(counters), counters[3] + (counters[4] if len(counters) > 4 else 0)
+
+before = read_dev(net_before_path)
+after = read_dev(net_after_path)
+cpu_before, idle_before = read_cpu(cpu_before_path)
+cpu_after, idle_after = read_cpu(cpu_after_path)
+cpu_total = cpu_after - cpu_before
+cpu_idle = idle_after - idle_before
+cpu_percent = 0.0 if cpu_total <= 0 else 100.0 * (cpu_total - cpu_idle) / cpu_total
+print("metric\tbefore\tafter\tdelta\tunit")
+for field in fields:
+    print(f"{field}\t{before[field]}\t{after[field]}\t"
+          f"{after[field] - before[field]}\tcount")
+print(f"host_cpu_percent\t0\t{cpu_percent:.3f}\t{cpu_percent:.3f}\tpercent")
+PY
 }
 
 start_packet_capture() {
@@ -1117,6 +1268,7 @@ remote_client_local_host_id=$remote_client_local_host_id
 remote_client_remote_host_id=$remote_client_remote_host_id
 remote_client_same_host=$remote_client_same_host
 remote_client_allow_arch_mismatch=$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)
+remote_client_network_device=$([[ "$client_mode" == ssh ]] && echo "$remote_client_network_device" || echo none)
 git_revision=$git_revision
 git_dirty=$git_dirty
 kernel_version=$kernel_version
@@ -1163,7 +1315,7 @@ printf 'server_affinity=%s\n' "$server_affinity" >>"$artifact_dir/run.env"
 borondns_pid=$!
 ready=0
 for _ in {1..400}; do
-    if curl -fsS "http://127.0.0.1:$health_port/readyz" >/dev/null 2>&1; then
+    if http_get "http://127.0.0.1:$health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
@@ -1174,9 +1326,10 @@ if ((ready != 1)); then
     exit 1
 fi
 
-curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
-curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
+http_get "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
+http_get "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
 capture_network_snapshot before
+capture_remote_client_network_snapshot before
 start_packet_capture
 start_perf_capture
 
@@ -1206,9 +1359,12 @@ if [[ "$client_mode" == local ]]; then
     "$client_bin" "${client_args[@]}" | tee "$client_log"
 else
     remote_client_bin="$remote_client_workdir/dns-load-client"
-    remote_trace_file=""
+    remote_trace_file="$remote_client_workdir/query-trace.tsv"
+    remote_marker="$remote_client_workdir/.borondns-benchmark"
     # shellcheck disable=SC2029
-    ssh "$remote_client_ssh" "mkdir -p $(printf '%q' "$remote_client_workdir")"
+    ssh "$remote_client_ssh" \
+        "test ! -e $(printf '%q' "$remote_client_workdir") && mkdir -m 700 -- $(printf '%q' "$remote_client_workdir") && : > $(printf '%q' "$remote_marker")"
+    remote_client_initialized=true
     scp -q "$client_bin" "$remote_client_ssh:$remote_client_bin"
     # shellcheck disable=SC2029
     ssh "$remote_client_ssh" "chmod +x $(printf '%q' "$remote_client_bin")"
@@ -1232,7 +1388,6 @@ else
         --timeout-ms "$response_timeout_ms"
     )
     if [[ -n "$trace_file" ]]; then
-        remote_trace_file="$remote_client_workdir/query-trace.tsv"
         scp -q "$trace_file" "$remote_client_ssh:$remote_trace_file"
         remote_client_args+=(--trace "$remote_trace_file")
     fi
@@ -1249,7 +1404,7 @@ else
         printf 'local_client_bin_sha256=%s\n' "$client_bin_sha256"
         printf 'remote_client_bin_sha256=%s\n' "$remote_client_bin_sha256"
         printf 'remote_client_command=%s\n' "$remote_command"
-        printf 'remote_trace_file=%s\n' "${remote_trace_file:-none}"
+        printf 'remote_trace_file=%s\n' "$([[ -n "$trace_file" ]] && echo "$remote_trace_file" || echo none)"
     } >"$artifact_dir/remote-client-command.txt"
     # shellcheck disable=SC2029
     ssh "$remote_client_ssh" "$remote_command" | tee "$client_log"
@@ -1267,8 +1422,10 @@ packet_capture_dns_query_packets="${packet_capture_dns_query_packets:-0}"
 packet_capture_dns_response_packets="${packet_capture_dns_response_packets:-0}"
 
 capture_network_snapshot after
+capture_remote_client_network_snapshot after
 write_network_counter_deltas
-curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
+write_remote_client_network_counter_deltas
+http_get "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
 cp "$config" "$artifact_dir/borondns.toml"
 
 summary="$(tail -1 "$client_log")"
@@ -1295,6 +1452,58 @@ network_rx_bytes_delta="${network_rx_bytes_delta:-unknown}"
 network_tx_bytes_delta="${network_tx_bytes_delta:-unknown}"
 network_rx_packets_delta="${network_rx_packets_delta:-unknown}"
 network_tx_packets_delta="${network_tx_packets_delta:-unknown}"
+remote_client_rx_bytes_delta="none"
+remote_client_tx_bytes_delta="none"
+remote_client_rx_packets_delta="none"
+remote_client_tx_packets_delta="none"
+remote_client_cpu_percent="none"
+if [[ "$client_mode" == ssh ]]; then
+    remote_client_rx_bytes_delta="$(
+        awk -F'\t' '$1 == "rx_bytes" { print $4; exit }' \
+            "$remote_network_dir/counter-delta.tsv"
+    )"
+    remote_client_tx_bytes_delta="$(
+        awk -F'\t' '$1 == "tx_bytes" { print $4; exit }' \
+            "$remote_network_dir/counter-delta.tsv"
+    )"
+    remote_client_rx_packets_delta="$(
+        awk -F'\t' '$1 == "rx_packets" { print $4; exit }' \
+            "$remote_network_dir/counter-delta.tsv"
+    )"
+    remote_client_tx_packets_delta="$(
+        awk -F'\t' '$1 == "tx_packets" { print $4; exit }' \
+            "$remote_network_dir/counter-delta.tsv"
+    )"
+    remote_client_cpu_percent="$(
+        awk -F'\t' '$1 == "host_cpu_percent" { print $4; exit }' \
+            "$remote_network_dir/counter-delta.tsv"
+    )"
+    remote_client_error_delta="$(
+        awk -F'\t' '
+            $1 == "rx_errs" || $1 == "rx_drop" ||
+            $1 == "tx_errs" || $1 == "tx_drop" {
+                total += $4
+            }
+            END { print total + 0 }
+        ' "$remote_network_dir/counter-delta.tsv"
+    )"
+    if [[ "$require_non_loopback_device" == true ]]; then
+        for pair in \
+            "remote client RX packets:$remote_client_rx_packets_delta" \
+            "remote client TX packets:$remote_client_tx_packets_delta"; do
+            if ! [[ "${pair#*:}" =~ ^[1-9][0-9]*$ ]]; then
+                printf '%s did not increase during physical benchmark evidence\n' \
+                    "${pair%%:*}" >&2
+                exit 1
+            fi
+        done
+        if [[ "$remote_client_error_delta" != "0" ]]; then
+            printf 'remote client NIC error/drop counters increased by %s\n' \
+                "$remote_client_error_delta" >&2
+            exit 1
+        fi
+    fi
+fi
 throughput_summary() {
     python3 - "$duration" "$responses_per_second" "$network_rx_bytes_delta" "$network_tx_bytes_delta" "$network_device" <<'PY'
 import math
@@ -1475,6 +1684,13 @@ remote_client_local_host_id	$remote_client_local_host_id	sha256
 remote_client_remote_host_id	$remote_client_remote_host_id	sha256
 remote_client_same_host	$remote_client_same_host	boolean
 remote_client_allow_arch_mismatch	$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)	boolean
+remote_client_network_device	$([[ "$client_mode" == ssh ]] && echo "$remote_client_network_device" || echo none)	device
+remote_client_network_snapshot_dir	$([[ "$client_mode" == ssh ]] && echo remote-client-network || echo none)	directory
+remote_client_rx_bytes_delta	$remote_client_rx_bytes_delta	bytes
+remote_client_tx_bytes_delta	$remote_client_tx_bytes_delta	bytes
+remote_client_rx_packets_delta	$remote_client_rx_packets_delta	packets
+remote_client_tx_packets_delta	$remote_client_tx_packets_delta	packets
+remote_client_cpu_percent	$remote_client_cpu_percent	percent
 network_rx_bytes_delta	$network_rx_bytes_delta	bytes
 network_tx_bytes_delta	$network_tx_bytes_delta	bytes
 network_rx_packets_delta	$network_rx_packets_delta	packets

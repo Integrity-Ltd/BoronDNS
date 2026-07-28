@@ -31,6 +31,10 @@ python3 -m py_compile scripts/check-srs-review-disposition.py
 python3 -m py_compile scripts/check-zone-image-prototype-benchmark.py
 python3 -m py_compile scripts/compare-zone-image-benchmarks.py
 python3 -m py_compile scripts/check-zone-image-evidence-tools.py
+python3 -m py_compile scripts/generate-boron-gen-query-trace.py
+python3 -m py_compile scripts/check-boron-gen-query-trace.py
+python3 -m py_compile scripts/summarize-boron-gen-performance.py
+python3 -m py_compile scripts/check-boron-gen-performance-summary.py
 python3 -m py_compile scripts/check-fuzz-targets.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
@@ -51,6 +55,8 @@ python3 scripts/check-doc-hygiene.py
 python3 scripts/check-srs-hygiene.py
 python3 scripts/check-srs-review-disposition.py
 python3 scripts/check-zone-image-evidence-tools.py
+python3 scripts/check-boron-gen-query-trace.py
+python3 scripts/check-boron-gen-performance-summary.py
 python3 scripts/check-fuzz-targets.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
@@ -68,6 +74,10 @@ bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/capture-unsafe-dependency-evidence.sh
 bash -n scripts/capture-interface-compatibility-evidence.sh
 bash -n scripts/benchmark-dns-clients.sh
+bash -n scripts/boron-gen-bounded-load.sh
+bash -n scripts/boron-gen-external-performance-coordinator.sh
+bash -n scripts/boron-gen-large-memory-campaign.sh
+bash -n scripts/boron-gen-query-performance.sh
 bash -n scripts/benchmark-zone-image-prototype.sh
 bash -n scripts/physical-udp-knot-comparison.sh
 bash -n scripts/zone-image-evidence-gate.sh

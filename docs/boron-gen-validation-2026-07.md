@@ -130,6 +130,142 @@ Post-correction evidence is retained in:
 - `target/evidence/boron-gen-registry-nsec3-2m-post-u32-20260727`
 - `target/evidence/boron-gen-contained-oom-post-u32-20260727`
 
+## Large-memory campaign corrective findings
+
+The subsequent 750 GiB-host campaign found that widening the RRset record
+count to `u32` had not removed every internal compact boundary. A
+100,000,000-member A RRset completed AXFR but publication failed because the
+RRset's complete stored wire span exceeded `u32::MAX` bytes. The count itself
+was representable; the remaining limit was the byte length in `BlobRange`.
+
+The corrective implementation widens blob lengths to `u64`, removes the
+redundant `u32` cached ownerless-wire length, and derives ownerless length from
+the RRset's wire span, owner length, and record count. This preserves the
+72-byte `ImageRrset` metadata layout. Direct-answer templates now fall back to
+record iteration above the DNS `u16` section-count capacity, avoiding a large
+template that cannot be emitted as one DNS answer. BoronGen continues to
+accept and stream the maximum `u32` large-RRset count without preallocating the
+zone. A 100,000,000-member rerun remains required before claiming that scale as
+validated evidence.
+
+The same campaign identified three harness/tool issues, now corrected:
+
+- bounded catalog readiness requires the requested number of ACTIVE member
+  zones, zero LOADING/EXPIRED members, the expected managed catalog-member
+  metrics, and at least the catalog plus member AXFR completion count;
+- BoronGun's portable UDP receive path discards and accounts for stale response
+  IDs while continuing to wait for the current query until its absolute
+  deadline; and
+- large-memory runs place generator and server services in a dedicated
+  system-manager slice. The harness checks ancestor systemd-oomd pressure
+  limits and rejects a lower ancestor threshold instead of assuming the leaf
+  threshold controls termination.
+
+The bounded harness now emits `run-summary.json` for unsuccessful as well as
+successful outcomes, including the failure stage/reason, unit result, memory
+peaks, elapsed time, systemd manager, slice, and pressure threshold. It also
+stops promptly when publication reports the deterministic compact-capacity
+failure. The campaign coordinator retains a resource-sample and unit-property
+fallback for interrupted or older harnesses that do not produce a summary.
+
+Readiness and metrics requests now have independent connection and total
+timeouts, so one accepted but stalled HTTP request cannot bypass the outer
+readiness deadline. Before query measurement, the harness requires a
+configurable stable window covering:
+
+- BoronDNS cgroup memory change and remaining hard-limit headroom;
+- host `MemAvailable`;
+- BoronDNS cgroup CPU use; and
+- full-memory-pressure `avg10`.
+
+Every attempted window is retained in `quiescence-samples.tsv`; the accepted
+window is summarized in `quiescence-summary.json`. A large scenario that
+publishes but remains under reclaim pressure is therefore capacity evidence,
+not performance evidence.
+
+## Two-host size/performance campaign
+
+`scripts/boron-gen-query-performance.sh` runs after publication when
+`BORON_LOAD_PERFORMANCE_MODE=local` or `ssh`. It also supports a coordinator
+using independent server and client SSH targets. The runner generates a deterministic
+BoronGen-aware trace with hot and spread positive lookups, apex lookups, and
+DNSSEC negative lookups. Registry traces include delegation and glue-referral
+paths; mixed traces include A, AAAA, and TXT paths; wide-RRset traces allow the
+expected truncated UDP shape without weakening response-code validation.
+
+The runner warms the loaded image, performs three measured repetitions by
+default, and records QPS, p50/p90/p99/p999, loss, whole-host CPU, `/proc`
+network counters, softirqs, interrupts, route state, and optional ethtool
+counters on both the BoronDNS and client hosts. SSH mode refuses a loopback
+route, checks client/server architecture, verifies the copied client digest,
+requires positive packet deltas on both physical NICs, and rejects new NIC
+error/drop counters. Remote cleanup removes only the exact uploaded files and
+then uses `rmdir`; it never recursively deletes the configured directory.
+
+Oxidedns intentionally has no private key for oxidegun. The production
+two-host path therefore uses `external` mode: the bounded harness publishes a
+request after the quiescence gate and waits for a completion marker, while
+`scripts/boron-gen-external-performance-coordinator.sh` uses this workstation's
+independent SSH access to both hosts. No agent socket or cross-host credential
+must remain alive for the campaign.
+
+Start the remote campaign with a fixed ID and external performance mode:
+
+```bash
+BORON_CAMPAIGN_ID=next-large \
+BORON_CAMPAIGN_PERFORMANCE_MODE=external \
+BORON_CAMPAIGN_DNS_LISTEN=198.18.0.1:15300 \
+BORON_CAMPAIGN_PERFORMANCE_SERVER_DEVICE=eno1np0 \
+BORON_CAMPAIGN_PERFORMANCE_CLIENT_BIND=198.18.0.2:0 \
+BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOURCE_CIDR=198.18.0.2/32 \
+BORON_CAMPAIGN_PERFORMANCE_CLIENT_DEVICE=eno1np0 \
+scripts/boron-gen-large-memory-campaign.sh run
+```
+
+Then run the coordinator on the controlling host:
+
+```bash
+BORON_COORD_SERVER_SSH=oxidedns-1 \
+BORON_COORD_CLIENT_SSH=oxidegun-1 \
+BORON_COORD_REMOTE_ARTIFACT_ROOT=/home/codex/borondns/target/evidence/boron-gen-large-memory-next-large \
+scripts/boron-gen-external-performance-coordinator.sh
+```
+
+The coordinator validates both host identities, executes the query client on
+oxidegun, captures server evidence from oxidedns, validates a relative-file
+SHA-256 manifest, and transfers the result as a checked tar archive before
+atomically writing the completion marker.
+
+The serialized registry curve is 1M, 10M, 20M, 40M, 50M, and 60M ordinary
+names with the same number of ordered NSEC3 records. QPS and p99 medians are
+written beside memory peaks in `results.tsv`. The 50M and 60M rows are
+calibration candidates, not promised passes: they must satisfy the same host
+headroom, cgroup headroom, CPU, and pressure gate before any QPS value is
+accepted.
+
+The external handshake was exercised end to end with BoronDNS in a dedicated
+system-manager slice on oxidedns and the query client on oxidegun over
+`eno1np0` (`198.18.0.0/30`). The one-second measured smoke received
+42,501/42,501 responses with zero client errors or drops. Both NICs recorded
+exactly 42,501 RX and TX packets, no error/drop-counter increase, 42,352
+responses/second, and 330 microseconds p99. These short-run numbers validate
+the harness path only; they are not capacity claims. Evidence is retained in
+`target/evidence/boron-gen-physical-harness-smoke-20260728` and the adjacent
+`boron-gen-external-coordinator-smoke-r2-*` directory.
+
+When the DNS listener is non-loopback, the local correctness probe's exact
+server source address is added to the narrow RRL harness allowlist alongside
+the separately configured remote-client CIDR. The UDP correctness threshold
+counts authoritative NXDOMAIN responses plus valid `TC` responses; the
+separate TCP `dig +dnssec` probe still requires an actual NXDOMAIN response
+with NSEC3 authority records.
+
+The original 65M balanced row eventually reached its exact 680 GiB
+`MemoryMax` and ended with systemd result `oom-kill` and signal 9. It remains
+useful allocator-boundary evidence, but its old user-manager oomd placement and
+stalled HTTP probe prevent treating it as a valid readiness or performance
+result.
+
 ## Fuzz campaign prerequisite
 
 The two-host 24-hour campaign was terminal before the final 32 GiB test
