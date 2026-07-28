@@ -22,6 +22,8 @@ Environment:
   CARGO                  Cargo executable to use (default: cargo)
   CARGO_TOOLCHAIN        Rustup toolchain override (default: nightly with rustup cargo)
   CARGO_FUZZ_SANITIZER   Optional cargo-fuzz sanitizer mode
+  BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS
+                         Per-target cargo-fuzz build timeout (default: 3600)
   BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE
                          Allow a local dirty-source diagnostic; never accepted in CI
 EOF
@@ -64,7 +66,7 @@ if [[ "$allow_dirty_non_release" == 1 ]] &&
         [[ "${GITHUB_REF_TYPE:-}" == tag ]] || [[ "${GITHUB_REF:-}" == refs/tags/* ]]; }; then
     die "dirty-source fuzz override is forbidden in CI and release contexts"
 fi
-fuzz_wall_clock_grace="${BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS:-1800}"
+fuzz_build_timeout="${BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS:-3600}"
 fuzz_wall_clock_kill_after="${BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS:-10}"
 fuzz_probe_timeout="${BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS:-30}"
 fuzz_probe_kill_after="${BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS:-5}"
@@ -138,12 +140,10 @@ require_bounded_positive_integer() {
 
 validate_timing_bounds() {
     require_bounded_positive_integer "--duration" "$duration" "$max_nanosecond_seconds"
-    require_bounded_positive_integer "BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS" "$fuzz_wall_clock_grace" 9223372036854775807
+    require_bounded_positive_integer "BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS" "$fuzz_build_timeout" 9223372036854775807
     require_bounded_positive_integer "BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS" "$fuzz_wall_clock_kill_after" 9223372036854775807
     require_bounded_positive_integer "BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS" "$fuzz_probe_timeout" 9223372036854775807
     require_bounded_positive_integer "BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS" "$fuzz_probe_kill_after" 9223372036854775807
-    ((fuzz_wall_clock_grace <= 9223372036854775807 - duration)) ||
-        die "fuzz duration plus wall-clock grace exceeds signed 64-bit time"
 }
 
 monotonic_nanoseconds() {
@@ -639,7 +639,7 @@ write_config() {
     local config_file="$1"
     {
         printf 'duration_seconds=%s\n' "$duration"
-        printf 'wall_clock_grace_seconds=%s\n' "$fuzz_wall_clock_grace"
+        printf 'build_timeout_seconds=%s\n' "$fuzz_build_timeout"
         printf 'wall_clock_kill_after_seconds=%s\n' "$fuzz_wall_clock_kill_after"
         printf 'minimum_elapsed_tolerance_nanoseconds=%s\n' "$fuzz_elapsed_tolerance_nanoseconds"
         printf 'wall_monotonic_tolerance_nanoseconds=%s\n' "$fuzz_wall_monotonic_tolerance_nanoseconds"
@@ -758,7 +758,7 @@ run_target() {
     local artifact_dir="$evidence_dir/artifacts/$target"
     local corpus_dir="$evidence_dir/corpus/$target"
     local command_file="$evidence_dir/logs/$target.command"
-    local -a cmd
+    local -a build_cmd cmd
 
     campaign_prepare_contained_directory "$evidence_dir/artifacts" "$artifact_dir" "target artifact directory" ||
         die "unsafe target artifact directory: $target"
@@ -768,24 +768,29 @@ run_target() {
     campaign_require_owned_real_directory "$evidence_dir/corpus" "fuzz corpus root" || die "unsafe fuzz corpus root"
     campaign_prepare_contained_directory "$evidence_dir/corpus" "$corpus_dir" "target corpus directory" ||
         die "unsafe target corpus directory: $target"
+    build_cmd=("$authenticated_cargo_path" fuzz build)
     cmd=("$authenticated_cargo_path" fuzz run)
     if [[ -n "$sanitizer" ]]; then
         # Recent nightly compilers reject mixing an instrumented fuzz crate
         # with an uninstrumented prebuilt standard library (notably for
         # ThreadSanitizer). Build std with the same sanitizer whenever the
         # caller explicitly selects one.
+        build_cmd+=(--sanitizer "$sanitizer" --build-std)
         cmd+=(--sanitizer "$sanitizer" --build-std)
     fi
+    build_cmd+=("$target")
     cmd+=(
         "$target"
         "$corpus_dir"
         --
-        "-max_total_time=$duration"
         "-artifact_prefix=$artifact_dir/"
     )
 
     {
         printf 'target=%s\n' "$target"
+        printf 'build_command='
+        printf '%q ' "${build_cmd[@]}"
+        printf '\n'
         printf 'command='
         printf '%q ' "${cmd[@]}"
         printf '\n'
@@ -803,23 +808,46 @@ run_target() {
 
     printf 'Running %s for %ss; log: %s\n' "$target" "$duration" "$target_log"
     verify_authenticated_rust_tools
-    local wall_clock_timeout=$((duration + fuzz_wall_clock_grace))
     local started_epoch ended_epoch started_monotonic ended_monotonic elapsed_nanoseconds target_status
+    local build_started_epoch build_ended_epoch build_started_monotonic build_ended_monotonic build_elapsed_nanoseconds
+    build_started_epoch="$(date +%s)"
+    build_started_monotonic="$(monotonic_nanoseconds)" || die "cannot capture monotonic fuzz build start time"
+    set +e
+    (
+        cd "$repo_root"
+        timeout --preserve-status --kill-after="$fuzz_wall_clock_kill_after" "$fuzz_build_timeout" \
+            env PATH="$(authenticated_tool_path)" "${build_cmd[@]}"
+    ) >"$target_log" 2>&1
+    target_status=$?
+    set -e
+    build_ended_monotonic="$(monotonic_nanoseconds)" || die "cannot capture monotonic fuzz build end time"
+    build_ended_epoch="$(date +%s)"
+    build_elapsed_nanoseconds=$((build_ended_monotonic - build_started_monotonic))
+    ((build_elapsed_nanoseconds >= 0)) || die "monotonic fuzz build clock moved backwards"
+    if ((target_status != 0)); then
+        append_summary_row "$target" "failed" "$target_status" "$build_started_epoch" "$build_ended_epoch" \
+            "$build_elapsed_nanoseconds" "$target_log" "$artifact_dir" "$command_file"
+        printf 'target build failed: %s (exit %s)\n' "$target" "$target_status" >&2
+        printf -- '---- %s tail ----\n' "$target_log" >&2
+        tail -120 "$target_log" >&2 || true
+        return "$target_status"
+    fi
+    verify_authenticated_rust_tools
     started_epoch="$(date +%s)"
     started_monotonic="$(monotonic_nanoseconds)" || die "cannot capture monotonic fuzz start time"
     set +e
     (
         cd "$repo_root"
-        timeout --preserve-status --kill-after="$fuzz_wall_clock_kill_after" "$wall_clock_timeout" \
+        timeout --signal=INT --kill-after="$fuzz_wall_clock_kill_after" "$duration" \
             env PATH="$(authenticated_tool_path)" "${cmd[@]}"
-    ) >"$target_log" 2>&1
+    ) >>"$target_log" 2>&1
     target_status=$?
     set -e
     ended_monotonic="$(monotonic_nanoseconds)" || die "cannot capture monotonic fuzz end time"
     ended_epoch="$(date +%s)"
     elapsed_nanoseconds=$((ended_monotonic - started_monotonic))
     ((elapsed_nanoseconds >= 0)) || die "monotonic fuzz execution clock moved backwards"
-    if ((target_status != 0)); then
+    if ((target_status != 0 && target_status != 124)); then
         append_summary_row "$target" "failed" "$target_status" "$started_epoch" "$ended_epoch" "$elapsed_nanoseconds" "$target_log" "$artifact_dir" "$command_file"
         printf 'target failed: %s (exit %s)\n' "$target" "$target_status" >&2
         printf -- '---- %s tail ----\n' "$target_log" >&2
@@ -840,6 +868,13 @@ run_target() {
         append_summary_row "$target" "failed" 70 "$started_epoch" "$ended_epoch" "$elapsed_nanoseconds" "$target_log" "$artifact_dir" "$command_file"
         printf 'target exited successfully before its authenticated duration: %s elapsed_ns=%s required_ns=%s\n' \
             "$target" "$elapsed_nanoseconds" "$minimum_elapsed_nanoseconds" >&2
+        return 70
+    fi
+    local crash_artifact
+    crash_artifact="$(find "$artifact_dir" -mindepth 1 -maxdepth 1 -type f -size +0c -print -quit)"
+    if [[ -n "$crash_artifact" ]]; then
+        append_summary_row "$target" "failed" 70 "$started_epoch" "$ended_epoch" "$elapsed_nanoseconds" "$target_log" "$artifact_dir" "$command_file"
+        printf 'target produced a nonempty top-level crash artifact at its wall-clock boundary: %s\n' "$target" >&2
         return 70
     fi
     local wall_elapsed_nanoseconds=$((wall_elapsed_seconds * 1000000000))

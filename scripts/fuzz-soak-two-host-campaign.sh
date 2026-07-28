@@ -523,14 +523,13 @@ write_plan() {
         >"$staging/assignments.tsv"
 
     local index=0
-    local target host safe_target safe_campaign safe_instance command_file remote_target_dir remote_log_dir remote_build_root systemd_unit
+    local target host safe_target safe_campaign safe_instance command_file remote_target_dir remote_build_root systemd_unit
     safe_campaign="$(systemd_escape_fragment "$campaign_id")"
     for target in "${targets[@]}"; do
         host="${hosts[$((index % ${#hosts[@]}))]}"
         safe_target="$(systemd_escape_fragment "$target")"
         safe_instance="$(printf '%03d-%s' "$index" "$safe_target")"
         remote_target_dir="$remote_evidence/fuzz/$safe_instance"
-        remote_log_dir="$remote_evidence/launch"
         remote_build_root="/var/tmp/borondns-fuzz-$safe_campaign/$safe_instance"
         systemd_unit="borondns-fuzz-$safe_campaign-$index-$safe_target"
         command_file="$final_evidence/commands/$host-$safe_instance.sh"
@@ -540,7 +539,6 @@ write_plan() {
             printf 'remote_repo=%q\n' "$remote_repo"
             printf 'remote_target_dir=%q\n' "$remote_target_dir"
             printf 'remote_evidence=%q\n' "$remote_evidence"
-            printf 'remote_log_dir=%q\n' "$remote_log_dir"
             printf 'remote_build_root=%q\n' "$remote_build_root"
             printf 'systemd_unit=%q\n' "$systemd_unit"
             printf 'target=%q\n' "$target"
@@ -855,7 +853,6 @@ campaign_assert_private_lock || { printf 'remote fuzz campaign lock broker exite
 attempt_dir="$(mktemp -d "$remote_target_dir/attempts/attempt.XXXXXX")"
 require_owned_real_dir "$attempt_dir" "fresh target attempt" || exit 1
 [[ -z "$(find "$attempt_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] || { printf 'fresh target attempt is not empty: %s\n' "$attempt_dir" >&2; exit 1; }
-ensure_owned_dir "$remote_evidence" "$remote_log_dir" "remote launch directory" || exit 1
 remote_runner="$attempt_dir/run.sh"
 build_parent="$(dirname "$remote_build_root")"
 if [[ -e "$build_parent" || -L "$build_parent" ]]; then
@@ -984,7 +981,7 @@ Environment=CARGO_HOME=$service_home/.cargo
 Environment=RUSTUP_HOME=$service_home/.rustup
 Environment=CARGO_BUILD_JOBS=1
 LimitNOFILE=65536
-RuntimeMaxSec=$((duration + 3600))
+RuntimeMaxSec=$((duration + 3600 + target_setup_reserve_seconds))
 TimeoutStopSec=30
 ExecStart=$remote_runner
 Restart=no
@@ -1111,12 +1108,11 @@ write_sampler_plan() {
     local sampler_tsv="$staging/host-samplers.tsv"
     printf 'host\tremote_sample_dir\tsystemd_unit\tremote_command_file\tdeadline_epoch_seconds\n' >"$sampler_tsv"
 
-    local host safe_host remote_sample_dir remote_log_dir command_file systemd_unit sampler_units_planned_count
+    local host safe_host remote_sample_dir command_file systemd_unit sampler_units_planned_count
     while IFS= read -r host; do
         [[ -n "$host" ]] || continue
         safe_host="$(systemd_escape_fragment "$host")"
         remote_sample_dir="$remote_evidence/host/$safe_host"
-        remote_log_dir="$remote_evidence/launch"
         systemd_unit="borondns-fuzz-$safe_campaign-host-sampler-$safe_host"
         command_file="$final_evidence/commands/$host-host-sampler.sh"
         sampler_units_planned_count="$(awk -F '\t' -v host="$host" 'NR > 1 && $1 == host { count += 1 } END { print count + 0 }' "$staging/assignments.tsv")"
@@ -1126,7 +1122,6 @@ write_sampler_plan() {
             printf 'set -euo pipefail\n'
             printf 'remote_sample_dir=%q\n' "$remote_sample_dir"
             printf 'remote_evidence=%q\n' "$remote_evidence"
-            printf 'remote_log_dir=%q\n' "$remote_log_dir"
             printf 'systemd_unit=%q\n' "$systemd_unit"
             printf 'duration=%q\n' "$duration"
             printf 'deadline_epoch=%q\n' "$sampler_deadline_epoch_seconds"
@@ -1497,7 +1492,6 @@ ensure_owned_dir "$remote_parent" "$remote_evidence" "remote evidence directory"
 ensure_owned_dir "$remote_evidence" "$remote_evidence/host" "host evidence root" || exit 1
 ensure_owned_dir "$remote_evidence/host" "$remote_sample_dir" "sampler host directory" || exit 1
 ensure_owned_dir "$remote_sample_dir" "$remote_sample_dir/attempts" "sampler attempt root" || exit 1
-ensure_owned_dir "$remote_evidence" "$remote_log_dir" "remote launch directory" || exit 1
 while IFS= read -r -d '' sampler_node; do
 	[[ ! -L "$sampler_node" && -d "$sampler_node" && "$(basename "$sampler_node")" == attempts ]] || {
 		printf 'sampler host root contains an unsafe or unknown node: %s\n' "$sampler_node" >&2
@@ -1795,7 +1789,7 @@ while :; do
 	    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$timestamp" "$now_epoch" "$active_units" "$awk_result" "$load_values" "$mem_available" >>"$samples"
 
 		[[ -z "$process_rows" ]] || awk -v ts="$timestamp" -v epoch="$now_epoch" \
-			'{ printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts, epoch, $1, $2, $3, $4, $5, $6 }' \
+			'NF >= 6 { printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts, epoch, $1, $2, $3, $4, $5, $6 }' \
 			<<<"$process_rows" >>"$process_samples"
 
 	if [ "$now_epoch" -ge "$end_epoch" ]; then

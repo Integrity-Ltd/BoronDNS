@@ -263,14 +263,19 @@ authenticated assignment plan. `fuzz-units.txt` must equal that canonical,
 unique list byte-for-line; evidence cannot add invented or duplicate units to
 increase its own cadence or terminal allowance.
 
-Sampler sleep is capped to the remaining authenticated schedule. At the
+Sampler sleep is capped to the remaining authenticated schedule. Its first
+row may take one bounded probe pass over the authenticated unit allowlist; the
+collector uses that same derived allowance instead of an unrelated two-second
+limit. At the
 deadline it performs one bounded terminal probe pass, using ten seconds per
 allowlisted unit plus five seconds of finalization reserve, so an inactive host
 deterministically records its final sample at or after the deadline. Evidence
-outside that derived terminal window is rejected. Each cargo-fuzz invocation also has an outer wall-clock deadline in
-addition to libFuzzer's `-max_total_time`; the default build/start grace is 1800
-seconds and can be narrowed with `BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS`.
-`BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` controls the final kill grace.
+outside that derived terminal window is rejected. Each target is built under
+an independent timeout and then fuzzed to an authenticated wall-clock
+deadline. This avoids libFuzzer CPU-time duration drift when many workers
+share a host. `BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS` controls the default
+3600-second build bound and `BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS`
+controls the final kill grace.
 Every rustup, Git, and tool-version preflight is independently hard bounded;
 `BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS` and
 `BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS` control that bound. Target and

@@ -688,6 +688,11 @@ def verify_sampler(
         + len(units) * FUZZ_SAMPLER_PROBE_BUDGET_SECONDS
         + FUZZ_SAMPLER_TERMINAL_OVERHEAD_SECONDS
     )
+    first_sample_deadline = (
+        started_epoch
+        + len(units) * FUZZ_SAMPLER_PROBE_BUDGET_SECONDS
+        + FUZZ_SAMPLER_TERMINAL_OVERHEAD_SECONDS
+    )
     marker = attempt / "sampler-completed.env"
     hard_stop = attempt / "sampler-hard-stop.env"
     if marker.exists() and hard_stop.exists():
@@ -736,7 +741,7 @@ def verify_sampler(
                     fail(f"sampler row timestamp and epoch differ at {host_samples}:{number}")
                 epochs.append(epoch)
             if epochs:
-                if epochs != sorted(set(epochs)) or not started_epoch - 1 <= epochs[0] <= started_epoch + 2:
+                if epochs != sorted(set(epochs)) or not started_epoch - 1 <= epochs[0] <= first_sample_deadline:
                     fail(f"sampler hard-stop epoch sequence is invalid: {attempt}")
                 max_gap = expected_interval + len(units) * 10 + 2
                 if any(right - left > max_gap for left, right in zip(epochs, epochs[1:])):
@@ -787,7 +792,7 @@ def verify_sampler(
         if abs(timestamp_epoch(row[0], "sampler row") - epoch) > 1:
             fail(f"sampler row timestamp and epoch differ at {attempt / 'host-samples.tsv'}:{number}")
         epochs.append(epoch)
-    if epochs != sorted(set(epochs)) or not started_epoch - 1 <= epochs[0] <= started_epoch + 2:
+    if epochs != sorted(set(epochs)) or not started_epoch - 1 <= epochs[0] <= first_sample_deadline:
         fail(f"sampler epoch sequence is invalid: {attempt}")
     max_gap = expected_interval + len(units) * 10 + 2
     if any(right - left > max_gap for left, right in zip(epochs, epochs[1:])):

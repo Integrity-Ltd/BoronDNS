@@ -7561,23 +7561,21 @@ bounded_fuzz_build="$workdir/bounded-fuzz-build"
 bounded_fuzz_evidence="$workdir/bounded-fuzz-evidence"
 mkdir "$bounded_fuzz_bin" "$bounded_fuzz_build"
 # shellcheck disable=SC2016
-printf '%s\n' '#!/usr/bin/env bash' '[[ "${1:-}" != --version ]] || exit 0' 'sleep 30' \
+printf '%s\n' '#!/usr/bin/env bash' \
+    '[[ "${1:-}" != --version && "${1:-}" != build ]] || exit 0' \
+    'sleep 30' \
     >"$bounded_fuzz_bin/cargo-fuzz"
 chmod +x "$bounded_fuzz_bin/cargo-fuzz"
 bounded_fuzz_started="$SECONDS"
-set +e
 PATH="$bounded_fuzz_bin:$workdir/poison-bin:$PATH" CARGO="$workdir/poison-bin/cargo" \
-    CARGO_TARGET_DIR="$bounded_fuzz_build" BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS=1 \
+    CARGO_TARGET_DIR="$bounded_fuzz_build" BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS=5 \
     BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS=1 \
     "$poison_repo/scripts/fuzz-campaign.sh" --duration 1 --target dns_datagram \
     --evidence-dir "$bounded_fuzz_evidence"
-bounded_fuzz_status=$?
-set -e
-[[ "$bounded_fuzz_status" -ne 0 ]]
 ((SECONDS - bounded_fuzz_started < 10))
-grep -Fqx wall_clock_grace_seconds=1 "$bounded_fuzz_evidence/config.txt"
-grep -Fq $'dns_datagram\tfailed\t' "$bounded_fuzz_evidence/campaign-summary.tsv"
-[[ ! -e "$bounded_fuzz_evidence/campaign-completed.env" ]]
+grep -Fqx build_timeout_seconds=5 "$bounded_fuzz_evidence/config.txt"
+grep -Fq $'dns_datagram\tpassed\t0\t' "$bounded_fuzz_evidence/campaign-summary.tsv"
+grep -Fqx status=passed "$bounded_fuzz_evidence/campaign-completed.env"
 
 preflight_hang_bin="$workdir/preflight-hang-bin"
 preflight_hang_evidence="$workdir/preflight-hang-evidence"
@@ -7822,6 +7820,15 @@ grep -Fqx target_activation_reserve_seconds=300 "$fuzz_target_command"
 grep -Fq 'sampler_deadline_epoch - duration - target_setup_reserve_seconds' "$fuzz_target_command"
 # shellcheck disable=SC2016
 grep -Fq 'sampler_deadline_epoch - duration - target_activation_reserve_seconds' "$fuzz_target_command"
+grep -Fq 'NF >= 6 { printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"' \
+    "$fuzz_plan_dir/commands/fake-host-host-sampler.sh"
+if grep -Fq '/launch/' "$fuzz_target_command" ||
+    grep -Fq '/launch/' "$fuzz_plan_dir/commands/fake-host-host-sampler.sh"; then
+    printf 'fuzz planner still creates an unauthenticated launch evidence directory\n' >&2
+    exit 1
+fi
+# shellcheck disable=SC2016
+grep -Fq 'RuntimeMaxSec=$((duration + 3600 + target_setup_reserve_seconds))' "$fuzz_target_command"
 
 expired_fuzz_created_epoch=$(($(date +%s) - 7200))
 expired_fuzz_created_utc="$(date -u -d "@$expired_fuzz_created_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
@@ -9299,6 +9306,32 @@ python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validato
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
     --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}" >/dev/null
+validator_delayed_sampler_start=$((validator_target_start - 7))
+validator_delayed_sampler_start_utc="$(date -u -d "@$validator_delayed_sampler_start" '+%Y-%m-%dT%H:%M:%SZ')"
+printf 'source_commit=%s\nsource_clean=1\nsample_interval_seconds=1\ndeadline_epoch_seconds=%s\nstarted_utc=%s\nstarted_epoch_seconds=%s\n' \
+    "$source_commit" "$validator_sampler_deadline" "$validator_delayed_sampler_start_utc" \
+    "$validator_delayed_sampler_start" >"$validator_sampler_attempt/sampler.env"
+python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
+    --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
+    --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
+    "${fuzz_validator_policy[@]}" >/dev/null
+validator_excessive_sampler_delay=$((validator_target_start - 16))
+validator_excessive_sampler_delay_utc="$(date -u -d "@$validator_excessive_sampler_delay" '+%Y-%m-%dT%H:%M:%SZ')"
+printf 'source_commit=%s\nsource_clean=1\nsample_interval_seconds=1\ndeadline_epoch_seconds=%s\nstarted_utc=%s\nstarted_epoch_seconds=%s\n' \
+    "$source_commit" "$validator_sampler_deadline" "$validator_excessive_sampler_delay_utc" \
+    "$validator_excessive_sampler_delay" >"$validator_sampler_attempt/sampler.env"
+if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
+    --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
+    --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
+    "${fuzz_validator_policy[@]}"; then
+    printf 'sampler validator accepted a first row beyond its authenticated probe allowance\n' >&2
+    exit 1
+fi
+printf 'source_commit=%s\nsource_clean=1\nsample_interval_seconds=1\ndeadline_epoch_seconds=%s\nstarted_utc=%s\nstarted_epoch_seconds=%s\n' \
+    "$source_commit" "$validator_sampler_deadline" "$validator_target_start_utc" \
+    "$validator_target_start" >"$validator_sampler_attempt/sampler.env"
 printf '%s\n' borondns-fuzz-fixture-99-invented.service >"$validator_sampler_attempt/fuzz-units.txt"
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \

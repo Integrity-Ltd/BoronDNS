@@ -84,13 +84,14 @@ tree on every normal or failed exit, after retaining the build-artifact hashes.
 It does not sweep older `/var/tmp` roots. An explicitly supplied
 `CARGO_TARGET_DIR` remains caller-owned and is never removed by the runner.
 
-The runner applies an outer wall-clock timeout as well as libFuzzer's
-`-max_total_time`, so a target that blocks inside one input cannot strand the
-campaign indefinitely. The outer limit is the requested duration plus a
-default 1800-second build/start grace; use
-`BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS` and
-`BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` to tighten it for prebuilt smoke
-tests.
+The runner first builds each target under an independently bounded timeout,
+then measures fuzz execution with an outer wall-clock deadline. This avoids
+libFuzzer's CPU-time `-max_total_time` semantics stretching a campaign under
+heavy host contention. Reaching the authenticated wall-clock boundary is a
+successful target completion; any earlier nonzero exit or top-level crash
+artifact remains a failure. Use `BORONDNS_FUZZ_BUILD_TIMEOUT_SECONDS` to change
+the default 3600-second build bound and
+`BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` to control final termination.
 
 When Cargo is not explicitly overridden, the runner selects the installed
 `nightly` rustup toolchain because cargo-fuzz sanitizer instrumentation requires

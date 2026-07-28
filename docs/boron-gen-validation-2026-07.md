@@ -294,6 +294,14 @@ the collector to return status 1. Both hosts are retained in the adjacent
 forensic tree with a written disposition:
 `target/evidence/fuzz-soak-two-host-20260726T112226Z-forensic-20260727`.
 
+The follow-up harness correction builds targets under a separate bounded
+timeout and measures fuzzing with a true wall-clock deadline, removes the
+unused `launch/` evidence directory, and derives first-sampler-row tolerance
+from the authenticated per-unit probe budget. Strict replay also found blank
+process-detail rows caused by a trailing here-string newline; the sampler now
+filters non-process rows before publication. These changes prevent recurrence
+but do not retroactively convert this frozen campaign into release evidence.
+
 The final load result below must not be cited as curing or passing this
 non-clean fuzz campaign.
 
@@ -334,5 +342,6 @@ BoronGen is ready for internal large-zone, large-RRset, mixed-record,
 catalog/AXFR, ordered-NSEC3 lookup, speed, memory, and allocator-containment
 testing within the documented synthetic-data boundaries. Future DNSSEC
 validity work must continue to use genuinely hashed and cryptographically
-signed zones. A future fuzz campaign must correct the worker deadline and
-sampler/collector contracts before it can supply clean release evidence.
+signed zones. A future fuzz campaign using the corrected worker deadline and
+sampler/collector contracts is still required before claiming clean release
+evidence.
