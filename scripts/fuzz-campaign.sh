@@ -484,7 +484,7 @@ write_fuzz_artifact_manifests() {
         return 1
     }
     if [[ -d "$cargo_target_dir" && ! -L "$cargo_target_dir" ]]; then
-        if ! find "$cargo_target_dir" -type f -perm /111 -print0 | sort -z >"$list"; then
+        if ! find "$cargo_target_dir" -type f -perm /111 -print0 | LC_ALL=C sort -z >"$list"; then
             rm -f "$list" "$staged"
             return 1
         fi
@@ -517,7 +517,7 @@ write_fuzz_artifact_manifests() {
         ! -path "$evidence_dir/artifact-manifest.sha256" \
         ! -path "$evidence_dir/campaign-completed.env" \
         ! -path "$evidence_dir/.artifact-manifest.*" \
-        ! -path "$evidence_dir/.build-artifact-list.*" -print0 | sort -z >"$list"; then
+        ! -path "$evidence_dir/.build-artifact-list.*" -print0 | LC_ALL=C sort -z >"$list"; then
         rm -f "$list" "$staged"
         return 1
     fi

@@ -5431,7 +5431,7 @@ rm "$header_only_validation/artifact-manifest.sha256" "$header_only_validation/c
 (
     cd "$header_only_validation"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$header_only_validation/artifact-manifest.sha256"
 printf '%s\n' \
     completed_utc=1970-01-01T00:00:02Z \
@@ -5533,7 +5533,7 @@ make_soak_sampler_fixture "$soak_policy_fixture" "$soak_policy_start" "$soak_pol
 (
     cd "$soak_policy_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_policy_fixture/artifact-manifest.sha256"
 printf '%s\n' \
     evidence_schema=1 \
@@ -5552,7 +5552,7 @@ refresh_soak_fixture_manifest() {
     (
         cd "$fixture"
         find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-            sort -z | xargs -0 sha256sum
+            LC_ALL=C sort -z | xargs -0 sha256sum
     ) >"$fixture/artifact-manifest.sha256"
     sed -i \
         "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5626,7 +5626,7 @@ sed -i '/^evidence_schema=/d' "$soak_unversioned_fixture/soak.env" \
 (
     cd "$soak_unversioned_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_unversioned_fixture/artifact-manifest.sha256"
 sed -i "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_unversioned_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
     "$soak_unversioned_fixture/campaign-completed.env"
@@ -5644,7 +5644,7 @@ sed -i 's/^evidence_schema=1$/evidence_schema=2/' "$soak_schema_fixture/soak.env
 (
     cd "$soak_schema_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_schema_fixture/artifact-manifest.sha256"
 printf '%s\n' \
     status=passed evidence_schema=2 \
@@ -5684,7 +5684,7 @@ make_soak_sampler_fixture "$soak_long_attempt_fixture" "$soak_policy_start" "$so
 (
     cd "$soak_long_attempt_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_long_attempt_fixture/artifact-manifest.sha256"
 printf '%s\n' \
     "completed_utc=$soak_long_attempt_deadline_utc" \
@@ -5727,7 +5727,7 @@ make_soak_sampler_fixture "$soak_inactive_fixture" "$soak_policy_start" "$soak_i
 (
     cd "$soak_inactive_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_inactive_fixture/artifact-manifest.sha256"
 printf '%s\n' \
     "completed_utc=$soak_inactive_deadline_utc" \
@@ -5755,7 +5755,7 @@ sed -i 's/^started_utc=2026-07-13T12:00:00Z$/started_utc=2026-07-13T11:59:59Z/' 
 (
     cd "$soak_before_start_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_before_start_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_before_start_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5776,7 +5776,7 @@ sed -i 's/^started_utc=2026-07-13T12:00:00Z$/started_utc=2026-07-13T12:00:01Z/' 
 (
     cd "$soak_after_deadline_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_after_deadline_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_after_deadline_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5794,7 +5794,7 @@ sed -i '2s/^2026-07-13T12:00:00Z/2026-07-13T12:00:02Z/' \
 (
     cd "$soak_timestamp_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_timestamp_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_timestamp_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5813,7 +5813,7 @@ sed -i \
 (
     cd "$soak_scenario_reversal_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_scenario_reversal_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_scenario_reversal_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5835,7 +5835,7 @@ printf '%s\n' status=failed "failed_utc=$soak_policy_deadline_utc" \
 (
     cd "$soak_sampler_reversal_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_sampler_reversal_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_sampler_reversal_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5856,7 +5856,7 @@ printf 'unledgered attempt\n' >"$unledgered_attempt/scenario.log"
 (
     cd "$unledgered_soak_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$unledgered_soak_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$unledgered_soak_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -5879,7 +5879,7 @@ sed -i 's/^allow_skip=1$/allow_skip=0/' "$soak_policy_fixture/soak.env"
 (
     cd "$soak_policy_fixture"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$soak_policy_fixture/artifact-manifest.sha256"
 sed -i \
     "s/^artifact_manifest_sha256=.*/artifact_manifest_sha256=$(sha256sum "$soak_policy_fixture/artifact-manifest.sha256" | awk '{ print $1 }')/" \
@@ -8708,7 +8708,7 @@ printf '%s\n' \
 (
     cd "$complete_attempt/evidence"
     find . -type f ! -name artifact-manifest.sha256 ! -name campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$complete_attempt/evidence/artifact-manifest.sha256"
 printf '%s\n' \
     status=passed \
@@ -9165,7 +9165,7 @@ printf 'nested staging evidence\n' >"$validator_attempt/artifacts/dns_datagram/n
     find . -type f \
         ! -path ./artifact-manifest.sha256 \
         ! -path ./campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$validator_attempt/artifact-manifest.sha256"
 printf '%s\n' \
     status=passed \
@@ -9220,7 +9220,7 @@ rm "$short_elapsed_attempt/artifact-manifest.sha256" "$short_elapsed_attempt/cam
 (
     cd "$short_elapsed_attempt"
     find . -type f ! -path ./artifact-manifest.sha256 ! -path ./campaign-completed.env -printf '%P\0' |
-        sort -z | xargs -0 sha256sum
+        LC_ALL=C sort -z | xargs -0 sha256sum
 ) >"$short_elapsed_attempt/artifact-manifest.sha256"
 printf '%s\n' \
     status=passed \
@@ -9242,7 +9242,7 @@ refresh_fuzz_attempt_terminal_hashes() {
     (
         cd "$attempt"
         find . -type f ! -path ./artifact-manifest.sha256 ! -path ./campaign-completed.env -printf '%P\0' |
-            sort -z | xargs -0 sha256sum
+            LC_ALL=C sort -z | xargs -0 sha256sum
     ) >"$attempt/artifact-manifest.sha256"
     printf '%s\n' \
         status=passed \
