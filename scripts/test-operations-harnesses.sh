@@ -7286,8 +7286,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "malicious\\n" >>"$MALICIOUS_FUZZ_LO
 printf '%s\n' '#!/usr/bin/env bash' 'printf "trusted %s\\n" "$*" >>"$TRUSTED_FUZZ_LOG"' \
     '[[ "${MUTATE_FUZZ_SOURCE:-0}" != 1 || "${1:-}" != run ]] || printf "mutation\\n" >"$MUTATE_FUZZ_REPO/source-mutation"' \
     'for argument in "$@"; do case "$argument" in -artifact_prefix=*) artifact_dir="${argument#*=}"; mkdir -p "$artifact_dir/nested-controls"; printf "nested fuzz completion\\n" >"$artifact_dir/nested-controls/campaign-completed.env"; printf "nested fuzz manifest\\n" >"$artifact_dir/nested-controls/artifact-manifest.sha256" ;; esac; done' \
-    '[[ "${1:-}" == --version ]] || sleep "${TRUSTED_FUZZ_SLEEP_SECONDS:-1}"' \
     'if [[ "${REPLACE_FUZZ_BUILD_ON_RUN:-0}" == 1 && "${1:-}" == run ]]; then mv "$CARGO_TARGET_DIR" "$CARGO_TARGET_DIR.original"; mkdir -m 0700 "$CARGO_TARGET_DIR"; mv "$CARGO_TARGET_DIR.original"/.authenticated-rust-tools.* "$CARGO_TARGET_DIR/"; printf "replacement must survive\\n" >"$CARGO_TARGET_DIR/sentinel"; fi' \
+    '[[ "${1:-}" == --version ]] || sleep "${TRUSTED_FUZZ_SLEEP_SECONDS:-1}"' \
     'exit 0' \
     >"$workdir/trusted-fuzz-bin/cargo-fuzz"
 chmod +x "$workdir/poison-bin/cargo" "$workdir/poison-bin/rustc" \
@@ -8114,7 +8114,7 @@ grep -Fqx "expected_commit=$source_commit" "$fuzz_command_file"
 [[ "$(grep -Fc 'LimitNOFILE=65536' "$fuzz_command_file")" -eq 1 ]]
 [[ "$(grep -Fc 'LimitNOFILE=65536' "$fuzz_sampler_command_file")" -eq 1 ]]
 # shellcheck disable=SC2016
-[[ "$(grep -Fc 'RuntimeMaxSec=$((duration + 3600))' "$fuzz_command_file")" -eq 1 ]]
+[[ "$(grep -Fc 'RuntimeMaxSec=$((duration + 3600 + target_setup_reserve_seconds))' "$fuzz_command_file")" -eq 1 ]]
 # shellcheck disable=SC2016
 [[ "$(grep -Fc 'RuntimeMaxSec=$((duration + 3600 + target_setup_reserve_seconds + sampler_terminal_reserve_seconds))' "$fuzz_sampler_command_file")" -eq 1 ]]
 grep -Fqx target_setup_reserve_seconds=600 "$fuzz_sampler_command_file"
