@@ -83,6 +83,11 @@ test\ -d*)
     exit 0
     ;;
 find\ *performance-request.json*)
+    if [[ "${TEST_COORD_FAIL_FIND_ONCE:-false}" == true &&
+        ! -e "${TEST_COORD_STATE:?}/find-failed-once" ]]; then
+        : >"${TEST_COORD_STATE:?}/find-failed-once"
+        exit 255
+    fi
     printf '%s\n' \
         /remote/evidence/runs/01-active/attempt-001/evidence/performance-request.json \
         /remote/evidence/runs/02-stale/attempt-001/evidence/performance-request.json \
@@ -161,11 +166,14 @@ chmod +x "$fake_bin/ssh" "$fake_bin/scp" \
 
 PATH="$fake_bin:$PATH" \
 TEST_COORD_STATE="$state" \
+TEST_COORD_FAIL_FIND_ONCE=true \
 BORON_COORD_SERVER_SSH=server-test \
 BORON_COORD_CLIENT_SSH=client-test \
 BORON_COORD_REMOTE_ARTIFACT_ROOT=/remote/evidence \
 BORON_COORD_LOCAL_ARTIFACT_ROOT="$local_artifacts" \
+BORON_COORD_POLL_SECONDS=1 \
 BORON_COORD_TIMEOUT_SECONDS=30 \
+BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE=200 \
     "$fixture_repo/scripts/boron-gen-external-performance-coordinator.sh" \
     >"$state/coordinator.stdout" 2>"$state/coordinator.stderr"
 
@@ -176,6 +184,10 @@ grep -Fq 'runs/01-active/attempt-001/evidence' \
     "$local_artifacts/completed-requests.tsv"
 grep -Fq 'runs/03-active/attempt-001/evidence' \
     "$local_artifacts/completed-requests.tsv"
+grep -Fq 'requested_max_drop_permille=1000' \
+    "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
+grep -Fq 'effective_max_drop_permille=200' \
+    "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
 [[ -f "$local_artifacts/runs/02-stale/attempt-001/evidence/stale-request.txt" ]]
 grep -Fq 'run summary exists without performance completion' \
     "$local_artifacts/runs/02-stale/attempt-001/evidence/stale-request.txt"
@@ -186,6 +198,8 @@ grep -Fq 'retained failed performance evidence' \
 grep -Fq 'runs/04-failing/attempt-001/evidence' \
     "$local_artifacts/failed-requests.tsv"
 grep -Fq 'retaining evidence and continuing coordination' \
+    "$state/coordinator.stderr"
+grep -Fq 'performance request enumeration failed with status 255' \
     "$state/coordinator.stderr"
 grep -Fq 'external performance coordination completed' "$state/coordinator.stdout"
 
