@@ -59,7 +59,12 @@ for tool in jq scp sha256sum ssh tar; do
     fi
 done
 
-ssh_options=(-o BatchMode=yes -o "ConnectTimeout=$ssh_connect_timeout")
+connection_options=(-o BatchMode=yes -o "ConnectTimeout=$ssh_connect_timeout")
+# The request loop is fed through stdin. Every SSH process must detach from it,
+# otherwise SSH consumes the remaining request paths while checking the first
+# request in the sorted list.
+ssh_options=(-n "${connection_options[@]}")
+scp_options=("${connection_options[@]}")
 ssh "${ssh_options[@]}" "$server_ssh" true
 ssh "${ssh_options[@]}" "$client_ssh" true
 server_host_id="$(
@@ -107,6 +112,7 @@ process_request() {
     local request_path="$1"
     local relative_path request_relative evidence_relative remote_evidence
     local local_attempt request_file performance_dir archive archive_sha
+    local stale_marker failed_marker
     local server_address server_port server_device client_bind client_device
     local profile origin zones names warmup duration repetitions threads window
     local sockets client_timeout client_cpu_list max_drop metrics_url
@@ -120,15 +126,35 @@ process_request() {
     request_relative="${relative_path%/performance-request.json}"
     evidence_relative="$request_relative"
     remote_evidence="$remote_artifact_root/$evidence_relative"
+    local_attempt="$local_artifact_root/$request_relative"
     # shellcheck disable=SC2029
     if ssh "${ssh_options[@]}" "$server_ssh" \
         "test -f $(printf '%q' "$remote_evidence/performance-complete")"; then
         return 0
     fi
-    local_attempt="$local_artifact_root/$request_relative"
+    # A summary without a completion marker means the bounded server for this
+    # request is already gone. Replaying it could benchmark a later scenario
+    # that reused the same address and port.
+    # shellcheck disable=SC2029
+    if ssh "${ssh_options[@]}" "$server_ssh" \
+        "test -f $(printf '%q' "$remote_evidence/run-summary.json")"; then
+        mkdir -p "$local_attempt"
+        stale_marker="$local_attempt/stale-request.txt"
+        if [[ ! -e "$stale_marker" ]]; then
+            printf 'skipped_utc=%s\nreason=run summary exists without performance completion\nremote_request=%s\n' \
+                "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$request_path" >"$stale_marker"
+            printf 'skipping stale performance request whose server run has ended: %s\n' \
+                "$request_path" >&2
+        fi
+        return 0
+    fi
+    failed_marker="$local_attempt/failed-request.txt"
+    if [[ -f "$failed_marker" ]]; then
+        return 0
+    fi
     mkdir -p "$local_attempt"
     request_file="$local_attempt/performance-request.json"
-    scp -q "${ssh_options[@]}" "$server_ssh:$request_path" "$request_file"
+    scp -q "${scp_options[@]}" "$server_ssh:$request_path" "$request_file"
     jq -e '.format == "boron-gen-external-performance-request-v1"' \
         "$request_file" >/dev/null
 
@@ -191,7 +217,7 @@ process_request() {
     # shellcheck disable=SC2029
     ssh "${ssh_options[@]}" "$server_ssh" \
         "test -d $(printf '%q' "$remote_evidence") && test ! -L $(printf '%q' "$remote_evidence") && test ! -e $(printf '%q' "$remote_evidence/performance") && test ! -e $(printf '%q' "$remote_evidence/performance-evidence.tar")"
-    scp -q "${ssh_options[@]}" "$archive" \
+    scp -q "${scp_options[@]}" "$archive" \
         "$server_ssh:$remote_evidence/performance-evidence.tar"
     # shellcheck disable=SC2029
     ssh "${ssh_options[@]}" "$server_ssh" \
@@ -199,6 +225,34 @@ process_request() {
     printf '%s\t%s\t%s\n' \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$request_relative" "$archive_sha" \
         >>"$local_artifact_root/completed-requests.tsv"
+}
+
+record_request_failure() {
+    local request_path="$1"
+    local exit_status="$2"
+    local relative_path request_relative local_attempt failed_marker failed_utc
+
+    relative_path="${request_path#"$remote_artifact_root"/}"
+    if [[ "$relative_path" == "$request_path" ||
+        ! "$relative_path" =~ ^runs/[A-Za-z0-9._-]+/attempt-[0-9]+/evidence/performance-request[.]json$ ]]; then
+        printf 'cannot record failure for unexpected request path: %s\n' \
+            "$request_path" >&2
+        return 1
+    fi
+    request_relative="${relative_path%/performance-request.json}"
+    local_attempt="$local_artifact_root/$request_relative"
+    failed_marker="$local_attempt/failed-request.txt"
+    mkdir -p "$local_attempt"
+    if [[ -e "$failed_marker" ]]; then
+        return 0
+    fi
+    failed_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'failed_utc=%s\nexit_status=%s\nremote_request=%s\n' \
+        "$failed_utc" "$exit_status" "$request_path" >"$failed_marker"
+    printf '%s\t%s\t%s\n' "$failed_utc" "$request_relative" "$exit_status" \
+        >>"$local_artifact_root/failed-requests.tsv"
+    printf 'performance request failed with status %s; retaining evidence and continuing coordination: %s\n' \
+        "$exit_status" "$request_path" >&2
 }
 
 deadline=$((SECONDS + timeout_seconds))
@@ -211,7 +265,17 @@ while true; do
     )"
     while IFS= read -r request_path; do
         [[ -n "$request_path" ]] || continue
-        process_request "$request_path"
+        # Run each request in its own errexit-enabled worker. A performance
+        # acceptance failure belongs to that request and must not terminate
+        # coordination for all later campaign rows.
+        process_request "$request_path" &
+        request_pid=$!
+        if wait "$request_pid"; then
+            :
+        else
+            request_status=$?
+            record_request_failure "$request_path" "$request_status"
+        fi
     done <<<"$requests"
 
     # shellcheck disable=SC2029
