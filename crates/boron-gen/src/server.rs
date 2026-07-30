@@ -230,7 +230,8 @@ async fn tcp_accept_loop(
             stats.tcp_overload_drops.fetch_add(1, Ordering::Relaxed);
             warn!(
                 event = "boron_gen_tcp_overload",
-                %peer,
+                peer_ip = %peer.ip(),
+                peer_port = peer.port(),
                 "dropping connection at configured concurrency limit"
             );
             drop(stream);
@@ -254,7 +255,8 @@ async fn tcp_accept_loop(
                 stats.rejected.fetch_add(1, Ordering::Relaxed);
                 warn!(
                     event = "boron_gen_tcp_request_failed",
-                    %peer,
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
                     error = %error,
                     "BoronGen TCP request failed"
                 );
@@ -292,7 +294,8 @@ async fn udp_receive_loop(
                 stats.rejected.fetch_add(1, Ordering::Relaxed);
                 warn!(
                     event = "boron_gen_udp_request_failed",
-                    %peer,
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
                     error = %error,
                     "BoronGen UDP request failed"
                 );
@@ -427,7 +430,8 @@ async fn stream_axfr(
         .fetch_add(expected_records, Ordering::Relaxed);
     info!(
         event = "boron_gen_axfr_complete",
-        %peer,
+        peer_ip = %peer.ip(),
+        peer_port = peer.port(),
         ?zone,
         records = expected_records,
         messages = message_count,

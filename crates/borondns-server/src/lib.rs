@@ -6213,6 +6213,14 @@ async fn refresh_zone_from_primaries_with_snapshot(
         .await
         {
             Ok(snapshot) => {
+                info!(
+                    event = "zone_transfer_publication_phase",
+                    phase = "axfr_snapshot_received",
+                    zone = %plan.origin,
+                    %primary,
+                    reason = %context.reason,
+                    "zone transfer publication phase"
+                );
                 let snapshot = Arc::new(snapshot);
                 let catalog_members = match catalog_manager.parse_candidate_snapshot(&snapshot) {
                     Ok(parsed) => parsed,
@@ -6231,6 +6239,14 @@ async fn refresh_zone_from_primaries_with_snapshot(
                         continue;
                     }
                 };
+                info!(
+                    event = "zone_transfer_publication_phase",
+                    phase = "axfr_snapshot_validated",
+                    zone = %plan.origin,
+                    %primary,
+                    reason = %context.reason,
+                    "zone transfer publication phase"
+                );
                 match context
                     .transfer_plan
                     .if_current_plan(plan, || {

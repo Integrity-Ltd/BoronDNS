@@ -11,6 +11,7 @@ poll_seconds="${BORON_COORD_POLL_SECONDS:-5}"
 timeout_seconds="${BORON_COORD_TIMEOUT_SECONDS:-604800}"
 ssh_connect_timeout="${BORON_COORD_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
 max_drop_override="${BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE:-}"
+target_qps_steps_override="${BORON_COORD_TARGET_QPS_STEPS_OVERRIDE:-}"
 preflight_only="${BORON_COORD_PREFLIGHT_ONLY:-false}"
 performance_runner="$repo_root/scripts/boron-gen-query-performance.sh"
 
@@ -34,6 +35,22 @@ if [[ -n "$max_drop_override" ]] &&
         ((max_drop_override > 1000)); }; then
     printf 'BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE must be empty or an integer from 0 to 1000\n' >&2
     exit 64
+fi
+if [[ -n "$target_qps_steps_override" &&
+    ! "$target_qps_steps_override" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+    echo "BORON_COORD_TARGET_QPS_STEPS_OVERRIDE must be empty or a comma-separated list of positive integers" >&2
+    exit 64
+fi
+if [[ -n "$target_qps_steps_override" ]]; then
+    IFS=, read -r -a target_qps_override_values <<<"$target_qps_steps_override"
+    previous_target_qps=0
+    for target_qps in "${target_qps_override_values[@]}"; do
+        if ((target_qps <= previous_target_qps)); then
+            echo "BORON_COORD_TARGET_QPS_STEPS_OVERRIDE must be strictly increasing" >&2
+            exit 64
+        fi
+        previous_target_qps="$target_qps"
+    done
 fi
 case "$preflight_only" in
 true | false) ;;
@@ -134,6 +151,7 @@ remote_artifact_root=$remote_artifact_root
 poll_seconds=$poll_seconds
 timeout_seconds=$timeout_seconds
 max_drop_permille_override=${max_drop_override:-none}
+target_qps_steps_override=${target_qps_steps_override:-none}
 EOF
 
 process_request() {
@@ -144,6 +162,7 @@ process_request() {
     local server_address server_port server_device client_bind client_device
     local profile origin zones names warmup duration repetitions threads window
     local sockets client_timeout client_cpu_list requested_max_drop max_drop metrics_url
+    local requested_target_qps_steps target_qps_steps
 
     relative_path="${request_path#"$remote_artifact_root"/}"
     if [[ "$relative_path" == "$request_path" ||
@@ -207,6 +226,8 @@ process_request() {
     client_cpu_list="$(jq -r '.client_cpu_list // ""' "$request_file")"
     requested_max_drop="$(jq -er '.max_drop_permille' "$request_file")"
     max_drop="${max_drop_override:-$requested_max_drop}"
+    requested_target_qps_steps="$(jq -r '.target_qps_steps // "0"' "$request_file")"
+    target_qps_steps="${target_qps_steps_override:-$requested_target_qps_steps}"
     metrics_url="$(jq -er '.metrics_url' "$request_file")"
     performance_dir="$local_attempt/performance"
     if [[ -e "$performance_dir" ]]; then
@@ -231,6 +252,7 @@ process_request() {
         BORON_GEN_PERF_WARMUP_SECONDS="$warmup" \
         BORON_GEN_PERF_DURATION_SECONDS="$duration" \
         BORON_GEN_PERF_REPETITIONS="$repetitions" \
+        BORON_GEN_PERF_TARGET_QPS_STEPS="$target_qps_steps" \
         BORON_GEN_PERF_CLIENT_THREADS="$threads" \
         BORON_GEN_PERF_CLIENT_WINDOW="$window" \
         BORON_GEN_PERF_CLIENT_SOCKETS_PER_THREAD="$sockets" \
@@ -241,9 +263,11 @@ process_request() {
         "$performance_runner"
 
     policy_file="$performance_dir/coordinator-policy.env"
-    printf 'requested_max_drop_permille=%s\neffective_max_drop_permille=%s\noverride_source=%s\n' \
+    printf 'requested_max_drop_permille=%s\neffective_max_drop_permille=%s\noverride_source=%s\nrequested_target_qps_steps=%s\neffective_target_qps_steps=%s\ntarget_qps_override_source=%s\n' \
         "$requested_max_drop" "$max_drop" \
         "$([[ -n "$max_drop_override" ]] && printf BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE || printf request)" \
+        "$requested_target_qps_steps" "$target_qps_steps" \
+        "$([[ -n "$target_qps_steps_override" ]] && printf BORON_COORD_TARGET_QPS_STEPS_OVERRIDE || printf request)" \
         >"$policy_file"
     (
         cd "$performance_dir"

@@ -202,6 +202,14 @@ requires positive packet deltas on both physical NICs, and rejects new NIC
 error/drop counters. Remote cleanup removes only the exact uploaded files and
 then uses `rmdir`; it never recursively deletes the configured directory.
 
+`BORON_GEN_PERF_TARGET_QPS_STEPS` changes the unlimited saturation phase into
+strictly increasing open-loop QPS steps, each with the configured number of
+repetitions. The client uses one global schedule shared by all workers, so the
+target is the aggregate offered rate rather than a per-thread rate. The
+external coordinator can record and apply
+`BORON_COORD_TARGET_QPS_STEPS_OVERRIDE` without altering a request that is
+already waiting on the server.
+
 The open-loop saturation runner accepts at most 100 dropped queries per
 thousand by default. This is deliberately distinct from NIC error/drop
 counters, which must not increase: client timeouts below the bound represent

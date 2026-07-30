@@ -7,7 +7,7 @@ use std::{
 use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use thiserror::Error;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     dns::{
@@ -771,6 +771,12 @@ fn child_label_hash_with_ascii_lowercase_hint(label: &[u8], label_ascii_lowercas
 
 impl ZoneImage {
     pub fn compile(snapshot: &ZoneSnapshot) -> Result<Self, ZoneImageBuildError> {
+        info!(
+            event = "zone_image_build_phase",
+            phase = "compile_start",
+            zone = %snapshot.origin,
+            "ZoneImage build phase"
+        );
         let origin_key = snapshot.origin.canonical_key();
         let mut rrsets = Vec::new();
 
@@ -785,6 +791,13 @@ impl ZoneImage {
 
             rrsets.push((owner_key, rrset));
         }
+        info!(
+            event = "zone_image_build_phase",
+            phase = "snapshot_rrsets_collected",
+            zone = %snapshot.origin,
+            rrset_count = rrsets.len(),
+            "ZoneImage build phase"
+        );
         rrsets.sort_by(|(left_owner, left), (right_owner, right)| {
             left_owner
                 .cmp(right_owner)
@@ -792,6 +805,13 @@ impl ZoneImage {
                 .then_with(|| left.rr_type.cmp(&right.rr_type))
                 .then_with(|| left.ttl.cmp(&right.ttl))
         });
+        info!(
+            event = "zone_image_build_phase",
+            phase = "snapshot_rrsets_sorted",
+            zone = %snapshot.origin,
+            rrset_count = rrsets.len(),
+            "ZoneImage build phase"
+        );
 
         let mut builder = ZoneImageBuilder::new(snapshot.origin.clone());
         for (owner_key, rrset) in rrsets {
@@ -811,6 +831,7 @@ impl ZoneImage {
             )?;
             builder.attach_rrset(&rrset.owner, rrset_id)?;
         }
+        builder.log_phase("image_arenas_built");
 
         builder.finish(snapshot.serial)
     }
@@ -4298,6 +4319,7 @@ impl ZoneImageBuilder {
         self.precompute_nsec_ranges()?;
         self.precompute_nsec3_ranges()?;
         self.precompute_rrset_relation_spans()?;
+        self.log_phase("indexes_precomputed");
 
         let mut nodes: Vec<NameNode> = Vec::with_capacity(self.build_nodes.len());
         let mut edges = Vec::new();
@@ -4356,6 +4378,18 @@ impl ZoneImageBuilder {
         } = build_child_hashes(&mut nodes, &edges, &labels)?;
         let node_low_rrtype_bitmaps =
             build_node_low_rrtype_bitmaps(&self.image_rrsets, &self.build_nodes, &mut nodes)?;
+        info!(
+            event = "zone_image_build_phase",
+            phase = "nodes_materialized",
+            zone = %self.origin,
+            rrset_count = self.image_rrsets.len(),
+            record_count = self.image_records.len(),
+            build_node_count = self.build_nodes.len(),
+            node_count = nodes.len(),
+            edge_count = edges.len(),
+            child_hash_count = child_hashes.len(),
+            "ZoneImage build phase"
+        );
 
         let total_depth = self
             .build_nodes
@@ -4490,6 +4524,17 @@ impl ZoneImageBuilder {
                 .checked_div(record_count)
                 .unwrap_or_default(),
         };
+        info!(
+            event = "zone_image_build_phase",
+            phase = "compile_complete",
+            zone = %self.origin,
+            rrset_count = stats.rrset_count,
+            record_count = stats.record_count,
+            node_count = stats.node_count,
+            hot_bytes = stats.hot_bytes,
+            cold_bytes = stats.cold_bytes,
+            "ZoneImage build phase"
+        );
 
         Ok(ZoneImage {
             origin: self.origin,
@@ -4526,6 +4571,24 @@ impl ZoneImageBuilder {
             wire: self.wire.into_boxed_slice(),
             stats,
         })
+    }
+
+    fn log_phase(&self, phase: &'static str) {
+        info!(
+            event = "zone_image_build_phase",
+            phase,
+            zone = %self.origin,
+            rrset_count = self.image_rrsets.len(),
+            record_count = self.image_records.len(),
+            build_node_count = self.build_nodes.len(),
+            name_arena_bytes = self.names.len(),
+            rdata_arena_bytes = self.rdata.len(),
+            wire_arena_bytes = self.wire.len(),
+            nsec_range_count = self.nsec_ranges.len(),
+            nsec3_range_count = self.nsec3_ranges.len(),
+            relation_count = self.rrset_relations.len(),
+            "ZoneImage build phase"
+        );
     }
 
     fn precompute_single_name_targets(&mut self) {

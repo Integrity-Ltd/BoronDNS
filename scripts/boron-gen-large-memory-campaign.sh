@@ -28,6 +28,7 @@ performance_client_threads="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_THREADS:-32}"
 performance_client_window="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_WINDOW:-256}"
 performance_client_sockets="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:-4}"
 performance_client_cpu_list="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_CPU_LIST:-}"
+scenario_selector="${BORON_CAMPAIGN_SCENARIOS:-all}"
 
 usage() {
     cat <<'EOF'
@@ -117,22 +118,62 @@ fi
 # Columns:
 # id, profile, zones, names/zone, records/name, NSEC3/zone, projected peak GiB,
 # MemoryHigh, MemoryMax, readiness timeout, hold seconds, query packets,
-# expected retained member records.
+# expected retained member records, expected outcome.
 scenario_rows() {
     cat <<'EOF'
-01-wide-rrset-10m	large-rrset	1	1	10000000	2	4	8G	12G	21600	120	50000	10000007
-02-wide-rrset-100m	large-rrset	1	1	100000000	2	36	48G	64G	43200	180	100000	100000007
-03-mixed-5m-x32	mixed	1	5000000	32	2	101	120G	144G	86400	180	100000	185000006
-04-catalog-128x100k	registry-nsec3	128	100000	4	100000	91	120G	144G	86400	180	100000	116481024
-05-catalog-512x100k	registry-nsec3	512	100000	4	100000	465	480G	520G	172800	300	100000	465924096
-06-nsec3-heavy-10m-100m	registry-nsec3	1	10000000	4	100000000	320	400G	460G	172800	300	100000	271000008
-07-registry-balanced-1m	registry-nsec3	1	1000000	4	1000000	12	20G	28G	43200	180	100000	9100008
-08-registry-balanced-10m	registry-nsec3	1	10000000	4	10000000	120	144G	168G	86400	180	100000	91000008
-09-registry-balanced-20m	registry-nsec3	1	20000000	4	20000000	240	280G	320G	129600	180	100000	182000008
-10-registry-balanced-40m	registry-nsec3	1	40000000	4	40000000	480	520G	560G	172800	300	100000	364000008
-11-registry-balanced-50m	registry-nsec3	1	50000000	4	50000000	590	620G	650G	216000	300	100000	455000008
-12-registry-balanced-60m	registry-nsec3	1	60000000	4	60000000	650	640G	680G	259200	300	100000	546000008
+01-wide-rrset-10m	large-rrset	1	1	10000000	2	4	8G	12G	21600	120	50000	10000007	ready
+02-wide-rrset-100m	large-rrset	1	1	100000000	2	36	48G	64G	43200	180	100000	100000007	ready
+03-mixed-5m-x32	mixed	1	5000000	32	2	101	120G	144G	86400	180	100000	185000006	ready
+04-catalog-128x100k	registry-nsec3	128	100000	4	100000	91	120G	144G	86400	180	100000	116481024	ready
+05-catalog-512x100k	registry-nsec3	512	100000	4	100000	465	480G	520G	172800	300	100000	465924096	ready
+06-nsec3-heavy-10m-100m	registry-nsec3	1	10000000	4	100000000	320	400G	460G	172800	300	100000	271000008	ready
+07-registry-balanced-1m	registry-nsec3	1	1000000	4	1000000	12	20G	28G	43200	180	100000	9100008	ready
+08-registry-balanced-10m	registry-nsec3	1	10000000	4	10000000	120	144G	168G	86400	180	100000	91000008	ready
+09-registry-balanced-20m	registry-nsec3	1	20000000	4	20000000	240	280G	320G	129600	180	100000	182000008	ready
+10-registry-balanced-40m	registry-nsec3	1	40000000	4	40000000	480	520G	560G	172800	300	100000	364000008	ready
+11-registry-balanced-50m	registry-nsec3	1	50000000	4	50000000	590	620G	650G	216000	300	100000	455000008	ready
+12-registry-balanced-55m	registry-nsec3	1	55000000	4	55000000	640	650G	680G	237600	300	100000	500500008	ready
+13-registry-balanced-60m	registry-nsec3	1	60000000	4	60000000	650	640G	680G	259200	300	100000	546000008	ready
+14-contained-oom-100k-512m	registry-nsec3	1	100000	4	100000	1	512M	512M	3600	1	1000	910008	contained-oom
 EOF
+}
+
+declare -A selected_scenarios=()
+if [[ "$scenario_selector" != "all" ]]; then
+    if [[ ! "$scenario_selector" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]]; then
+        printf 'BORON_CAMPAIGN_SCENARIOS must be all or a comma-separated list of scenario IDs, got %q\n' \
+            "$scenario_selector" >&2
+        exit 64
+    fi
+    declare -A known_scenarios=()
+    while IFS=$'\t' read -r known_id _; do
+        known_scenarios["$known_id"]=1
+    done < <(scenario_rows)
+    IFS=, read -r -a requested_scenarios <<<"$scenario_selector"
+    for requested_id in "${requested_scenarios[@]}"; do
+        if [[ -z "${known_scenarios[$requested_id]+present}" ]]; then
+            printf 'BORON_CAMPAIGN_SCENARIOS contains unknown scenario ID %q\n' \
+                "$requested_id" >&2
+            exit 64
+        fi
+        if [[ -n "${selected_scenarios[$requested_id]+present}" ]]; then
+            printf 'BORON_CAMPAIGN_SCENARIOS contains duplicate scenario ID %q\n' \
+                "$requested_id" >&2
+            exit 64
+        fi
+        selected_scenarios["$requested_id"]=1
+    done
+fi
+
+selected_scenario_rows() {
+    local row id
+    while IFS= read -r row; do
+        id="${row%%$'\t'*}"
+        if [[ "$scenario_selector" == "all" ||
+            -n "${selected_scenarios[$id]+present}" ]]; then
+            printf '%s\n' "$row"
+        fi
+    done < <(scenario_rows)
 }
 
 ensure_release_binaries() {
@@ -140,11 +181,11 @@ ensure_release_binaries() {
 }
 
 validate_plan() {
-    local id profile zones names records nsec3 projected high max timeout hold queries expected
+    local id profile zones names records nsec3 projected high max timeout hold queries expected outcome
     local actual
 
-    printf 'id\tprofile\tzones\tnames_per_zone\trecords_per_name\tnsec3_per_zone\tprojected_peak_gib\tmemory_high\tmemory_max\tretained_records\n'
-    while IFS=$'\t' read -r id profile zones names records nsec3 projected high max timeout hold queries expected; do
+    printf 'id\tprofile\tzones\tnames_per_zone\trecords_per_name\tnsec3_per_zone\tprojected_peak_gib\tmemory_high\tmemory_max\tretained_records\texpected_outcome\n'
+    while IFS=$'\t' read -r id profile zones names records nsec3 projected high max timeout hold queries expected outcome; do
         actual="$(
             "$repo_root/target/release/boron-gen" manifest \
                 --profile "$profile" \
@@ -161,10 +202,10 @@ validate_plan() {
                 "$id" "$expected" "$actual" >&2
             exit 1
         fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$id" "$profile" "$zones" "$names" "$records" "$nsec3" \
-            "$projected" "$high" "$max" "$actual"
-    done < <(scenario_rows)
+            "$projected" "$high" "$max" "$actual" "$outcome"
+    done < <(selected_scenario_rows)
 }
 
 memory_value_bytes() {
@@ -315,6 +356,7 @@ write_host_facts() {
         printf 'systemd_oomd=%s\n' "$(systemctl is-active systemd-oomd.service)"
         printf 'dns_listen=%s\n' "$dns_listen"
         printf 'performance_mode=%s\n' "$performance_mode"
+        printf 'scenario_selector=%s\n' "$scenario_selector"
         printf 'performance_remote_ssh=%s\n' "${performance_remote_ssh:-none}"
         printf 'performance_server_device=%s\n' "$performance_server_device"
         printf 'performance_client_device=%s\n' "$performance_client_device"
@@ -418,7 +460,7 @@ campaign_interrupted() {
 }
 trap campaign_interrupted TERM INT
 
-while IFS=$'\t' read -r id profile zones names records nsec3 projected high max timeout hold queries expected; do
+while IFS=$'\t' read -r id profile zones names records nsec3 projected high max timeout hold queries expected outcome; do
     scenario_root="$artifact_root/runs/$id"
     mkdir -p "$scenario_root"
     chmod 700 "$scenario_root"
@@ -477,7 +519,7 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         BORON_LOAD_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD="$performance_client_sockets" \
         BORON_LOAD_PERFORMANCE_CLIENT_CPU_LIST="$performance_client_cpu_list" \
         BORON_LOAD_PERFORMANCE_EXTERNAL_TIMEOUT_SECONDS=7200 \
-        BORON_LOAD_EXPECT_OUTCOME=ready \
+        BORON_LOAD_EXPECT_OUTCOME="$outcome" \
         BORON_LOAD_MEMORY_HIGH="$high" \
         BORON_LOAD_MEMORY_MAX="$max" \
         BORON_LOAD_SYSTEMD_MANAGER=system \
@@ -559,7 +601,7 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
     write_campaign_summary
     write_performance_curve
     wait_for_safe_baseline
-done < <(scenario_rows)
+done < <(selected_scenario_rows)
 
 write_campaign_summary
 write_performance_curve

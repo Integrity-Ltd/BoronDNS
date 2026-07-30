@@ -103,7 +103,25 @@ scripts/boron-gen-bounded-load.sh
 This mode succeeds only when BoronDNS ends with systemd result `oom-kill` and
 signal 9 while the independently bounded BoronGen unit remains active. Its
 summary status is `contained_oom_as_expected`; it never claims service
-readiness.
+readiness. The serialized 750 GiB campaign includes the same negative contract
+as a distinct final row; positive capacity rows continue to request `ready`
+and cannot be converted into containment passes after an OOM.
+
+Focused follow-up campaigns can select exact serialized rows without changing
+their definitions:
+
+```sh
+BORON_CAMPAIGN_SCENARIOS=10-registry-balanced-40m,11-registry-balanced-50m,12-registry-balanced-55m \
+scripts/boron-gen-large-memory-campaign.sh plan
+```
+
+The query-performance runner normally drives an unlimited saturation load.
+Set `BORON_GEN_PERF_TARGET_QPS_STEPS` to a strictly increasing comma-separated
+list to run open-loop offered-load steps against the same published image.
+Each step receives `BORON_GEN_PERF_REPETITIONS` measured repetitions. External
+two-host coordination can impose the same list with
+`BORON_COORD_TARGET_QPS_STEPS_OVERRIDE`; the effective and requested policies
+are retained in the performance evidence.
 
 The `large-rrset` profile verifies that ZoneImage publication and AXFR are not
 mistakenly capped by the 16-bit DNS message section count. A 65,536-record

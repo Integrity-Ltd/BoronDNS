@@ -1815,6 +1815,8 @@ impl ZoneStore {
         force_hidden: bool,
     ) -> Result<Arc<ZoneStoreEntry>, ZoneImageBuildError> {
         let key = snapshot.origin.canonical_key();
+        let publication_origin = snapshot.origin.clone();
+        let publication_active = snapshot.state == ZoneState::Active;
         let _publish_guard = self
             .publish_lock
             .lock()
@@ -1825,6 +1827,15 @@ impl ZoneStore {
             .get(&key)
             .map(|entry| entry.incarnation)
             .unwrap_or_else(|| self.allocate_incarnation());
+        if publication_active {
+            info!(
+                event = "zone_store_publication_phase",
+                phase = "directory_clone_start",
+                zone = %publication_origin,
+                directory_zone_count = current.len(),
+                "zone store publication phase"
+            );
+        }
         let mut next = self.clone_directory_for_publication(current.as_ref());
         let entry = Arc::new(ZoneStoreEntry::try_new(
             key.clone(),
@@ -1834,6 +1845,23 @@ impl ZoneStore {
         )?);
         next.insert(key.clone(), entry.clone());
         self.zones.store(Arc::new(next));
+        if publication_active {
+            info!(
+                event = "zone_store_publication_phase",
+                phase = "directory_published",
+                zone = %publication_origin,
+                "zone store publication phase"
+            );
+        }
+        drop(current);
+        if publication_active {
+            info!(
+                event = "zone_store_publication_phase",
+                phase = "publication_temporaries_released",
+                zone = %publication_origin,
+                "zone store publication phase"
+            );
+        }
         Ok(entry)
     }
 

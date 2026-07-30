@@ -606,6 +606,13 @@ cleanup() {
                 "$artifact_dir/${unit%.service}-memory.pressure" || true
         fi
     done
+    if [[ -s "$artifact_dir/${server_unit%.service}.log" &&
+        -s "$artifact_dir/resource-samples.tsv" ]]; then
+        python3 "$repo_root/scripts/summarize-boron-gen-publication-memory.py" \
+            --journal "$artifact_dir/${server_unit%.service}.log" \
+            --samples "$artifact_dir/resource-samples.tsv" \
+            --output "$artifact_dir/publication-memory-phases.tsv" || true
+    fi
     if [[ "$slice_started" == "true" ]]; then
         systemctl_load show "$load_slice" \
             >"$artifact_dir/${load_slice%.slice}-slice-final.txt" 2>&1 || true

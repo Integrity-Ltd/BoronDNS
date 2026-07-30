@@ -49,6 +49,7 @@ and slowly diverging.
 | How does the synthetic large-zone primary remain deterministic and bounded? | `boron-gen-design.md` | Keep BoronGen generation, NSEC3, protocol-scope, and resource-safety contracts here. |
 | How is BoronGen run and validated under a cgroup limit? | `boron-gen.md` | Keep CLI examples, profiles, bounded-harness controls, and evidence interpretation here. |
 | What evidence qualified BoronGen for large-scale internal testing? | `boron-gen-validation-2026-07.md` | Keep the July functional, scale, containment, fuzz-disposition, and final 32 GiB results here. |
+| What did the July two-host 750 GiB campaign establish? | `boron-gen-two-host-campaign-2026-07.md` | Keep the frozen campaign triage, accepted size curve, 60M capacity boundary, and rerun requirements here. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | What is the richer optional JSON observability API? | `observability-api.md` | Keep observability paths, response shapes, reduced-metrics behavior, and config knobs here. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |

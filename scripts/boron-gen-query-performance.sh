@@ -25,6 +25,7 @@ ssh_connect_timeout="${BORON_GEN_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
 warmup_seconds="${BORON_GEN_PERF_WARMUP_SECONDS:-15}"
 duration_seconds="${BORON_GEN_PERF_DURATION_SECONDS:-60}"
 repetitions="${BORON_GEN_PERF_REPETITIONS:-3}"
+target_qps_steps="${BORON_GEN_PERF_TARGET_QPS_STEPS:-0}"
 client_threads="${BORON_GEN_PERF_CLIENT_THREADS:-32}"
 client_window="${BORON_GEN_PERF_CLIENT_WINDOW:-256}"
 client_sockets_per_thread="${BORON_GEN_PERF_CLIENT_SOCKETS_PER_THREAD:-4}"
@@ -84,6 +85,25 @@ if ((max_drop_permille > 1000)); then
         "$max_drop_permille" >&2
     exit 64
 fi
+if [[ ! "$target_qps_steps" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    printf 'BORON_GEN_PERF_TARGET_QPS_STEPS must be 0 or a comma-separated list of positive integers, got %q\n' \
+        "$target_qps_steps" >&2
+    exit 64
+fi
+IFS=, read -r -a target_qps_values <<<"$target_qps_steps"
+previous_target=0
+for target_qps in "${target_qps_values[@]}"; do
+    if ((target_qps == 0)); then
+        if ((${#target_qps_values[@]} != 1)); then
+            echo "BORON_GEN_PERF_TARGET_QPS_STEPS=0 cannot be combined with paced steps" >&2
+            exit 64
+        fi
+    elif ((target_qps <= previous_target)); then
+        echo "BORON_GEN_PERF_TARGET_QPS_STEPS must be strictly increasing" >&2
+        exit 64
+    fi
+    previous_target="$target_qps"
+done
 
 case "$profile" in
 registry-nsec3 | mixed | large-rrset) ;;
@@ -506,8 +526,12 @@ quote_command() {
 run_client_phase() {
     local label="$1"
     local seconds="$2"
+    local target_qps="$3"
     local log="$artifact_dir/$label.log"
     local args=("${base_client_args[@]}" --duration "$seconds")
+    if ((target_qps > 0)); then
+        args+=(--target-qps "$target_qps")
+    fi
     capture_snapshot "$label-before"
     capture_metrics "$label-before"
     if [[ "$mode" == "local" ]]; then
@@ -547,6 +571,7 @@ remote_ssh=${remote_ssh:-none}
 warmup_seconds=$warmup_seconds
 duration_seconds=$duration_seconds
 repetitions=$repetitions
+target_qps_steps=$target_qps_steps
 client_threads=$client_threads
 client_window=$client_window
 client_sockets_per_thread=$client_sockets_per_thread
@@ -557,15 +582,29 @@ client_sha256=$client_sha256
 trace_sha256=$trace_sha256
 EOF
 
-run_client_phase warmup "$warmup_seconds"
-for ((repetition = 1; repetition <= repetitions; repetition++)); do
-    printf -v label 'repetition-%03d' "$repetition"
-    run_client_phase "$label" "$duration_seconds"
+warmup_target="${target_qps_values[-1]}"
+if ((warmup_target == 0)); then
+    warmup_label="warmup-unlimited"
+else
+    printf -v warmup_label 'warmup-qps-%012d' "$warmup_target"
+fi
+run_client_phase "$warmup_label" "$warmup_seconds" "$warmup_target"
+for target_qps in "${target_qps_values[@]}"; do
+    if ((target_qps == 0)); then
+        step_label="unlimited"
+    else
+        printf -v step_label 'qps-%012d' "$target_qps"
+    fi
+    for ((repetition = 1; repetition <= repetitions; repetition++)); do
+        printf -v label '%s-repetition-%03d' "$step_label" "$repetition"
+        run_client_phase "$label" "$duration_seconds" "$target_qps"
+    done
 done
 
 python3 - \
     "$artifact_dir" \
     "$repetitions" \
+    "$target_qps_steps" \
     "$server_device" \
     "$client_device" \
     "$mode" \
@@ -578,10 +617,11 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 repetitions = int(sys.argv[2])
-server_device = sys.argv[3]
-client_device = sys.argv[4]
-mode = sys.argv[5]
-max_drop_permille = int(sys.argv[6])
+target_qps_steps = [int(value) for value in sys.argv[3].split(",")]
+server_device = sys.argv[4]
+client_device = sys.argv[5]
+mode = sys.argv[6]
+max_drop_permille = int(sys.argv[7])
 
 
 def summary(path):
@@ -642,85 +682,88 @@ def cpu_percent(before_path, after_path):
 
 
 rows = []
-for repetition in range(1, repetitions + 1):
-    label = f"repetition-{repetition:03d}"
-    fields = summary(root / f"{label}.log")
-    sent = int(fields["sent"])
-    received = int(fields["received"])
-    errors = int(fields["errors"])
-    dropped = int(fields["dropped"])
-    if errors:
-        raise SystemExit(f"{label}: dns-load-client reported {errors} errors")
-    if sent <= 0 or dropped * 1000 > sent * max_drop_permille:
-        raise SystemExit(
-            f"{label}: dropped {dropped}/{sent} exceeds "
-            f"{max_drop_permille}/1000"
+for target_qps in target_qps_steps:
+    step_label = "unlimited" if target_qps == 0 else f"qps-{target_qps:012d}"
+    for repetition in range(1, repetitions + 1):
+        label = f"{step_label}-repetition-{repetition:03d}"
+        fields = summary(root / f"{label}.log")
+        sent = int(fields["sent"])
+        received = int(fields["received"])
+        errors = int(fields["errors"])
+        dropped = int(fields["dropped"])
+        if errors:
+            raise SystemExit(f"{label}: dns-load-client reported {errors} errors")
+        if sent <= 0 or dropped * 1000 > sent * max_drop_permille:
+            raise SystemExit(
+                f"{label}: dropped {dropped}/{sent} exceeds "
+                f"{max_drop_permille}/1000"
+            )
+
+        server_dir = root / "network" / "server"
+        client_dir = root / "network" / "client"
+        server_before = net_values(
+            server_dir / f"proc-net-dev-{label}-before.txt", server_device
         )
+        server_after = net_values(
+            server_dir / f"proc-net-dev-{label}-after.txt", server_device
+        )
+        client_before = net_values(
+            client_dir / f"proc-net-dev-{label}-before.txt", client_device
+        )
+        client_after = net_values(
+            client_dir / f"proc-net-dev-{label}-after.txt", client_device
+        )
+        server_rx_packets = delta(server_before, server_after, "rx_packets")
+        server_tx_packets = delta(server_before, server_after, "tx_packets")
+        client_rx_packets = delta(client_before, client_after, "rx_packets")
+        client_tx_packets = delta(client_before, client_after, "tx_packets")
+        if mode == "ssh" and min(
+            server_rx_packets,
+            server_tx_packets,
+            client_rx_packets,
+            client_tx_packets,
+        ) <= 0:
+            raise SystemExit(f"{label}: physical NIC packet deltas are not positive")
+        error_keys = ("rx_errors", "rx_drops", "tx_errors", "tx_drops")
+        for role, before, after in (
+            ("server", server_before, server_after),
+            ("client", client_before, client_after),
+        ):
+            for key in error_keys:
+                if delta(before, after, key) != 0:
+                    raise SystemExit(f"{label}: {role} NIC {key} increased")
 
-    server_dir = root / "network" / "server"
-    client_dir = root / "network" / "client"
-    server_before = net_values(
-        server_dir / f"proc-net-dev-{label}-before.txt", server_device
-    )
-    server_after = net_values(
-        server_dir / f"proc-net-dev-{label}-after.txt", server_device
-    )
-    client_before = net_values(
-        client_dir / f"proc-net-dev-{label}-before.txt", client_device
-    )
-    client_after = net_values(
-        client_dir / f"proc-net-dev-{label}-after.txt", client_device
-    )
-    server_rx_packets = delta(server_before, server_after, "rx_packets")
-    server_tx_packets = delta(server_before, server_after, "tx_packets")
-    client_rx_packets = delta(client_before, client_after, "rx_packets")
-    client_tx_packets = delta(client_before, client_after, "tx_packets")
-    if mode == "ssh" and min(
-        server_rx_packets,
-        server_tx_packets,
-        client_rx_packets,
-        client_tx_packets,
-    ) <= 0:
-        raise SystemExit(f"{label}: physical NIC packet deltas are not positive")
-    error_keys = ("rx_errors", "rx_drops", "tx_errors", "tx_drops")
-    for role, before, after in (
-        ("server", server_before, server_after),
-        ("client", client_before, client_after),
-    ):
-        for key in error_keys:
-            if delta(before, after, key) != 0:
-                raise SystemExit(f"{label}: {role} NIC {key} increased")
-
-    rows.append(
-        {
-            "repetition": repetition,
-            "sent": sent,
-            "received": received,
-            "errors": errors,
-            "dropped": dropped,
-            "responses_per_second": float(fields["responses_per_second"]),
-            "latency_us_p50": float(fields["latency_us_p50"]),
-            "latency_us_p90": float(fields["latency_us_p90"]),
-            "latency_us_p99": float(fields["latency_us_p99"]),
-            "latency_us_p999": float(fields["latency_us_p999"]),
-            "server_rx_bytes": delta(server_before, server_after, "rx_bytes"),
-            "server_tx_bytes": delta(server_before, server_after, "tx_bytes"),
-            "server_rx_packets": server_rx_packets,
-            "server_tx_packets": server_tx_packets,
-            "client_rx_bytes": delta(client_before, client_after, "rx_bytes"),
-            "client_tx_bytes": delta(client_before, client_after, "tx_bytes"),
-            "client_rx_packets": client_rx_packets,
-            "client_tx_packets": client_tx_packets,
-            "server_cpu_percent": cpu_percent(
-                server_dir / f"proc-stat-{label}-before.txt",
-                server_dir / f"proc-stat-{label}-after.txt",
-            ),
-            "client_cpu_percent": cpu_percent(
-                client_dir / f"proc-stat-{label}-before.txt",
-                client_dir / f"proc-stat-{label}-after.txt",
-            ),
-        }
-    )
+        rows.append(
+            {
+                "target_qps": target_qps or "unlimited",
+                "repetition": repetition,
+                "sent": sent,
+                "received": received,
+                "errors": errors,
+                "dropped": dropped,
+                "responses_per_second": float(fields["responses_per_second"]),
+                "latency_us_p50": float(fields["latency_us_p50"]),
+                "latency_us_p90": float(fields["latency_us_p90"]),
+                "latency_us_p99": float(fields["latency_us_p99"]),
+                "latency_us_p999": float(fields["latency_us_p999"]),
+                "server_rx_bytes": delta(server_before, server_after, "rx_bytes"),
+                "server_tx_bytes": delta(server_before, server_after, "tx_bytes"),
+                "server_rx_packets": server_rx_packets,
+                "server_tx_packets": server_tx_packets,
+                "client_rx_bytes": delta(client_before, client_after, "rx_bytes"),
+                "client_tx_bytes": delta(client_before, client_after, "tx_bytes"),
+                "client_rx_packets": client_rx_packets,
+                "client_tx_packets": client_tx_packets,
+                "server_cpu_percent": cpu_percent(
+                    server_dir / f"proc-stat-{label}-before.txt",
+                    server_dir / f"proc-stat-{label}-after.txt",
+                ),
+                "client_cpu_percent": cpu_percent(
+                    client_dir / f"proc-stat-{label}-before.txt",
+                    client_dir / f"proc-stat-{label}-after.txt",
+                ),
+            }
+        )
 
 columns = list(rows[0])
 with (root / "performance-results.tsv").open("w", encoding="utf-8") as output:
@@ -737,17 +780,35 @@ aggregate_keys = (
     "server_cpu_percent",
     "client_cpu_percent",
 )
-aggregate = {
-    f"median_{key}": statistics.median(row[key] for row in rows)
-    for key in aggregate_keys
-}
+steps = []
+for target_qps in target_qps_steps:
+    step_rows = [
+        row
+        for row in rows
+        if row["target_qps"] == (target_qps or "unlimited")
+    ]
+    aggregate = {
+        f"median_{key}": statistics.median(row[key] for row in step_rows)
+        for key in aggregate_keys
+    }
+    steps.append(
+        {
+            "target_qps": target_qps or None,
+            "repetitions": step_rows,
+            "aggregate": aggregate,
+        }
+    )
+aggregate = steps[-1]["aggregate"]
 report = {
     "format": "boron-gen-query-performance-v1",
     "mode": mode,
     "server_device": server_device,
     "client_device": client_device,
-    "repetitions": rows,
+    # Keep the top step in these legacy fields so existing campaign readers
+    # retain their original meaning while paced runs expose every step below.
+    "repetitions": steps[-1]["repetitions"],
     "aggregate": aggregate,
+    "steps": steps,
 }
 with (root / "performance-summary.json").open("w", encoding="utf-8") as output:
     json.dump(report, output, indent=2, sort_keys=True)

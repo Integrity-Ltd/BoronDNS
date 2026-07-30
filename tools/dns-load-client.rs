@@ -4,8 +4,9 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,7 @@ struct Config {
     big_names: usize,
     small_names: usize,
     timeout: Duration,
+    target_qps: Option<u64>,
     randomize: bool,
     trace_queries: Option<Arc<Vec<TraceQuery>>>,
 }
@@ -76,6 +78,40 @@ struct PendingQuery {
     min_answers: u16,
 }
 
+struct Pacer {
+    started: Instant,
+    target_qps: u64,
+    next_ticket: Arc<AtomicU64>,
+    due: Option<Instant>,
+}
+
+impl Pacer {
+    fn new(started: Instant, target_qps: u64, next_ticket: Arc<AtomicU64>) -> Self {
+        Self {
+            started,
+            target_qps,
+            next_ticket,
+            due: None,
+        }
+    }
+
+    fn ready(&mut self, now: Instant) -> bool {
+        let due = *self.due.get_or_insert_with(|| {
+            let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
+            let offset_ns = (u128::from(ticket) * 1_000_000_000u128) / u128::from(self.target_qps);
+            let offset_ns = u64::try_from(offset_ns).unwrap_or(u64::MAX);
+            self.started
+                .checked_add(Duration::from_nanos(offset_ns))
+                .unwrap_or(now)
+        });
+        now >= due
+    }
+
+    fn sent(&mut self) {
+        self.due = None;
+    }
+}
+
 fn main() {
     let config = match parse_args() {
         Ok(config) => config,
@@ -88,14 +124,16 @@ fn main() {
 
     let started = Instant::now();
     let deadline = started + config.duration;
+    let next_ticket = Arc::new(AtomicU64::new(0));
     let (tx, rx) = mpsc::channel();
     let mut handles = Vec::new();
 
     for worker_id in 0..config.threads {
         let config = config.clone();
         let tx = tx.clone();
+        let next_ticket = next_ticket.clone();
         handles.push(thread::spawn(move || {
-            let stats = run_worker(worker_id, config, deadline);
+            let stats = run_worker(worker_id, config, started, deadline, next_ticket);
             tx.send(stats).expect("stats receiver alive");
         }));
     }
@@ -141,6 +179,7 @@ fn main() {
             "threads={threads} udp_sockets_per_thread={udp_sockets_per_thread} window={window} names={names} ",
             "zones={zones} big_zones={big_zones} big_names={big_names} small_names={small_names} randomize={randomize} ",
             "query_mode={query_mode} trace_queries={trace_queries} ",
+            "target_qps={target_qps} ",
             "sent={sent} received={received} errors={errors} dropped={dropped} ",
             "sent_per_second={sent_per_second:.0} ",
             "responses_per_second={received_per_second:.0} ",
@@ -167,6 +206,9 @@ fn main() {
         randomize = config.randomize,
         query_mode = query_mode,
         trace_queries = trace_queries,
+        target_qps = config
+            .target_qps
+            .map_or_else(|| "unlimited".to_owned(), |value| value.to_string()),
         sent = total.sent,
         received = total.received,
         errors = total.errors,
@@ -182,14 +224,28 @@ fn main() {
     );
 }
 
-fn run_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
+fn run_worker(
+    worker_id: usize,
+    config: Config,
+    started: Instant,
+    deadline: Instant,
+    next_ticket: Arc<AtomicU64>,
+) -> WorkerStats {
+    let pacer = config
+        .target_qps
+        .map(|target_qps| Pacer::new(started, target_qps, next_ticket));
     match config.transport {
-        Transport::Udp => run_udp_worker(worker_id, config, deadline),
-        Transport::Tcp => run_tcp_worker(worker_id, config, deadline),
+        Transport::Udp => run_udp_worker(worker_id, config, deadline, pacer),
+        Transport::Tcp => run_tcp_worker(worker_id, config, deadline, pacer),
     }
 }
 
-fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
+fn run_udp_worker(
+    worker_id: usize,
+    config: Config,
+    deadline: Instant,
+    mut pacer: Option<Pacer>,
+) -> WorkerStats {
     let sockets = (0..config.udp_sockets_per_thread)
         .map(|_| {
             let socket = UdpSocket::bind(&config.bind).expect("bind UDP client socket");
@@ -214,6 +270,12 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
 
     while Instant::now() < deadline {
         while in_flight < config.window && Instant::now() < deadline {
+            if pacer
+                .as_mut()
+                .is_some_and(|pacer| !pacer.ready(Instant::now()))
+            {
+                break;
+            }
             if sent_at[qid as usize].is_some() {
                 qid = qid.wrapping_add(1);
                 continue;
@@ -228,6 +290,9 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                         min_answers: query.min_answers,
                     });
                     stats.sent += 1;
+                    if let Some(pacer) = &mut pacer {
+                        pacer.sent();
+                    }
                     in_flight += 1;
                     qid = qid.wrapping_add(1);
                     next_name += config.threads;
@@ -253,7 +318,7 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
         }
 
         expire_old(&mut sent_at, &mut in_flight, config.timeout);
-        if !received_any && in_flight >= config.window {
+        if !received_any {
             thread::yield_now();
         }
     }
@@ -307,7 +372,12 @@ fn drain_udp_socket(
     received_any
 }
 
-fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
+fn run_tcp_worker(
+    worker_id: usize,
+    config: Config,
+    deadline: Instant,
+    mut pacer: Option<Pacer>,
+) -> WorkerStats {
     let mut stream =
         TcpStream::connect((config.server.as_str(), config.port)).expect("connect TCP client");
     stream.set_nodelay(true).expect("set TCP_NODELAY");
@@ -327,6 +397,12 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
 
     while Instant::now() < deadline {
         while in_flight < config.window && Instant::now() < deadline {
+            if pacer
+                .as_mut()
+                .is_some_and(|pacer| !pacer.ready(Instant::now()))
+            {
+                break;
+            }
             if sent_at[qid as usize].is_some() {
                 qid = qid.wrapping_add(1);
                 continue;
@@ -341,6 +417,9 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 min_answers: query.min_answers,
             });
             stats.sent += 1;
+            if let Some(pacer) = &mut pacer {
+                pacer.sent();
+            }
             in_flight += 1;
             qid = qid.wrapping_add(1);
             next_name += config.threads;
@@ -356,7 +435,7 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
             &mut stats,
         );
         expire_old(&mut sent_at, &mut in_flight, config.timeout);
-        if !wrote && !received && in_flight >= config.window {
+        if !wrote && !received {
             thread::yield_now();
         }
     }
@@ -664,6 +743,7 @@ fn parse_args() -> Result<Config, String> {
         big_names: 10_000,
         small_names: 10_000,
         timeout: Duration::from_millis(250),
+        target_qps: None,
         randomize: false,
         trace_queries: None,
     };
@@ -702,6 +782,13 @@ fn parse_args() -> Result<Config, String> {
             "--timeout-ms" => {
                 let timeout_ms: u64 = parse_value("--timeout-ms", &value()?)?;
                 config.timeout = Duration::from_millis(timeout_ms);
+            }
+            "--target-qps" => {
+                let target_qps: u64 = parse_value("--target-qps", &value()?)?;
+                if target_qps == 0 {
+                    return Err("--target-qps must be greater than zero".to_owned());
+                }
+                config.target_qps = Some(target_qps);
             }
             "--random" => config.randomize = true,
             "--trace" => config.trace_queries = Some(Arc::new(load_trace(&value()?)?)),
@@ -824,11 +911,7 @@ fn canonical_trace_name(value: &str) -> Option<String> {
                 }
             })?
     };
-    if wire_len <= 255 {
-        Some(name)
-    } else {
-        None
-    }
+    if wire_len <= 255 { Some(name) } else { None }
 }
 
 fn parse_rr_type(value: &str) -> Option<u16> {
@@ -917,6 +1000,7 @@ fn usage() {
         "  --big-names <N>     names in each big zone, default 10000\n",
         "  --small-names <N>   names in each small zone, default 10000\n",
         "  --timeout-ms <MS>   response timeout before a query is considered dropped, default 250\n",
+        "  --target-qps <QPS>  pace total offered load across all workers; default unlimited\n",
         "  --random            choose queried zones and names with deterministic worker-local RNG\n",
         "  --trace <PATH>      replay qname qtype qclass [edns] [rcode=...] [answers=N] rows\n",
     ));

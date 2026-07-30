@@ -156,6 +156,8 @@ printf '{}\n' >"$artifact_dir/performance-summary.json"
     sha256sum performance-summary.json >evidence.sha256
 )
 printf '%s\n' "${BORON_GEN_PERF_ORIGIN:?}" >>"${TEST_COORD_STATE:?}/runner.log"
+printf '%s\n' "${BORON_GEN_PERF_TARGET_QPS_STEPS:?}" \
+    >>"${TEST_COORD_STATE:?}/target-qps.log"
 if [[ "${BORON_GEN_PERF_ORIGIN:?}" == failure.test. ]]; then
     printf 'retained failed performance evidence\n' >"$artifact_dir/failure.log"
     exit 42
@@ -165,19 +167,21 @@ chmod +x "$fake_bin/ssh" "$fake_bin/scp" \
     "$fixture_repo/scripts/boron-gen-query-performance.sh"
 
 PATH="$fake_bin:$PATH" \
-TEST_COORD_STATE="$state" \
-TEST_COORD_FAIL_FIND_ONCE=true \
-BORON_COORD_SERVER_SSH=server-test \
-BORON_COORD_CLIENT_SSH=client-test \
-BORON_COORD_REMOTE_ARTIFACT_ROOT=/remote/evidence \
-BORON_COORD_LOCAL_ARTIFACT_ROOT="$local_artifacts" \
-BORON_COORD_POLL_SECONDS=1 \
-BORON_COORD_TIMEOUT_SECONDS=30 \
-BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE=200 \
+    TEST_COORD_STATE="$state" \
+    TEST_COORD_FAIL_FIND_ONCE=true \
+    BORON_COORD_SERVER_SSH=server-test \
+    BORON_COORD_CLIENT_SSH=client-test \
+    BORON_COORD_REMOTE_ARTIFACT_ROOT=/remote/evidence \
+    BORON_COORD_LOCAL_ARTIFACT_ROOT="$local_artifacts" \
+    BORON_COORD_POLL_SECONDS=1 \
+    BORON_COORD_TIMEOUT_SECONDS=30 \
+    BORON_COORD_MAX_DROP_PERMILLE_OVERRIDE=200 \
+    BORON_COORD_TARGET_QPS_STEPS_OVERRIDE=30000,45000,60000 \
     "$fixture_repo/scripts/boron-gen-external-performance-coordinator.sh" \
     >"$state/coordinator.stdout" 2>"$state/coordinator.stderr"
 
 [[ "$(wc -l <"$state/runner.log")" -eq 3 ]]
+[[ "$(sort -u "$state/target-qps.log")" == "30000,45000,60000" ]]
 [[ "$(wc -l <"$local_artifacts/completed-requests.tsv")" -eq 2 ]]
 [[ "$(wc -l <"$local_artifacts/failed-requests.tsv")" -eq 1 ]]
 grep -Fq 'runs/01-active/attempt-001/evidence' \
@@ -187,6 +191,10 @@ grep -Fq 'runs/03-active/attempt-001/evidence' \
 grep -Fq 'requested_max_drop_permille=1000' \
     "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
 grep -Fq 'effective_max_drop_permille=200' \
+    "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
+grep -Fq 'requested_target_qps_steps=0' \
+    "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
+grep -Fq 'effective_target_qps_steps=30000,45000,60000' \
     "$local_artifacts/runs/03-active/attempt-001/evidence/performance/coordinator-policy.env"
 [[ -f "$local_artifacts/runs/02-stale/attempt-001/evidence/stale-request.txt" ]]
 grep -Fq 'run summary exists without performance completion' \
