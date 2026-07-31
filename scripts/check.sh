@@ -79,6 +79,8 @@ bash -n scripts/boron-gen-external-performance-coordinator.sh
 bash -n scripts/test-boron-gen-external-performance-coordinator.sh
 bash -n scripts/boron-gen-large-memory-campaign.sh
 bash -n scripts/boron-gen-query-performance.sh
+python3 -m py_compile scripts/analyze-boron-gen-query-performance.py
+python3 -m py_compile scripts/test-analyze-boron-gen-query-performance.py
 bash -n scripts/benchmark-zone-image-prototype.sh
 bash -n scripts/physical-udp-knot-comparison.sh
 bash -n scripts/zone-image-evidence-gate.sh
@@ -121,6 +123,7 @@ scripts/capture-coverage-evidence.sh
 scripts/capture-interface-compatibility-evidence.sh
 scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
 scripts/test-operations-harnesses.sh
+scripts/test-analyze-boron-gen-query-performance.py
 scripts/test-boron-gen-external-performance-coordinator.sh
 scripts/test-docker-image-daemon-state.sh
 scripts/test-package-publication-recovery.sh

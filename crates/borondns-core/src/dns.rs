@@ -1906,7 +1906,8 @@ fn build_zone_image_response(
         return Some(response);
     }
 
-    let Some(response_shape) = plan.response_shape() else {
+    let response_shape = plan.response_shape();
+    let Some(response_shape) = response_shape else {
         if options.transport == Transport::Udp {
             return Some(build_empty_response_inner(
                 header,

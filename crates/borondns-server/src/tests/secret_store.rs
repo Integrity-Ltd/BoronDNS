@@ -428,6 +428,62 @@ fn failed_file_secret_store_reload_retains_previous_snapshot() {
 }
 
 #[test]
+fn file_secret_store_reload_rejects_empty_tsig_candidate_and_retains_previous_snapshot() {
+    let root = unique_test_path("borondns-secret-store-empty-tsig-reload", "dir");
+    write_secret_store_manifest(
+        &root,
+        r#"
+            [[tsig_keys]]
+            name = "dynamic-key."
+            algorithm = "hmac-sha256"
+            secret = "b25lLXNlY3JldA=="
+        "#,
+    );
+    let config = config_with_secret_store(&root);
+    let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
+    let initial = secrets.current_snapshot().expect("capture initial snapshot");
+    let key_name = DomainName::from_absolute_str("dynamic-key.").unwrap();
+    let before = secrets
+        .tsig_key(&key_name)
+        .expect("initial key")
+        .sign(b"probe")
+        .expect("sign with initial key");
+
+    write_secret_store_manifest(
+        &root,
+        r#"
+            [[tsig_keys]]
+            name = "dynamic-key."
+            algorithm = "hmac-sha256"
+            secret = ""
+        "#,
+    );
+    let error = secrets
+        .reload()
+        .expect_err("empty TSIG candidate must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("TSIG shared secret must not be empty"),
+        "{error}"
+    );
+
+    let retained = secrets
+        .current_snapshot()
+        .expect("capture retained snapshot");
+    assert!(Arc::ptr_eq(&initial, &retained));
+    assert_eq!(initial.generation(), retained.generation());
+    let after = secrets
+        .tsig_key(&key_name)
+        .expect("previous key retained")
+        .sign(b"probe")
+        .expect("sign with retained key");
+    assert_eq!(before, after);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn malformed_secret_store_manifest_does_not_expose_source_secret() {
     let root = unique_test_path("borondns-secret-store-malformed-secret", "dir");
     let sentinel = "SECRET_STORE_TSIG_SENTINEL";

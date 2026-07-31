@@ -41,6 +41,7 @@ http_max_time="${BORON_GEN_PERF_HTTP_MAX_TIME_SECONDS:-10}"
 preflight_only="${BORON_GEN_PERF_PREFLIGHT_ONLY:-false}"
 client_bin="${BORON_GEN_PERF_CLIENT_BINARY:-$repo_root/target/benchmark-tools/dns-load-client}"
 trace_generator="$repo_root/scripts/generate-boron-gen-query-trace.py"
+performance_analyzer="$repo_root/scripts/analyze-boron-gen-query-performance.py"
 
 require_positive_integer() {
     local name="$1"
@@ -140,6 +141,11 @@ for pair in \
 done
 if [[ ! -x "$trace_generator" ]]; then
     printf 'missing executable trace generator: %s\n' "$trace_generator" >&2
+    exit 69
+fi
+if [[ ! -x "$performance_analyzer" ]]; then
+    printf 'missing executable performance analyzer: %s\n' \
+        "$performance_analyzer" >&2
     exit 69
 fi
 for tool in curl ip python3 rustc sha256sum; do
@@ -363,6 +369,7 @@ trace_file="$artifact_dir/query-trace.tsv"
 rustc --edition=2024 -O "$repo_root/tools/dns-load-client.rs" -o "$client_bin"
 client_sha256="$(sha256sum "$client_bin" | awk '{ print $1 }')"
 trace_sha256="$(sha256sum "$trace_file" | awk '{ print $1 }')"
+analyzer_sha256="$(sha256sum "$performance_analyzer" | awk '{ print $1 }')"
 
 remote_initialized=false
 remote_client_bin=""
@@ -434,6 +441,14 @@ capture_local_snapshot() {
     cp /proc/stat "$directory/proc-stat-$label.txt"
     cp /proc/softirqs "$directory/proc-softirqs-$label.txt"
     cp /proc/interrupts "$directory/proc-interrupts-$label.txt"
+    cp /proc/net/snmp "$directory/proc-net-snmp-$label.txt"
+    cp /proc/net/netstat "$directory/proc-net-netstat-$label.txt"
+    cp /proc/net/softnet_stat "$directory/proc-net-softnet-stat-$label.txt"
+    cp /proc/net/udp "$directory/proc-net-udp-$label.txt"
+    cp /proc/net/udp6 "$directory/proc-net-udp6-$label.txt"
+    if command -v ss >/dev/null 2>&1; then
+        ss -u -a -n -m >"$directory/ss-udp-$label.txt" 2>&1 || true
+    fi
     {
         date -u '+date_utc=%Y-%m-%dT%H:%M:%SZ'
         uname -a
@@ -459,6 +474,20 @@ capture_remote_snapshot() {
         >"$directory/proc-softirqs-$label.txt"
     ssh "${ssh_options[@]}" "$target" cat /proc/interrupts \
         >"$directory/proc-interrupts-$label.txt"
+    ssh "${ssh_options[@]}" "$target" cat /proc/net/snmp \
+        >"$directory/proc-net-snmp-$label.txt"
+    ssh "${ssh_options[@]}" "$target" cat /proc/net/netstat \
+        >"$directory/proc-net-netstat-$label.txt"
+    ssh "${ssh_options[@]}" "$target" cat /proc/net/softnet_stat \
+        >"$directory/proc-net-softnet-stat-$label.txt"
+    ssh "${ssh_options[@]}" "$target" cat /proc/net/udp \
+        >"$directory/proc-net-udp-$label.txt"
+    ssh "${ssh_options[@]}" "$target" cat /proc/net/udp6 \
+        >"$directory/proc-net-udp6-$label.txt"
+    # shellcheck disable=SC2029
+    ssh "${ssh_options[@]}" "$target" \
+        "if command -v ss >/dev/null 2>&1; then ss -u -a -n -m; fi" \
+        >"$directory/ss-udp-$label.txt" 2>&1 || true
     # shellcheck disable=SC2029
     ssh "${ssh_options[@]}" "$target" \
         "date -u '+date_utc=%Y-%m-%dT%H:%M:%SZ'; uname -a; ip route get $(printf '%q' "$server_address"); ip -s link show dev $(printf '%q' "$device")" \
@@ -580,6 +609,7 @@ client_cpu_list=${client_cpu_list:-none}
 max_drop_permille=$max_drop_permille
 client_sha256=$client_sha256
 trace_sha256=$trace_sha256
+analyzer_sha256=$analyzer_sha256
 EOF
 
 warmup_target="${target_qps_values[-1]}"
@@ -601,219 +631,15 @@ for target_qps in "${target_qps_values[@]}"; do
     done
 done
 
-python3 - \
+analysis_status=0
+"$performance_analyzer" \
     "$artifact_dir" \
     "$repetitions" \
     "$target_qps_steps" \
     "$server_device" \
     "$client_device" \
     "$mode" \
-    "$max_drop_permille" <<'PY'
-import json
-import math
-import pathlib
-import statistics
-import sys
-
-root = pathlib.Path(sys.argv[1])
-repetitions = int(sys.argv[2])
-target_qps_steps = [int(value) for value in sys.argv[3].split(",")]
-server_device = sys.argv[4]
-client_device = sys.argv[5]
-mode = sys.argv[6]
-max_drop_permille = int(sys.argv[7])
-
-
-def summary(path):
-    line = path.read_text(encoding="utf-8").strip().splitlines()[-1]
-    fields = {}
-    for token in line.split():
-        if "=" in token:
-            key, value = token.split("=", 1)
-            fields[key] = value
-    if line.split()[0] != "dns_load_client_summary":
-        raise SystemExit(f"{path}: missing dns_load_client_summary")
-    return fields
-
-
-def net_values(path, device):
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        if ":" not in raw:
-            continue
-        name, values = raw.split(":", 1)
-        if name.strip() != device:
-            continue
-        fields = [int(value) for value in values.split()]
-        return {
-            "rx_bytes": fields[0],
-            "rx_packets": fields[1],
-            "rx_errors": fields[2],
-            "rx_drops": fields[3],
-            "tx_bytes": fields[8],
-            "tx_packets": fields[9],
-            "tx_errors": fields[10],
-            "tx_drops": fields[11],
-        }
-    raise SystemExit(f"{path}: device {device!r} missing from /proc/net/dev")
-
-
-def cpu_values(path):
-    first = path.read_text(encoding="utf-8").splitlines()[0].split()
-    if not first or first[0] != "cpu":
-        raise SystemExit(f"{path}: aggregate CPU row missing")
-    values = [int(value) for value in first[1:]]
-    total = sum(values)
-    idle = values[3] + (values[4] if len(values) > 4 else 0)
-    return total, idle
-
-
-def delta(before, after, key):
-    return after[key] - before[key]
-
-
-def cpu_percent(before_path, after_path):
-    before_total, before_idle = cpu_values(before_path)
-    after_total, after_idle = cpu_values(after_path)
-    total = after_total - before_total
-    idle = after_idle - before_idle
-    if total <= 0:
-        return math.nan
-    return 100.0 * (total - idle) / total
-
-
-rows = []
-for target_qps in target_qps_steps:
-    step_label = "unlimited" if target_qps == 0 else f"qps-{target_qps:012d}"
-    for repetition in range(1, repetitions + 1):
-        label = f"{step_label}-repetition-{repetition:03d}"
-        fields = summary(root / f"{label}.log")
-        sent = int(fields["sent"])
-        received = int(fields["received"])
-        errors = int(fields["errors"])
-        dropped = int(fields["dropped"])
-        if errors:
-            raise SystemExit(f"{label}: dns-load-client reported {errors} errors")
-        if sent <= 0 or dropped * 1000 > sent * max_drop_permille:
-            raise SystemExit(
-                f"{label}: dropped {dropped}/{sent} exceeds "
-                f"{max_drop_permille}/1000"
-            )
-
-        server_dir = root / "network" / "server"
-        client_dir = root / "network" / "client"
-        server_before = net_values(
-            server_dir / f"proc-net-dev-{label}-before.txt", server_device
-        )
-        server_after = net_values(
-            server_dir / f"proc-net-dev-{label}-after.txt", server_device
-        )
-        client_before = net_values(
-            client_dir / f"proc-net-dev-{label}-before.txt", client_device
-        )
-        client_after = net_values(
-            client_dir / f"proc-net-dev-{label}-after.txt", client_device
-        )
-        server_rx_packets = delta(server_before, server_after, "rx_packets")
-        server_tx_packets = delta(server_before, server_after, "tx_packets")
-        client_rx_packets = delta(client_before, client_after, "rx_packets")
-        client_tx_packets = delta(client_before, client_after, "tx_packets")
-        if mode == "ssh" and min(
-            server_rx_packets,
-            server_tx_packets,
-            client_rx_packets,
-            client_tx_packets,
-        ) <= 0:
-            raise SystemExit(f"{label}: physical NIC packet deltas are not positive")
-        error_keys = ("rx_errors", "rx_drops", "tx_errors", "tx_drops")
-        for role, before, after in (
-            ("server", server_before, server_after),
-            ("client", client_before, client_after),
-        ):
-            for key in error_keys:
-                if delta(before, after, key) != 0:
-                    raise SystemExit(f"{label}: {role} NIC {key} increased")
-
-        rows.append(
-            {
-                "target_qps": target_qps or "unlimited",
-                "repetition": repetition,
-                "sent": sent,
-                "received": received,
-                "errors": errors,
-                "dropped": dropped,
-                "responses_per_second": float(fields["responses_per_second"]),
-                "latency_us_p50": float(fields["latency_us_p50"]),
-                "latency_us_p90": float(fields["latency_us_p90"]),
-                "latency_us_p99": float(fields["latency_us_p99"]),
-                "latency_us_p999": float(fields["latency_us_p999"]),
-                "server_rx_bytes": delta(server_before, server_after, "rx_bytes"),
-                "server_tx_bytes": delta(server_before, server_after, "tx_bytes"),
-                "server_rx_packets": server_rx_packets,
-                "server_tx_packets": server_tx_packets,
-                "client_rx_bytes": delta(client_before, client_after, "rx_bytes"),
-                "client_tx_bytes": delta(client_before, client_after, "tx_bytes"),
-                "client_rx_packets": client_rx_packets,
-                "client_tx_packets": client_tx_packets,
-                "server_cpu_percent": cpu_percent(
-                    server_dir / f"proc-stat-{label}-before.txt",
-                    server_dir / f"proc-stat-{label}-after.txt",
-                ),
-                "client_cpu_percent": cpu_percent(
-                    client_dir / f"proc-stat-{label}-before.txt",
-                    client_dir / f"proc-stat-{label}-after.txt",
-                ),
-            }
-        )
-
-columns = list(rows[0])
-with (root / "performance-results.tsv").open("w", encoding="utf-8") as output:
-    output.write("\t".join(columns) + "\n")
-    for row in rows:
-        output.write("\t".join(str(row[column]) for column in columns) + "\n")
-
-aggregate_keys = (
-    "responses_per_second",
-    "latency_us_p50",
-    "latency_us_p90",
-    "latency_us_p99",
-    "latency_us_p999",
-    "server_cpu_percent",
-    "client_cpu_percent",
-)
-steps = []
-for target_qps in target_qps_steps:
-    step_rows = [
-        row
-        for row in rows
-        if row["target_qps"] == (target_qps or "unlimited")
-    ]
-    aggregate = {
-        f"median_{key}": statistics.median(row[key] for row in step_rows)
-        for key in aggregate_keys
-    }
-    steps.append(
-        {
-            "target_qps": target_qps or None,
-            "repetitions": step_rows,
-            "aggregate": aggregate,
-        }
-    )
-aggregate = steps[-1]["aggregate"]
-report = {
-    "format": "boron-gen-query-performance-v1",
-    "mode": mode,
-    "server_device": server_device,
-    "client_device": client_device,
-    # Keep the top step in these legacy fields so existing campaign readers
-    # retain their original meaning while paced runs expose every step below.
-    "repetitions": steps[-1]["repetitions"],
-    "aggregate": aggregate,
-    "steps": steps,
-}
-with (root / "performance-summary.json").open("w", encoding="utf-8") as output:
-    json.dump(report, output, indent=2, sort_keys=True)
-    output.write("\n")
-PY
+    "$max_drop_permille" || analysis_status=$?
 
 cleanup_remote
 (
@@ -823,6 +649,12 @@ cleanup_remote
         run.env \
         performance-results.tsv \
         performance-summary.json \
+        performance-acceptance.json \
         >evidence.sha256
 )
+if ((analysis_status != 0)); then
+    printf 'BoronGen query performance acceptance failed; evidence retained: %s\n' \
+        "$artifact_dir" >&2
+    exit "$analysis_status"
+fi
 printf 'BoronGen query performance completed; evidence: %s\n' "$artifact_dir"

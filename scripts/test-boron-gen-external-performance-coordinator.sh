@@ -97,6 +97,9 @@ find\ *performance-request.json*)
 test\ -f*performance-complete)
     exit 1
     ;;
+test\ -f*performance-failed.json)
+    exit 1
+    ;;
 test\ -f*/02-stale/*/run-summary.json)
     exit 0
     ;;
@@ -151,15 +154,26 @@ set -euo pipefail
 artifact_dir="${BORON_GEN_PERF_ARTIFACT_DIR:?}"
 mkdir -p "$artifact_dir"
 printf '{}\n' >"$artifact_dir/performance-summary.json"
+printf 'target_qps\n1\n' >"$artifact_dir/performance-results.tsv"
+printf '{"format":"boron-gen-query-performance-acceptance-v1","passed":true,"failures":[]}\n' \
+    >"$artifact_dir/performance-acceptance.json"
 (
     cd "$artifact_dir"
-    sha256sum performance-summary.json >evidence.sha256
+    sha256sum performance-summary.json performance-results.tsv \
+        performance-acceptance.json >evidence.sha256
 )
 printf '%s\n' "${BORON_GEN_PERF_ORIGIN:?}" >>"${TEST_COORD_STATE:?}/runner.log"
 printf '%s\n' "${BORON_GEN_PERF_TARGET_QPS_STEPS:?}" \
     >>"${TEST_COORD_STATE:?}/target-qps.log"
 if [[ "${BORON_GEN_PERF_ORIGIN:?}" == failure.test. ]]; then
     printf 'retained failed performance evidence\n' >"$artifact_dir/failure.log"
+    printf '{"format":"boron-gen-query-performance-acceptance-v1","passed":false,"failures":[{"message":"synthetic drop threshold exceeded"}]}\n' \
+        >"$artifact_dir/performance-acceptance.json"
+    (
+        cd "$artifact_dir"
+        sha256sum performance-summary.json performance-results.tsv \
+            performance-acceptance.json >evidence.sha256
+    )
     exit 42
 fi
 FAKE_RUNNER
@@ -201,8 +215,12 @@ grep -Fq 'run summary exists without performance completion' \
     "$local_artifacts/runs/02-stale/attempt-001/evidence/stale-request.txt"
 failure_root="$local_artifacts/runs/04-failing/attempt-001/evidence"
 grep -Fq 'exit_status=42' "$failure_root/failed-request.txt"
+grep -Fq '"exit_status": 42' "$failure_root/performance-failed.json"
+grep -Fq '"reason": "synthetic drop threshold exceeded"' \
+    "$failure_root/performance-failed.json"
 grep -Fq 'retained failed performance evidence' \
     "$failure_root/performance/failure.log"
+grep -Fq 'performance-failed' "$state/uploads.log"
 grep -Fq 'runs/04-failing/attempt-001/evidence' \
     "$local_artifacts/failed-requests.tsv"
 grep -Fq 'retaining evidence and continuing coordination' \

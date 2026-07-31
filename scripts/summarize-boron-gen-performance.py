@@ -54,6 +54,9 @@ def summarize(plan_path: Path, results_path: Path, output_path: Path) -> None:
         "qps_loss_percent",
         "median_p99_us",
         "p99_ratio_to_smallest",
+        "median_server_udp_rcvbuf_errors",
+        "median_server_udp_mem_errors",
+        "median_server_softnet_dropped",
     )
     with output_path.open("w", encoding="utf-8", newline="") as output:
         writer = csv.DictWriter(output, fieldnames=columns, delimiter="\t")
@@ -91,6 +94,15 @@ def summarize(plan_path: Path, results_path: Path, output_path: Path) -> None:
                     "median_p99_us": result["median_p99_us"],
                     "p99_ratio_to_smallest": (
                         "null" if p99_ratio is None else f"{p99_ratio:.6f}"
+                    ),
+                    "median_server_udp_rcvbuf_errors": result.get(
+                        "median_server_udp_rcvbuf_errors", "null"
+                    ),
+                    "median_server_udp_mem_errors": result.get(
+                        "median_server_udp_mem_errors", "null"
+                    ),
+                    "median_server_softnet_dropped": result.get(
+                        "median_server_softnet_dropped", "null"
                     ),
                 }
             )

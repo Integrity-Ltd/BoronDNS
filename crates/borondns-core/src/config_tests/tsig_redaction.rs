@@ -55,6 +55,65 @@
     }
 
     #[test]
+    fn rejects_empty_inline_tsig_secret() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = ""
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect_err("empty inline TSIG secret must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TSIG shared secret must not be empty"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_blank_tsig_secret_file() {
+        let secret_file = write_secret_file("\n \t\n", 0o600);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect_err("blank TSIG secret_file must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TSIG shared secret must not be empty"),
+            "{error}"
+        );
+        let _ = std::fs::remove_file(secret_file);
+    }
+
+    #[test]
     fn primary_config_enforces_exact_limit_and_same_handle_growth_fence() {
         use std::io::Write;
 

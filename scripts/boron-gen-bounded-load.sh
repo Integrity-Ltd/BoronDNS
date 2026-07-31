@@ -44,6 +44,12 @@ minimum_available_bytes="${BORON_LOAD_MIN_AVAILABLE_BYTES:-4294967296}"
 minimum_cgroup_headroom_bytes="${BORON_LOAD_MIN_CGROUP_HEADROOM_BYTES:-8589934592}"
 maximum_idle_cpu_percent="${BORON_LOAD_MAX_IDLE_CPU_PERCENT:-10}"
 maximum_memory_pressure_avg10="${BORON_LOAD_MAX_MEMORY_PRESSURE_AVG10:-10}"
+udp_batch_size="${BORON_LOAD_UDP_BATCH_SIZE:-1}"
+udp_reuseport_workers="${BORON_LOAD_UDP_REUSEPORT_WORKERS:-1}"
+udp_runtime="${BORON_LOAD_UDP_RUNTIME:-tokio}"
+udp_idle_strategy="${BORON_LOAD_UDP_IDLE_STRATEGY:-park}"
+udp_socket_receive_buffer_bytes="${BORON_LOAD_UDP_SOCKET_RECEIVE_BUFFER_BYTES:-0}"
+udp_socket_send_buffer_bytes="${BORON_LOAD_UDP_SOCKET_SEND_BUFFER_BYTES:-0}"
 performance_mode="${BORON_LOAD_PERFORMANCE_MODE:-off}"
 performance_server_address="${BORON_LOAD_PERFORMANCE_SERVER_ADDRESS:-}"
 performance_server_device="${BORON_LOAD_PERFORMANCE_SERVER_DEVICE:-auto}"
@@ -97,6 +103,8 @@ for pair in \
     "BORON_LOAD_HTTP_MAX_TIME_SECONDS:$http_max_time" \
     "BORON_LOAD_QUIESCENCE_WINDOW_SECONDS:$quiescence_window" \
     "BORON_LOAD_QUIESCENCE_TIMEOUT_SECONDS:$quiescence_timeout" \
+    "BORON_LOAD_UDP_BATCH_SIZE:$udp_batch_size" \
+    "BORON_LOAD_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
     "BORON_LOAD_PERFORMANCE_WARMUP_SECONDS:$performance_warmup" \
     "BORON_LOAD_PERFORMANCE_DURATION_SECONDS:$performance_duration" \
     "BORON_LOAD_PERFORMANCE_REPETITIONS:$performance_repetitions" \
@@ -118,6 +126,8 @@ for pair in \
     "BORON_LOAD_MIN_CGROUP_HEADROOM_BYTES:$minimum_cgroup_headroom_bytes" \
     "BORON_LOAD_MAX_IDLE_CPU_PERCENT:$maximum_idle_cpu_percent" \
     "BORON_LOAD_MAX_MEMORY_PRESSURE_AVG10:$maximum_memory_pressure_avg10" \
+    "BORON_LOAD_UDP_SOCKET_RECEIVE_BUFFER_BYTES:$udp_socket_receive_buffer_bytes" \
+    "BORON_LOAD_UDP_SOCKET_SEND_BUFFER_BYTES:$udp_socket_send_buffer_bytes" \
     "BORON_LOAD_PERFORMANCE_MAX_DROP_PERMILLE:$performance_max_drop_permille"; do
     if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
         printf '%s must be a non-negative integer, got %q\n' \
@@ -125,6 +135,33 @@ for pair in \
         exit 64
     fi
 done
+if ((udp_batch_size > 1024)); then
+    printf 'BORON_LOAD_UDP_BATCH_SIZE must not exceed 1024\n' >&2
+    exit 64
+fi
+if ((udp_reuseport_workers > 64)); then
+    printf 'BORON_LOAD_UDP_REUSEPORT_WORKERS must not exceed 64\n' >&2
+    exit 64
+fi
+case "$udp_runtime" in
+tokio | dedicated) ;;
+*)
+    printf 'BORON_LOAD_UDP_RUNTIME must be tokio or dedicated\n' >&2
+    exit 64
+    ;;
+esac
+case "$udp_idle_strategy" in
+park | spin) ;;
+*)
+    printf 'BORON_LOAD_UDP_IDLE_STRATEGY must be park or spin\n' >&2
+    exit 64
+    ;;
+esac
+if [[ "$udp_idle_strategy" != "park" && "$udp_runtime" != "dedicated" ]]; then
+    printf 'BORON_LOAD_UDP_IDLE_STRATEGY=%s requires BORON_LOAD_UDP_RUNTIME=dedicated\n' \
+        "$udp_idle_strategy" >&2
+    exit 64
+fi
 if ((performance_max_drop_permille > 1000)); then
     printf 'BORON_LOAD_PERFORMANCE_MAX_DROP_PERMILLE must be at most 1000\n' >&2
     exit 64
@@ -207,6 +244,14 @@ if [[ -z "$performance_remote_workdir" ]]; then
     performance_remote_workdir="/tmp/borondns-boron-gen-perf-${timestamp,,}-$$"
 fi
 rrl_allowlist_entries='"127.0.0.0/8"'
+udp_receive_buffer_config=""
+udp_send_buffer_config=""
+if ((udp_socket_receive_buffer_bytes > 0)); then
+    udp_receive_buffer_config="udp_socket_receive_buffer_bytes = $udp_socket_receive_buffer_bytes"
+fi
+if ((udp_socket_send_buffer_bytes > 0)); then
+    udp_send_buffer_config="udp_socket_send_buffer_bytes = $udp_socket_send_buffer_bytes"
+fi
 if [[ "$dns_host" != "127.0.0.1" && "$dns_host" != "0.0.0.0" ]]; then
     if ! python3 - "$dns_host" <<'PY'; then
 import ipaddress
@@ -286,6 +331,41 @@ unit_property() {
     local unit="$1"
     local property="$2"
     systemctl_load show "$unit" -p "$property" --value 2>/dev/null || true
+}
+
+capture_server_memory_locality() {
+    local label="$1"
+    local directory="$artifact_dir/memory-locality/$label"
+    local main_pid cgroup_path cgroup_root
+
+    mkdir -p "$directory"
+    main_pid="$(unit_property "$server_unit" MainPID)"
+    cgroup_path="$(unit_property "$server_unit" ControlGroup)"
+    printf 'main_pid=%s\ncontrol_group=%s\n' "$main_pid" "$cgroup_path" \
+        >"$directory/unit.env"
+    if [[ "$main_pid" =~ ^[1-9][0-9]*$ && -d "/proc/$main_pid" ]]; then
+        for process_file in status numa_maps smaps_rollup; do
+            if [[ -r "/proc/$main_pid/$process_file" ]]; then
+                cp "/proc/$main_pid/$process_file" \
+                    "$directory/proc-${process_file//_/-}.txt" || true
+            fi
+        done
+        ps -L -p "$main_pid" -o pid,tid,psr,pcpu,stat,comm \
+            >"$directory/process-threads.txt" || true
+        if command -v numastat >/dev/null 2>&1; then
+            numastat -p "$main_pid" >"$directory/numastat-process.txt" 2>&1 || true
+        fi
+    fi
+    if [[ -n "$cgroup_path" ]]; then
+        cgroup_root="/sys/fs/cgroup$cgroup_path"
+        for cgroup_file in memory.current memory.events memory.numa_stat \
+            memory.pressure memory.stat; do
+            if [[ -r "$cgroup_root/$cgroup_file" ]]; then
+                cp "$cgroup_root/$cgroup_file" "$directory/cgroup-$cgroup_file.txt"
+            fi
+        done
+    fi
+    return 0
 }
 
 wait_for_quiescence() {
@@ -801,6 +881,12 @@ metrics_rate_limit_per_minute = 10000
 require_tsig = true
 
 [limits]
+udp_batch_size = $udp_batch_size
+udp_reuseport_workers = $udp_reuseport_workers
+udp_runtime = "$udp_runtime"
+udp_idle_strategy = "$udp_idle_strategy"
+$udp_receive_buffer_config
+$udp_send_buffer_config
 axfr_timeout_secs = 31536000
 ixfr_timeout_secs = 31536000
 tcp_connect_timeout_secs = 30
@@ -831,6 +917,14 @@ tsig_key = "$tsig_name"
 max_member_zones = $zones
 EOF
 chmod 600 "$workdir/borondns.toml"
+cat >"$artifact_dir/udp-settings.env" <<EOF
+udp_batch_size=$udp_batch_size
+udp_reuseport_workers=$udp_reuseport_workers
+udp_runtime=$udp_runtime
+udp_idle_strategy=$udp_idle_strategy
+udp_socket_receive_buffer_bytes=$udp_socket_receive_buffer_bytes
+udp_socket_send_buffer_bytes=$udp_socket_send_buffer_bytes
+EOF
 "$server_binary" --validate-config "$workdir/borondns.toml" \
     >"$artifact_dir/config-validation.txt"
 
@@ -1082,6 +1176,7 @@ if ! wait_for_quiescence; then
     printf '%s\n' "$failure_reason" >&2
     exit 1
 fi
+capture_server_memory_locality post-quiescence
 
 failure_stage="dnssec-negative-probe"
 if [[ "$zones" == "1" ]]; then
@@ -1268,7 +1363,42 @@ with open(output_path, "w", encoding="utf-8") as output:
     output.write("\n")
 PY
     external_deadline=$((SECONDS + performance_external_timeout))
-    while [[ ! -f "$artifact_dir/performance-complete" ]]; do
+    while true; do
+        if [[ -L "$artifact_dir/performance-complete" ||
+            -L "$artifact_dir/performance-failed.json" ]]; then
+            failure_reason="external performance coordinator published a symlink marker"
+            exit 1
+        fi
+        if [[ -f "$artifact_dir/performance-complete" &&
+            -f "$artifact_dir/performance-failed.json" ]]; then
+            failure_reason="external performance coordinator published conflicting completion and failure markers"
+            exit 1
+        fi
+        if [[ -f "$artifact_dir/performance-failed.json" ]]; then
+            if ! jq -e \
+                '.format == "boron-gen-external-performance-failure-v1"
+                 and (.exit_status | type) == "number"
+                 and .exit_status >= 1
+                 and .exit_status <= 255
+                 and (.reason | type) == "string"
+                 and (.reason | length) >= 1
+                 and (.reason | length) <= 1024' \
+                "$artifact_dir/performance-failed.json" >/dev/null; then
+                failure_reason="external performance coordinator published a malformed failure marker"
+                exit 1
+            fi
+            performance_failure_status="$(
+                jq -r '.exit_status' "$artifact_dir/performance-failed.json"
+            )"
+            performance_failure_reason="$(
+                jq -r '.reason' "$artifact_dir/performance-failed.json"
+            )"
+            failure_reason="external performance request failed with status ${performance_failure_status}: ${performance_failure_reason}"
+            exit 1
+        fi
+        if [[ -f "$artifact_dir/performance-complete" ]]; then
+            break
+        fi
         if ! systemctl_load is-active --quiet "$server_unit"; then
             failure_reason="BoronDNS stopped while waiting for external performance evidence"
             exit 1
@@ -1281,16 +1411,24 @@ PY
     done
     if [[ -L "$artifact_dir/performance" ||
         ! -s "$artifact_dir/performance/performance-summary.json" ||
-        ! -s "$artifact_dir/performance/performance-results.tsv" ]]; then
+        ! -s "$artifact_dir/performance/performance-results.tsv" ||
+        ! -s "$artifact_dir/performance/performance-acceptance.json" ]]; then
         failure_reason="external performance completion marker lacks complete evidence"
         exit 1
     fi
     jq -e \
         --argjson expected_repetitions "$performance_repetitions" \
         '.format == "boron-gen-query-performance-v1"
-         and (.repetitions | length) == $expected_repetitions' \
+         and (.repetitions | length) == $expected_repetitions
+         and .acceptance.passed == true' \
         "$artifact_dir/performance/performance-summary.json" >/dev/null
+    jq -e \
+        '.format == "boron-gen-query-performance-acceptance-v1"
+         and .passed == true
+         and .failures == []' \
+        "$artifact_dir/performance/performance-acceptance.json" >/dev/null
 fi
+capture_server_memory_locality post-performance
 
 failure_stage="hold"
 failure_reason=""

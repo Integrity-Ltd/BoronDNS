@@ -343,6 +343,7 @@ struct ImageRrset {
     negative_ttl_bytes: [u8; 4],
     first_record: u64,
     record_count: u32,
+    ownerless_wire_len: u32,
     owner_label_count: u16,
     relation_span: u32,
     direct_answer_body_len: u32,
@@ -1786,12 +1787,9 @@ impl ZoneImage {
         let rrset = self.rrsets[rrset_id.0 as usize];
         let record_count = rrset.record_count as usize;
         let bytes = if let Some(owner_wire_len) = owner_wire_len_override {
-            let original_owner_wire_bytes = blob_len(rrset.owner_wire).saturating_mul(record_count);
-            let non_owner_wire_bytes =
-                blob_len(rrset.wire).saturating_sub(original_owner_wire_bytes);
             owner_wire_len
                 .saturating_mul(record_count)
-                .saturating_add(non_owner_wire_bytes)
+                .saturating_add(rrset.ownerless_wire_len as usize)
         } else {
             blob_len(rrset.wire)
         };
@@ -1907,7 +1905,7 @@ impl ZoneImage {
             record_count,
             wire_upper_bound: owner_wire_len
                 .saturating_mul(record_count)
-                .saturating_add(rrset_ownerless_wire_len(rrset)),
+                .saturating_add(rrset.ownerless_wire_len as usize),
         }
     }
 
@@ -4219,6 +4217,9 @@ impl ZoneImageBuilder {
         }
 
         let wire_end = checked_u64(self.wire.len(), "wire")?;
+        let record_count = checked_u32(rdatas.len(), "records")?;
+        let ownerless_wire_len =
+            ownerless_wire_len(owner_wire.len(), record_count, wire_end - wire_start);
         let direct_copy_eligible = direct_copy_rdata_type(rr_type);
         let direct_answer_body_len =
             push_direct_answer_body(&mut self.wire, direct_copy_eligible, fixed_fields, rdatas)?;
@@ -4230,13 +4231,13 @@ impl ZoneImageBuilder {
         } else {
             ttl
         };
-        let record_count = checked_u32(rdatas.len(), "records")?;
         self.image_rrsets.push(ImageRrset {
             owner_wire: owner_wire_ref,
             fixed_fields,
             negative_ttl_bytes: negative_ttl.to_be_bytes(),
             first_record,
             record_count,
+            ownerless_wire_len,
             owner_label_count: checked_u16(owner.labels().len(), "owner labels")?,
             relation_span: u32::MAX,
             direct_answer_body_len,
@@ -5403,19 +5404,22 @@ fn push_direct_answer_body(
     Ok(len)
 }
 
+fn ownerless_wire_len(owner_wire_len: usize, record_count: u32, full_wire_len: u64) -> u32 {
+    let owner_wire_len = u64::try_from(owner_wire_len).unwrap_or(u64::MAX);
+    let owner_bytes = owner_wire_len
+        .checked_mul(u64::from(record_count))
+        .unwrap_or(u64::MAX);
+    let ownerless = full_wire_len.saturating_sub(owner_bytes);
+    u32::try_from(ownerless).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
 fn rrset_ownerless_wire_len(rrset: ImageRrset) -> usize {
-    let record_count = rrset.record_count as usize;
-    if rrset.direct_answer_body_len != 0
-        && rrset.direct_answer_body_len != DIRECT_ANSWER_BODY_RECORDS_FALLBACK
-    {
-        (rrset.direct_answer_body_len as usize).saturating_sub(2usize.saturating_mul(record_count))
-    } else {
-        blob_len(rrset.wire).saturating_sub(blob_len(rrset.owner_wire).saturating_mul(record_count))
-    }
+    rrset.ownerless_wire_len as usize
 }
 
 fn direct_answer_non_owner_wire_len(rrset: &ImageRrset) -> usize {
-    rrset_ownerless_wire_len(*rrset)
+    rrset.ownerless_wire_len as usize
 }
 
 fn find_build_node_in_rrset(

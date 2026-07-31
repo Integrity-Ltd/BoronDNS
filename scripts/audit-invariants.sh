@@ -2192,6 +2192,15 @@ capacity_hint_text = (
     else ""
 )
 one_pass_composer_failures = []
+lookup_plan_start = zone_image_text.find("pub struct ZoneImageLookupPlan")
+lookup_plan_end = zone_image_text.find(
+    "#[derive(Debug, Clone, PartialEq, Eq)]", lookup_plan_start + 1
+)
+lookup_plan_layout_text = (
+    zone_image_text[lookup_plan_start:lookup_plan_end]
+    if lookup_plan_start >= 0 and lookup_plan_end >= 0
+    else ""
+)
 if "pub(crate) fn visit_plan_records<'a>" not in zone_image_text:
     one_pass_composer_failures.append("ZoneImage encode-only record visitor is missing")
 if "pub(crate) fn visit_plan_record_sections" not in zone_image_text:
@@ -2238,7 +2247,7 @@ if "#[cfg(test)]\n    pub(crate) fn response_body_wire_upper_bound(&self) -> usi
     one_pass_composer_failures.append("old individual body wire-bound accessor is not restricted to tests")
 if "body_wire_upper_bound: u32" not in zone_image_text:
     one_pass_composer_failures.append("ZoneImageLookupPlan does not carry compact total body wire bounds")
-if "\n    record_count: u32," in zone_image_text:
+if "\n    record_count: u32," in lookup_plan_layout_text:
     one_pass_composer_failures.append("ZoneImageLookupPlan still carries redundant aggregate total record count")
 if "\n    authority_wire_upper_bound: u32," in zone_image_text:
     one_pass_composer_failures.append("ZoneImageLookupPlan still carries redundant authority wire bounds")

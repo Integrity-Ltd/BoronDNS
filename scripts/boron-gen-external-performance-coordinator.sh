@@ -154,15 +154,30 @@ max_drop_permille_override=${max_drop_override:-none}
 target_qps_steps_override=${target_qps_steps_override:-none}
 EOF
 
+publish_failure_marker() {
+    local remote_evidence="$1"
+    local local_marker="$2"
+    local remote_marker="$remote_evidence/performance-failed.json"
+    local remote_temporary="$remote_evidence/.performance-failed-${BASHPID}.json"
+
+    scp -q "${scp_options[@]}" "$local_marker" \
+        "$server_ssh:$remote_temporary"
+    # Publish atomically and never replace a completed or previously failed
+    # result. The bounded server observes only the final marker name.
+    # shellcheck disable=SC2029
+    ssh "${ssh_options[@]}" "$server_ssh" \
+        "test -d $(printf '%q' "$remote_evidence") && test ! -L $(printf '%q' "$remote_evidence") && if test -f $(printf '%q' "$remote_evidence/performance-complete") || test -f $(printf '%q' "$remote_marker"); then rm -f -- $(printf '%q' "$remote_temporary"); else mv -- $(printf '%q' "$remote_temporary") $(printf '%q' "$remote_marker"); fi"
+}
+
 process_request() {
     local request_path="$1"
     local relative_path request_relative evidence_relative remote_evidence
     local local_attempt request_file performance_dir archive archive_sha
-    local stale_marker failed_marker policy_file remote_status
+    local stale_marker failed_marker failed_marker_json policy_file remote_status
     local server_address server_port server_device client_bind client_device
     local profile origin zones names warmup duration repetitions threads window
     local sockets client_timeout client_cpu_list requested_max_drop max_drop metrics_url
-    local requested_target_qps_steps target_qps_steps
+    local requested_target_qps_steps target_qps_steps runner_status
 
     relative_path="${request_path#"$remote_artifact_root"/}"
     if [[ "$relative_path" == "$request_path" ||
@@ -176,10 +191,25 @@ process_request() {
     local_attempt="$local_artifact_root/$request_relative"
     stale_marker="$local_attempt/stale-request.txt"
     failed_marker="$local_attempt/failed-request.txt"
-    if [[ -f "$stale_marker" || -f "$failed_marker" ]]; then
+    failed_marker_json="$local_attempt/performance-failed.json"
+    if [[ -f "$stale_marker" ]]; then
+        return 0
+    fi
+    if [[ -f "$failed_marker" ]]; then
+        if [[ ! -s "$failed_marker_json" ]] ||
+            ! publish_failure_marker "$remote_evidence" "$failed_marker_json"; then
+            printf 'could not publish retained performance failure marker; will retry: %s\n' \
+                "$request_path" >&2
+        fi
         return 0
     fi
     if remote_file_exists "$remote_evidence/performance-complete"; then
+        return 0
+    else
+        remote_status=$?
+        ((remote_status == 1)) || return "$remote_status"
+    fi
+    if remote_file_exists "$remote_evidence/performance-failed.json"; then
         return 0
     else
         remote_status=$?
@@ -236,6 +266,7 @@ process_request() {
         return 1
     fi
 
+    runner_status=0
     BORON_GEN_PERF_ARTIFACT_DIR="$performance_dir" \
         BORON_GEN_PERF_PROFILE="$profile" \
         BORON_GEN_PERF_ORIGIN="$origin" \
@@ -260,7 +291,14 @@ process_request() {
         BORON_GEN_PERF_CLIENT_CPU_LIST="$client_cpu_list" \
         BORON_GEN_PERF_MAX_DROP_PERMILLE="$max_drop" \
         BORON_GEN_PERF_METRICS_URL="$metrics_url" \
-        "$performance_runner"
+        "$performance_runner" || runner_status=$?
+
+    # Status 255 is reserved for SSH transport loss. Do not publish a terminal
+    # request result because the coordinator can retry after connectivity
+    # returns.
+    if ((runner_status == 255)); then
+        return "$runner_status"
+    fi
 
     policy_file="$performance_dir/coordinator-policy.env"
     printf 'requested_max_drop_permille=%s\neffective_max_drop_permille=%s\noverride_source=%s\nrequested_target_qps_steps=%s\neffective_target_qps_steps=%s\ntarget_qps_override_source=%s\n' \
@@ -269,6 +307,14 @@ process_request() {
         "$requested_target_qps_steps" "$target_qps_steps" \
         "$([[ -n "$target_qps_steps_override" ]] && printf BORON_COORD_TARGET_QPS_STEPS_OVERRIDE || printf request)" \
         >"$policy_file"
+    if [[ ! -s "$performance_dir/evidence.sha256" ]]; then
+        printf 'performance runner did not retain an evidence manifest: %s\n' \
+            "$performance_dir" >&2
+        if ((runner_status != 0)); then
+            return "$runner_status"
+        fi
+        return 1
+    fi
     (
         cd "$performance_dir"
         sha256sum coordinator-policy.env >>evidence.sha256
@@ -285,7 +331,13 @@ process_request() {
         "$server_ssh:$remote_evidence/performance-evidence.tar"
     # shellcheck disable=SC2029
     ssh "${ssh_options[@]}" "$server_ssh" \
-        "test \"\$(sha256sum $(printf '%q' "$remote_evidence/performance-evidence.tar") | awk '{print \$1}')\" = $(printf '%q' "$archive_sha") && mkdir -m 700 -- $(printf '%q' "$remote_evidence/performance") && tar --warning=no-timestamp -xf $(printf '%q' "$remote_evidence/performance-evidence.tar") -C $(printf '%q' "$remote_evidence/performance") && cd $(printf '%q' "$remote_evidence/performance") && sha256sum -c evidence.sha256 && rm -f -- $(printf '%q' "$remote_evidence/performance-evidence.tar") && sha256sum performance-summary.json > $(printf '%q' "$remote_evidence/performance-complete")"
+        "test \"\$(sha256sum $(printf '%q' "$remote_evidence/performance-evidence.tar") | awk '{print \$1}')\" = $(printf '%q' "$archive_sha") && mkdir -m 700 -- $(printf '%q' "$remote_evidence/performance") && tar --warning=no-timestamp -xf $(printf '%q' "$remote_evidence/performance-evidence.tar") -C $(printf '%q' "$remote_evidence/performance") && cd $(printf '%q' "$remote_evidence/performance") && sha256sum -c evidence.sha256 && rm -f -- $(printf '%q' "$remote_evidence/performance-evidence.tar")"
+    if ((runner_status != 0)); then
+        return "$runner_status"
+    fi
+    # shellcheck disable=SC2029
+    ssh "${ssh_options[@]}" "$server_ssh" \
+        "test -s $(printf '%q' "$remote_evidence/performance/performance-summary.json") && test -s $(printf '%q' "$remote_evidence/performance/performance-results.tsv") && test -s $(printf '%q' "$remote_evidence/performance/performance-acceptance.json") && sha256sum $(printf '%q' "$remote_evidence/performance/performance-summary.json") > $(printf '%q' "$remote_evidence/performance-complete")"
     printf '%s\t%s\t%s\n' \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$request_relative" "$archive_sha" \
         >>"$local_artifact_root/completed-requests.tsv"
@@ -294,7 +346,8 @@ process_request() {
 record_request_failure() {
     local request_path="$1"
     local exit_status="$2"
-    local relative_path request_relative local_attempt failed_marker failed_utc
+    local relative_path request_relative local_attempt failed_marker
+    local failed_marker_json failed_utc reason
 
     relative_path="${request_path#"$remote_artifact_root"/}"
     if [[ "$relative_path" == "$request_path" ||
@@ -306,15 +359,41 @@ record_request_failure() {
     request_relative="${relative_path%/performance-request.json}"
     local_attempt="$local_artifact_root/$request_relative"
     failed_marker="$local_attempt/failed-request.txt"
+    failed_marker_json="$local_attempt/performance-failed.json"
     mkdir -p "$local_attempt"
     if [[ -e "$failed_marker" ]]; then
         return 0
     fi
     failed_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    reason="performance request failed; retained evidence is available when collection completed"
+    if [[ -s "$local_attempt/performance/performance-acceptance.json" ]]; then
+        reason="$(
+            jq -r \
+                '.failures[0].message
+                 // "performance request failed acceptance policy"' \
+                "$local_attempt/performance/performance-acceptance.json"
+        )"
+    fi
     printf 'failed_utc=%s\nexit_status=%s\nremote_request=%s\n' \
         "$failed_utc" "$exit_status" "$request_path" >"$failed_marker"
+    jq -n \
+        --arg format "boron-gen-external-performance-failure-v1" \
+        --arg failed_utc "$failed_utc" \
+        --argjson exit_status "$exit_status" \
+        --arg reason "$reason" \
+        '{
+            format: $format,
+            failed_utc: $failed_utc,
+            exit_status: $exit_status,
+            reason: $reason
+        }' >"$failed_marker_json"
     printf '%s\t%s\t%s\n' "$failed_utc" "$request_relative" "$exit_status" \
         >>"$local_artifact_root/failed-requests.tsv"
+    if ! publish_failure_marker \
+        "$remote_artifact_root/$request_relative" "$failed_marker_json"; then
+        printf 'could not publish performance failure marker; will retry on the next poll: %s\n' \
+            "$request_path" >&2
+    fi
     printf 'performance request failed with status %s; retaining evidence and continuing coordination: %s\n' \
         "$exit_status" "$request_path" >&2
 }

@@ -123,6 +123,17 @@ two-host coordination can impose the same list with
 `BORON_COORD_TARGET_QPS_STEPS_OVERRIDE`; the effective and requested policies
 are retained in the performance evidence.
 
+The large-memory wrapper can set the server UDP data-plane configuration with
+`BORON_CAMPAIGN_UDP_BATCH_SIZE`, `BORON_CAMPAIGN_UDP_REUSEPORT_WORKERS`,
+`BORON_CAMPAIGN_UDP_RUNTIME`, `BORON_CAMPAIGN_UDP_IDLE_STRATEGY`,
+`BORON_CAMPAIGN_UDP_SOCKET_RECEIVE_BUFFER_BYTES`, and
+`BORON_CAMPAIGN_UDP_SOCKET_SEND_BUFFER_BYTES`. The bounded harness records the
+effective values in `udp-settings.env`. Query evidence includes Linux UDP
+receive-buffer/memory errors and softnet drops for every repetition, while the
+bounded evidence records process and cgroup NUMA locality after quiescence and
+after performance. Keep tuning explicit for a campaign so a size curve does
+not silently mix data-plane profiles.
+
 The `large-rrset` profile verifies that ZoneImage publication and AXFR are not
 mistakenly capped by the 16-bit DNS message section count. A 65,536-record
 RRset crosses the former implementation boundary while remaining small enough

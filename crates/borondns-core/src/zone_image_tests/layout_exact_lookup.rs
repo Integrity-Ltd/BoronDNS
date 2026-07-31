@@ -30,6 +30,7 @@
             negative_ttl_bytes: [0; 4],
             first_record: above_u32,
             record_count: 0,
+            ownerless_wire_len: ownerless_wire_len(0, 0, above_u32),
             owner_label_count: 0,
             relation_span: u32::MAX,
             direct_answer_body_len: 0,
@@ -48,7 +49,11 @@
         assert_eq!(range.offset, above_u32);
         assert_eq!(range.len, above_u32);
         assert_eq!(blob_len(range), above_u32 as usize);
-        assert_eq!(rrset_ownerless_wire_len(rrset), above_u32 as usize);
+        assert_eq!(
+            rrset_ownerless_wire_len(rrset),
+            u32::MAX as usize,
+            "compiled capacity hints saturate without narrowing global arena ranges"
+        );
         assert_eq!(rdata.offset, above_u32);
         assert_eq!(rrset.first_record, above_u32);
         assert_eq!(relation.record_index, above_u32);

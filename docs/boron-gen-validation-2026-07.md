@@ -235,6 +235,12 @@ BORON_CAMPAIGN_PERFORMANCE_SERVER_DEVICE=eno1np0 \
 BORON_CAMPAIGN_PERFORMANCE_CLIENT_BIND=198.18.0.2:0 \
 BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOURCE_CIDR=198.18.0.2/32 \
 BORON_CAMPAIGN_PERFORMANCE_CLIENT_DEVICE=eno1np0 \
+BORON_CAMPAIGN_UDP_BATCH_SIZE=64 \
+BORON_CAMPAIGN_UDP_REUSEPORT_WORKERS=8 \
+BORON_CAMPAIGN_UDP_RUNTIME=tokio \
+BORON_CAMPAIGN_UDP_IDLE_STRATEGY=park \
+BORON_CAMPAIGN_UDP_SOCKET_RECEIVE_BUFFER_BYTES=4194304 \
+BORON_CAMPAIGN_UDP_SOCKET_SEND_BUFFER_BYTES=4194304 \
 scripts/boron-gen-large-memory-campaign.sh run
 ```
 
@@ -251,6 +257,14 @@ The coordinator validates both host identities, executes the query client on
 oxidegun, captures server evidence from oxidedns, validates a relative-file
 SHA-256 manifest, and transfers the result as a checked tar archive before
 atomically writing the completion marker.
+
+The explicit eight-worker Tokio profile above is intended to keep a single
+UDP receive queue from becoming the measurement bottleneck. Do not infer a
+lookup-path improvement from the combined profile alone: compare the recorded
+per-repetition UDP `RcvbufErrors`, softnet drops, QPS, and latency with the
+single-worker baseline. Dedicated workers remain a separate experiment because
+their configured park loop can consume enough idle CPU to fail the campaign's
+quiescence gate.
 
 The serialized registry curve is 1M, 10M, 20M, 40M, 50M, and 60M ordinary
 names with the same number of ordered NSEC3 records. QPS and p99 medians are

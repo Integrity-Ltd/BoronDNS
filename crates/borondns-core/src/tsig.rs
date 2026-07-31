@@ -43,6 +43,9 @@ pub enum TsigError {
     #[error("TSIG shared secret is not valid base64")]
     InvalidSecret,
 
+    #[error("TSIG shared secret must not be empty")]
+    EmptySecret,
+
     #[error("TSIG shared secret is not usable as an HMAC key")]
     InvalidHmacKey,
 
@@ -196,6 +199,9 @@ impl TsigKey {
         let secret = STANDARD
             .decode(secret_base64)
             .map_err(|_| TsigError::InvalidSecret)?;
+        if secret.is_empty() {
+            return Err(TsigError::EmptySecret);
+        }
 
         Ok(Self {
             name,
@@ -1322,6 +1328,14 @@ mod tests {
             .expect_err("invalid base64");
 
         assert_eq!(error, TsigError::InvalidSecret);
+    }
+
+    #[test]
+    fn rejects_empty_decoded_secret() {
+        let error = TsigKey::from_base64("transfer.example.", "hmac-sha256", "")
+            .expect_err("empty decoded TSIG secret");
+
+        assert_eq!(error, TsigError::EmptySecret);
     }
 
     #[test]

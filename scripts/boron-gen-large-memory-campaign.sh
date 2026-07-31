@@ -28,6 +28,12 @@ performance_client_threads="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_THREADS:-32}"
 performance_client_window="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_WINDOW:-256}"
 performance_client_sockets="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:-4}"
 performance_client_cpu_list="${BORON_CAMPAIGN_PERFORMANCE_CLIENT_CPU_LIST:-}"
+udp_batch_size="${BORON_CAMPAIGN_UDP_BATCH_SIZE:-1}"
+udp_reuseport_workers="${BORON_CAMPAIGN_UDP_REUSEPORT_WORKERS:-1}"
+udp_runtime="${BORON_CAMPAIGN_UDP_RUNTIME:-tokio}"
+udp_idle_strategy="${BORON_CAMPAIGN_UDP_IDLE_STRATEGY:-park}"
+udp_socket_receive_buffer_bytes="${BORON_CAMPAIGN_UDP_SOCKET_RECEIVE_BUFFER_BYTES:-0}"
+udp_socket_send_buffer_bytes="${BORON_CAMPAIGN_UDP_SOCKET_SEND_BUFFER_BYTES:-0}"
 scenario_selector="${BORON_CAMPAIGN_SCENARIOS:-all}"
 
 usage() {
@@ -66,9 +72,32 @@ for pair in \
     "BORON_CAMPAIGN_PERFORMANCE_REPETITIONS:$performance_repetitions" \
     "BORON_CAMPAIGN_PERFORMANCE_CLIENT_THREADS:$performance_client_threads" \
     "BORON_CAMPAIGN_PERFORMANCE_CLIENT_WINDOW:$performance_client_window" \
-    "BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:$performance_client_sockets"; do
+    "BORON_CAMPAIGN_PERFORMANCE_CLIENT_SOCKETS_PER_THREAD:$performance_client_sockets" \
+    "BORON_CAMPAIGN_UDP_BATCH_SIZE:$udp_batch_size" \
+    "BORON_CAMPAIGN_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
+for pair in \
+    "BORON_CAMPAIGN_UDP_SOCKET_RECEIVE_BUFFER_BYTES:$udp_socket_receive_buffer_bytes" \
+    "BORON_CAMPAIGN_UDP_SOCKET_SEND_BUFFER_BYTES:$udp_socket_send_buffer_bytes"; do
+    if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
+        printf '%s must be a non-negative integer, got %q\n' \
+            "${pair%%:*}" "${pair#*:}" >&2
+        exit 64
+    fi
+done
+if ((udp_batch_size > 1024 || udp_reuseport_workers > 64)); then
+    echo "campaign UDP batch size or reuseport worker count exceeds the supported ceiling" >&2
+    exit 64
+fi
+case "$udp_runtime:$udp_idle_strategy" in
+tokio:park | dedicated:park | dedicated:spin) ;;
+*)
+    printf 'invalid campaign UDP runtime/idle strategy: %s/%s\n' \
+        "$udp_runtime" "$udp_idle_strategy" >&2
+    exit 64
+    ;;
+esac
 case "$performance_mode" in
 off | local | ssh | external) ;;
 *)
@@ -440,12 +469,13 @@ sha256sum \
     "$repo_root/scripts/boron-gen-external-performance-coordinator.sh" \
     "$repo_root/scripts/boron-gen-large-memory-campaign.sh" \
     "$repo_root/scripts/boron-gen-query-performance.sh" \
+    "$repo_root/scripts/analyze-boron-gen-query-performance.py" \
     "$repo_root/scripts/generate-boron-gen-query-trace.py" \
     "$repo_root/scripts/summarize-boron-gen-performance.py" \
     >"$artifact_root/harnesses.sha256"
 write_host_facts
 validate_plan >"$artifact_root/plan.tsv"
-results_header='finished_utc	scenario	attempt	exit_status	result	server_peak_bytes	generator_peak_bytes	elapsed_seconds	median_qps	median_p99_us	median_server_cpu_percent	median_client_cpu_percent'
+results_header='finished_utc	scenario	attempt	exit_status	result	server_peak_bytes	generator_peak_bytes	elapsed_seconds	median_qps	median_p99_us	median_server_cpu_percent	median_client_cpu_percent	median_server_udp_rcvbuf_errors	median_server_udp_mem_errors	median_server_softnet_dropped'
 if [[ ! -e "$artifact_root/results.tsv" ]]; then
     printf '%s\n' "$results_header" >"$artifact_root/results.tsv"
 elif [[ "$(head -n 1 "$artifact_root/results.tsv")" != "$results_header" ]]; then
@@ -505,6 +535,12 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         BORON_LOAD_MIN_CGROUP_HEADROOM_BYTES=4294967296 \
         BORON_LOAD_MAX_IDLE_CPU_PERCENT=10 \
         BORON_LOAD_MAX_MEMORY_PRESSURE_AVG10=10 \
+        BORON_LOAD_UDP_BATCH_SIZE="$udp_batch_size" \
+        BORON_LOAD_UDP_REUSEPORT_WORKERS="$udp_reuseport_workers" \
+        BORON_LOAD_UDP_RUNTIME="$udp_runtime" \
+        BORON_LOAD_UDP_IDLE_STRATEGY="$udp_idle_strategy" \
+        BORON_LOAD_UDP_SOCKET_RECEIVE_BUFFER_BYTES="$udp_socket_receive_buffer_bytes" \
+        BORON_LOAD_UDP_SOCKET_SEND_BUFFER_BYTES="$udp_socket_send_buffer_bytes" \
         BORON_LOAD_PERFORMANCE_MODE="$performance_mode" \
         BORON_LOAD_PERFORMANCE_SERVER_DEVICE="$performance_server_device" \
         BORON_LOAD_PERFORMANCE_CLIENT_BIND="$performance_client_bind" \
@@ -544,6 +580,9 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         median_p99="$(jq -r '.observed.performance.aggregate.median_latency_us_p99 // "null"' "$attempt_dir/evidence/run-summary.json")"
         median_server_cpu="$(jq -r '.observed.performance.aggregate.median_server_cpu_percent // "null"' "$attempt_dir/evidence/run-summary.json")"
         median_client_cpu="$(jq -r '.observed.performance.aggregate.median_client_cpu_percent // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_server_udp_rcvbuf_errors="$(jq -r '.observed.performance.aggregate.median_server_udp_rcvbuf_errors // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_server_udp_mem_errors="$(jq -r '.observed.performance.aggregate.median_server_udp_mem_errors // "null"' "$attempt_dir/evidence/run-summary.json")"
+        median_server_softnet_dropped="$(jq -r '.observed.performance.aggregate.median_server_softnet_dropped // "null"' "$attempt_dir/evidence/run-summary.json")"
     else
         server_peak="$(sampled_server_peak "$attempt_dir/evidence/resource-samples.tsv")"
         if [[ "$server_peak" == "null" ]]; then
@@ -557,6 +596,9 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         median_p99="null"
         median_server_cpu="null"
         median_client_cpu="null"
+        median_server_udp_rcvbuf_errors="null"
+        median_server_udp_mem_errors="null"
+        median_server_softnet_dropped="null"
     fi
     jq -n \
         --arg scenario "$id" \
@@ -571,6 +613,9 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
         --argjson median_p99_us "$median_p99" \
         --argjson median_server_cpu_percent "$median_server_cpu" \
         --argjson median_client_cpu_percent "$median_client_cpu" \
+        --argjson median_server_udp_rcvbuf_errors "$median_server_udp_rcvbuf_errors" \
+        --argjson median_server_udp_mem_errors "$median_server_udp_mem_errors" \
+        --argjson median_server_softnet_dropped "$median_server_softnet_dropped" \
         '{
             scenario: $scenario,
             attempt: $attempt,
@@ -583,12 +628,17 @@ while IFS=$'\t' read -r id profile zones names records nsec3 projected high max 
             median_qps: $median_qps,
             median_p99_us: $median_p99_us,
             median_server_cpu_percent: $median_server_cpu_percent,
-            median_client_cpu_percent: $median_client_cpu_percent
+            median_client_cpu_percent: $median_client_cpu_percent,
+            median_server_udp_rcvbuf_errors: $median_server_udp_rcvbuf_errors,
+            median_server_udp_mem_errors: $median_server_udp_mem_errors,
+            median_server_softnet_dropped: $median_server_softnet_dropped
         }' >"$attempt_dir/result.json"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
         "$id" "$attempt" "$status" "$result" "$server_peak" "$generator_peak" "$elapsed" \
         "$median_qps" "$median_p99" "$median_server_cpu" "$median_client_cpu" \
+        "$median_server_udp_rcvbuf_errors" "$median_server_udp_mem_errors" \
+        "$median_server_softnet_dropped" \
         >>"$artifact_root/results.tsv"
     if ((status == 0)); then
         printf '%s\n' "$attempt" >"$scenario_root/completed"
