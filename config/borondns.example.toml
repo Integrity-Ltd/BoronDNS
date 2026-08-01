@@ -191,7 +191,9 @@ max_tcp_inflight_queries_per_connection = 64
 #tcp_inflight_limit_timeout_secs = 30
 # Graceful shutdown drain budget. Default: 30 seconds.
 graceful_shutdown_secs = 30
-# EDNS padding block size. Default: 0, which disables response padding.
+# EDNS padding block size. Must remain 0 in this release: client queries are
+# served only over plaintext UDP/TCP, where RFC 7830 forbids response padding.
+# A nonzero value is rejected until an encrypted client-query listener exists.
 edns_padding_block_size = 0
 # AXFR and IXFR session timeouts. Defaults: 300 and 60 seconds.
 axfr_timeout_secs = 300

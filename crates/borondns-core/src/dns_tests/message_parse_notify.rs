@@ -61,6 +61,40 @@
     }
 
     #[test]
+    fn standard_query_rejects_nonempty_answer_section() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::A as u16,
+            1,
+            vec![192, 0, 2, 1],
+        );
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+    }
+
+    #[test]
+    fn standard_query_rejects_nonempty_authority_section() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::Ns as u16,
+            1,
+            cname_rdata("ns.example.test."),
+        );
+        packet[6..8].copy_from_slice(&0u16.to_be_bytes());
+        packet[8..10].copy_from_slice(&1u16.to_be_bytes());
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+    }
+
+    #[test]
     fn notify_soa_for_configured_zone_gets_notify_response() {
         let packet = notify(&example_name(), RecordType::Soa as u16, 1);
         let store = ZoneStore::new();
@@ -74,6 +108,29 @@
         assert_eq!(flags & 0x0400, 0x0400);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(&response[12..], &packet[12..]);
+    }
+
+    #[test]
+    fn notify_with_nonzero_reserved_request_flags_is_ignored() {
+        for invalid_bits in [0x0200u16, 0x0100, 0x0080, 0x0040, 0x0020, 0x0010, 0x0001] {
+            let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+            let flags = u16::from_be_bytes([packet[2], packet[3]]) | invalid_bits;
+            packet[2..4].copy_from_slice(&flags.to_be_bytes());
+            let store = ZoneStore::new();
+            store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+            let accepted = std::cell::Cell::new(false);
+
+            let action = answer_message_with_notify_hooks(
+                &packet,
+                &store,
+                AnswerOptions::default(),
+                |_, _| true,
+                |_, _, _| accepted.set(true),
+            );
+
+            assert_eq!(action, DatagramAction::Discard, "invalid bits {invalid_bits:#06x}");
+            assert!(!accepted.get(), "invalid NOTIFY must not enqueue refresh");
+        }
     }
 
     #[test]
@@ -685,34 +742,57 @@
     }
 
     #[test]
-    fn parse_rejects_excessive_compression_pointer_chain() {
-        let packet = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
+    fn domain_name_parse_rejects_forward_compression_pointer() {
+        let packet = b"\xc0\x02\x00";
 
         assert_eq!(
-            DomainName::parse(&packet, 0).expect_err("long pointer chain must fail"),
+            DomainName::parse(packet, 0).expect_err("RFC 1035 pointers refer to prior names"),
+            DnsParseError::FormErr
+        );
+    }
+
+    #[test]
+    fn compressed_name_scanner_rejects_forward_pointer() {
+        let packet = b"\xc0\x02\x00";
+
+        assert_eq!(
+            skip_compressed_name(packet, 0)
+                .expect_err("RFC 9267 requires position-aware pointer validation"),
+            DnsParseError::FormErr
+        );
+    }
+
+    #[test]
+    fn parse_rejects_excessive_compression_pointer_chain() {
+        let (packet, offset) = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
+
+        assert_eq!(
+            DomainName::parse(&packet, offset).expect_err("long pointer chain must fail"),
             DnsParseError::FormErr
         );
     }
 
     #[test]
     fn skip_compressed_name_rejects_excessive_pointer_chain() {
-        let packet = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
+        let (packet, offset) = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
 
         assert_eq!(
-            skip_compressed_name(&packet, 0).expect_err("long pointer chain must fail"),
+            skip_compressed_name(&packet, offset).expect_err("long pointer chain must fail"),
             DnsParseError::FormErr
         );
     }
 
-    fn compressed_pointer_chain(pointer_count: usize) -> Vec<u8> {
+    fn compressed_pointer_chain(pointer_count: usize) -> (Vec<u8>, usize) {
         let mut packet = Vec::with_capacity(pointer_count * 2 + 1);
-        for index in 0..pointer_count {
-            let target = ((index + 1) * 2) as u16;
+        packet.push(0);
+        let mut target = 0u16;
+        for _ in 0..pointer_count {
+            let pointer_offset = packet.len();
             packet.push(0xc0 | ((target >> 8) as u8 & 0x3f));
             packet.push(target as u8);
+            target = pointer_offset as u16;
         }
-        packet.push(0);
-        packet
+        (packet, usize::from(target))
     }
 
     #[test]
@@ -810,4 +890,3 @@
         assert_eq!(consumed, 7);
         assert!(!ascii_lowercase);
     }
-

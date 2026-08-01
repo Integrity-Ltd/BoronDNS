@@ -156,7 +156,17 @@ pub struct VerifiedMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsigMessageKey {
     pub name: DomainName,
-    pub algorithm: TsigAlgorithm,
+    pub algorithm_name: DomainName,
+    pub algorithm: Option<TsigAlgorithm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsigRequestData {
+    pub key: TsigMessageKey,
+    pub mac: Vec<u8>,
+    pub time_signed: u64,
+    pub fudge: u16,
+    pub original_id: u16,
 }
 
 struct TsigRecordFields<'a> {
@@ -498,6 +508,50 @@ pub fn append_unsigned_tsig_error(
     Ok(signed_message)
 }
 
+pub fn append_unsigned_tsig_error_for_message_key(
+    message: &[u8],
+    key: &TsigMessageKey,
+    time_signed: u64,
+    fudge: u16,
+    original_id: u16,
+    error: u16,
+    other_data: &[u8],
+) -> Result<Vec<u8>, TsigError> {
+    if message.len() < DNS_HEADER_LEN {
+        return Err(TsigError::MalformedMessage);
+    }
+
+    let arcount = u16::from_be_bytes([
+        message[DNS_HEADER_ARCOUNT_OFFSET],
+        message[DNS_HEADER_ARCOUNT_OFFSET + 1],
+    ]);
+    let signed_arcount = arcount
+        .checked_add(1)
+        .ok_or(TsigError::AdditionalRecordCountOverflow)?;
+
+    let mut signed_message = Vec::with_capacity(
+        message.len() + tsig_rr_len_for_names(&key.name, &key.algorithm_name, 0),
+    );
+    signed_message.extend_from_slice(message);
+    signed_message[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
+        .copy_from_slice(&signed_arcount.to_be_bytes());
+    append_tsig_rr_for_names(
+        &mut signed_message,
+        &key.name,
+        &key.algorithm_name,
+        TsigRecordFields {
+            time_signed,
+            fudge,
+            mac: &[],
+            original_id,
+            error,
+            other_data,
+        },
+    );
+
+    Ok(signed_message)
+}
+
 pub fn sign_tsig_error_response(
     message: &[u8],
     key: &TsigKey,
@@ -561,15 +615,11 @@ pub fn verify_response(
     now_unix: u64,
 ) -> Result<VerifiedMessage, TsigError> {
     let (unsigned_message, tsig) = remove_tsig(message)?;
-    if tsig.owner.canonical_key() != key.name.canonical_key() {
-        return Err(TsigError::KeyMismatch);
-    }
-    if tsig.algorithm != key.algorithm {
-        return Err(TsigError::AlgorithmMismatch);
-    }
-    if tsig.error != TSIG_ERROR_NOERROR {
+    validate_tsig_identity(key, &tsig)?;
+    if is_unsigned_tsig_error(&tsig) {
         return Err(TsigError::ResponseError(tsig.error));
     }
+    validate_protocol_mac_length(key.algorithm, &tsig.mac)?;
     let variables = tsig_variables(
         key,
         tsig.time_signed,
@@ -581,6 +631,9 @@ pub fn verify_response(
     let mac_verification = verify_tsig_mac(key, &mac_input, &tsig.mac);
     mac_input.zeroize();
     mac_verification?;
+    if tsig.error != TSIG_ERROR_NOERROR {
+        return Err(TsigError::ResponseError(tsig.error));
+    }
     validate_tsig_time(tsig.time_signed, tsig.fudge, now_unix)?;
 
     Ok(VerifiedMessage {
@@ -597,7 +650,11 @@ fn verify_response_owned(
     now_unix: u64,
 ) -> Result<VerifiedMessage, TsigError> {
     let (unsigned_message, tsig) = remove_tsig_owned(message)?;
-    validate_tcp_tsig_metadata(key, &tsig)?;
+    validate_tsig_identity(key, &tsig)?;
+    if is_unsigned_tsig_error(&tsig) {
+        return Err(TsigError::ResponseError(tsig.error));
+    }
+    validate_protocol_mac_length(key.algorithm, &tsig.mac)?;
     let variables = tsig_variables(
         key,
         tsig.time_signed,
@@ -609,6 +666,7 @@ fn verify_response_owned(
     let mac_verification = verify_tsig_mac(key, &mac_input, &tsig.mac);
     mac_input.zeroize();
     mac_verification?;
+    validate_authenticated_response_error(&tsig)?;
     validate_tsig_time(tsig.time_signed, tsig.fudge, now_unix)?;
 
     Ok(VerifiedMessage {
@@ -624,15 +682,8 @@ pub fn verify_request(
     now_unix: u64,
 ) -> Result<VerifiedMessage, TsigError> {
     let (unsigned_message, tsig) = remove_tsig(message)?;
-    if tsig.owner.canonical_key() != key.name.canonical_key() {
-        return Err(TsigError::KeyMismatch);
-    }
-    if tsig.algorithm != key.algorithm {
-        return Err(TsigError::AlgorithmMismatch);
-    }
-    if tsig.error != TSIG_ERROR_NOERROR {
-        return Err(TsigError::ResponseError(tsig.error));
-    }
+    validate_tsig_identity(key, &tsig)?;
+    validate_request_tsig_structure(&tsig)?;
     let variables = tsig_variables(
         key,
         tsig.time_signed,
@@ -676,12 +727,14 @@ pub fn verify_tcp_response_stream(
     for message in &messages[1..] {
         match remove_tsig(message) {
             Ok((unsigned_message, tsig)) => {
-                validate_tcp_tsig_metadata(key, &tsig)?;
+                validate_tsig_identity(key, &tsig)?;
+                validate_protocol_mac_length(key.algorithm, &tsig.mac)?;
+                pending_unsigned.push(unsigned_message.clone());
+                verify_tcp_tsig_mac(key, &prior_mac, &pending_unsigned, &tsig)?;
                 if tsig.time_signed < last_time_signed {
                     return Err(TsigError::NonMonotonicTimeSigned);
                 }
-                pending_unsigned.push(unsigned_message.clone());
-                verify_tcp_tsig_mac(key, &prior_mac, &pending_unsigned, &tsig)?;
+                validate_authenticated_response_error(&tsig)?;
                 validate_tsig_time(tsig.time_signed, tsig.fudge, now_unix)?;
                 unsigned_messages.push(unsigned_message);
                 last_time_signed = tsig.time_signed;
@@ -742,10 +795,8 @@ pub fn verify_tcp_response_stream_owned_at_times(
     for (message, received_at) in messages {
         if final_tsig_record_view(&message)?.is_some() {
             let (unsigned_message, tsig) = remove_tsig_owned(message)?;
-            validate_tcp_tsig_metadata(key, &tsig)?;
-            if tsig.time_signed < last_time_signed {
-                return Err(TsigError::NonMonotonicTimeSigned);
-            }
+            validate_tsig_identity(key, &tsig)?;
+            validate_protocol_mac_length(key.algorithm, &tsig.mac)?;
             verify_tcp_tsig_mac_with_current(
                 key,
                 &prior_mac,
@@ -753,6 +804,10 @@ pub fn verify_tcp_response_stream_owned_at_times(
                 &unsigned_message,
                 &tsig,
             )?;
+            if tsig.time_signed < last_time_signed {
+                return Err(TsigError::NonMonotonicTimeSigned);
+            }
+            validate_authenticated_response_error(&tsig)?;
             validate_tsig_time(tsig.time_signed, tsig.fudge, received_at)?;
             unsigned_messages.push(unsigned_message);
             last_time_signed = tsig.time_signed;
@@ -796,9 +851,23 @@ pub fn message_tsig_owner_name(message: &[u8]) -> Result<Option<DomainName>, Tsi
 
 pub fn message_tsig_key(message: &[u8]) -> Result<Option<TsigMessageKey>, TsigError> {
     match remove_tsig(message) {
-        Ok((_, tsig)) => Ok(Some(TsigMessageKey {
-            name: tsig.owner,
-            algorithm: tsig.algorithm,
+        Ok((_, tsig)) => {
+            validate_request_tsig_structure(&tsig)?;
+            Ok(Some(tsig.message_key()))
+        }
+        Err(TsigError::MissingTsig) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn message_tsig_request_data(message: &[u8]) -> Result<Option<TsigRequestData>, TsigError> {
+    match remove_tsig(message) {
+        Ok((_, tsig)) => Ok(Some(TsigRequestData {
+            key: tsig.message_key(),
+            mac: tsig.mac,
+            time_signed: tsig.time_signed,
+            fudge: tsig.fudge,
+            original_id: tsig.original_id,
         })),
         Err(TsigError::MissingTsig) => Ok(None),
         Err(error) => Err(error),
@@ -861,13 +930,24 @@ fn tsig_variables(
 }
 
 fn append_tsig_rr(message: &mut Vec<u8>, key: &TsigKey, fields: TsigRecordFields<'_>) {
-    message.extend_from_slice(&canonical_name_wire(&key.name));
+    let algorithm_name = DomainName::from_absolute_str(&format!("{}.", key.algorithm.name()))
+        .expect("TSIG algorithm names are absolute DNS names");
+    append_tsig_rr_for_names(message, &key.name, &algorithm_name, fields);
+}
+
+fn append_tsig_rr_for_names(
+    message: &mut Vec<u8>,
+    key_name: &DomainName,
+    algorithm_name: &DomainName,
+    fields: TsigRecordFields<'_>,
+) {
+    message.extend_from_slice(&canonical_name_wire(key_name));
     message.extend_from_slice(&TSIG_RR_TYPE.to_be_bytes());
     message.extend_from_slice(&DNS_CLASS_ANY.to_be_bytes());
     message.extend_from_slice(&TSIG_TTL.to_be_bytes());
 
     let mut rdata = Vec::new();
-    rdata.extend_from_slice(&algorithm_name_wire(key.algorithm));
+    rdata.extend_from_slice(&canonical_name_wire(algorithm_name));
     append_u48(&mut rdata, fields.time_signed);
     rdata.extend_from_slice(&fields.fudge.to_be_bytes());
     rdata.extend_from_slice(&(fields.mac.len() as u16).to_be_bytes());
@@ -884,13 +964,24 @@ fn append_tsig_rr(message: &mut Vec<u8>, key: &TsigKey, fields: TsigRecordFields
 #[derive(Debug)]
 struct ParsedTsig {
     owner: DomainName,
-    algorithm: TsigAlgorithm,
+    algorithm_name: DomainName,
+    algorithm: Option<TsigAlgorithm>,
     time_signed: u64,
     fudge: u16,
     mac: Vec<u8>,
     original_id: u16,
     error: u16,
     other_data: Vec<u8>,
+}
+
+impl ParsedTsig {
+    fn message_key(&self) -> TsigMessageKey {
+        TsigMessageKey {
+            name: self.owner.clone(),
+            algorithm_name: self.algorithm_name.clone(),
+            algorithm: self.algorithm,
+        }
+    }
 }
 
 struct RecordView<'a> {
@@ -947,16 +1038,21 @@ fn final_tsig_record_view(message: &[u8]) -> Result<Option<RecordView<'_>>, Tsig
     let ancount = u16::from_be_bytes([message[6], message[7]]);
     let nscount = u16::from_be_bytes([message[8], message[9]]);
     let arcount = u16::from_be_bytes([message[10], message[11]]);
-    if arcount == 0 {
-        return Ok(None);
-    }
 
     let mut offset = skip_questions(message, qdcount)?;
     for _ in 0..ancount {
-        offset = parse_record_view(message, offset)?.end;
+        let record = parse_record_view(message, offset)?;
+        if record.rr_type == TSIG_RR_TYPE {
+            return Err(TsigError::MisplacedTsig);
+        }
+        offset = record.end;
     }
     for _ in 0..nscount {
-        offset = parse_record_view(message, offset)?.end;
+        let record = parse_record_view(message, offset)?;
+        if record.rr_type == TSIG_RR_TYPE {
+            return Err(TsigError::MisplacedTsig);
+        }
+        offset = record.end;
     }
 
     let mut tsig_view = None;
@@ -985,7 +1081,7 @@ fn parse_tsig_record(record: &RecordView<'_>) -> Result<ParsedTsig, TsigError> {
     let rdata = record.rdata;
     let (algorithm_name, consumed) =
         DomainName::parse(rdata, 0).map_err(|_| TsigError::MalformedTsig)?;
-    let algorithm = TsigAlgorithm::parse(&algorithm_name.canonical_key())?;
+    let algorithm = TsigAlgorithm::parse(&algorithm_name.canonical_key()).ok();
     let mut offset = consumed;
     if offset + 6 + 2 + 2 > rdata.len() {
         return Err(TsigError::MalformedTsig);
@@ -1016,6 +1112,7 @@ fn parse_tsig_record(record: &RecordView<'_>) -> Result<ParsedTsig, TsigError> {
 
     Ok(ParsedTsig {
         owner: record.owner.clone(),
+        algorithm_name,
         algorithm,
         time_signed,
         fudge,
@@ -1026,13 +1123,43 @@ fn parse_tsig_record(record: &RecordView<'_>) -> Result<ParsedTsig, TsigError> {
     })
 }
 
-fn validate_tcp_tsig_metadata(key: &TsigKey, tsig: &ParsedTsig) -> Result<(), TsigError> {
+fn validate_tsig_identity(key: &TsigKey, tsig: &ParsedTsig) -> Result<(), TsigError> {
     if tsig.owner.canonical_key() != key.name.canonical_key() {
         return Err(TsigError::KeyMismatch);
     }
-    if tsig.algorithm != key.algorithm {
+    if tsig.algorithm != Some(key.algorithm) {
         return Err(TsigError::AlgorithmMismatch);
     }
+    Ok(())
+}
+
+fn validate_request_tsig_structure(tsig: &ParsedTsig) -> Result<(), TsigError> {
+    if tsig.error != TSIG_ERROR_NOERROR {
+        return Err(TsigError::MalformedTsig);
+    }
+    if let Some(algorithm) = tsig.algorithm {
+        validate_protocol_mac_length(algorithm, &tsig.mac)?;
+    }
+    Ok(())
+}
+
+fn validate_protocol_mac_length(
+    algorithm: TsigAlgorithm,
+    received_mac: &[u8],
+) -> Result<(), TsigError> {
+    if received_mac.len() < algorithm.min_mac_len() || received_mac.len() > algorithm.mac_len() {
+        return Err(TsigError::MalformedTsig);
+    }
+    Ok(())
+}
+
+fn is_unsigned_tsig_error(tsig: &ParsedTsig) -> bool {
+    tsig.mac.is_empty()
+        && matches!(tsig.error, TSIG_ERROR_BADKEY | TSIG_ERROR_BADSIG)
+        && tsig.other_data.is_empty()
+}
+
+fn validate_authenticated_response_error(tsig: &ParsedTsig) -> Result<(), TsigError> {
     if tsig.error != TSIG_ERROR_NOERROR {
         return Err(TsigError::ResponseError(tsig.error));
     }
@@ -1092,9 +1219,6 @@ fn verify_tcp_tsig_mac_with_current(
 
 fn verify_tsig_mac(key: &TsigKey, mac_input: &[u8], received_mac: &[u8]) -> Result<(), TsigError> {
     let expected_mac = key.sign(mac_input)?;
-    if received_mac.len() < key.algorithm.min_mac_len() || received_mac.len() > expected_mac.len() {
-        return Err(TsigError::BadTrunc);
-    }
     if !bool::from(expected_mac[..received_mac.len()].ct_eq(received_mac)) {
         return Err(TsigError::InvalidMac);
     }
@@ -1161,9 +1285,19 @@ fn parse_record_view(message: &[u8], offset: usize) -> Result<RecordView<'_>, Ts
 }
 
 fn tsig_rr_len(key: &TsigKey, mac_len: usize) -> usize {
-    canonical_name_wire(&key.name).len()
+    let algorithm_name = DomainName::from_absolute_str(&format!("{}.", key.algorithm.name()))
+        .expect("TSIG algorithm names are absolute DNS names");
+    tsig_rr_len_for_names(&key.name, &algorithm_name, mac_len)
+}
+
+fn tsig_rr_len_for_names(
+    key_name: &DomainName,
+    algorithm_name: &DomainName,
+    mac_len: usize,
+) -> usize {
+    canonical_name_wire(key_name).len()
         + 10
-        + algorithm_name_wire(key.algorithm).len()
+        + canonical_name_wire(algorithm_name).len()
         + 6
         + 2
         + 2
@@ -1464,6 +1598,41 @@ mod tests {
     }
 
     #[test]
+    fn verifies_request_with_authenticated_opaque_other_data() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let query = sample_soa_query();
+        let time_signed = 1_700_000_000;
+        let fudge = DEFAULT_TSIG_FUDGE_SECS;
+        let other_data = b"opaque-request-data";
+        let variables = tsig_variables(&key, time_signed, fudge, TSIG_ERROR_NOERROR, other_data);
+        let mut mac_input = query.clone();
+        mac_input.extend_from_slice(&variables);
+        let mac = key.sign(&mac_input).unwrap();
+        let mut signed = query.clone();
+        signed[10..12].copy_from_slice(&1u16.to_be_bytes());
+        append_tsig_rr(
+            &mut signed,
+            &key,
+            TsigRecordFields {
+                time_signed,
+                fudge,
+                mac: &mac,
+                original_id: 0x1234,
+                error: TSIG_ERROR_NOERROR,
+                other_data,
+            },
+        );
+
+        let verified = key
+            .verify_request(&signed, time_signed)
+            .expect("request Other Data is opaque but authenticated");
+
+        assert_eq!(verified.message, query);
+        assert_eq!(verified.mac, mac);
+    }
+
+    #[test]
     fn verifies_request_with_minimum_truncated_tsig_mac() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
@@ -1544,7 +1713,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_request_with_tsig_mac_below_truncation_minimum() {
+    fn rejects_request_with_structurally_invalid_short_tsig_mac() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
         let signed = key
@@ -1557,7 +1726,7 @@ mod tests {
             .verify_request(&too_short_message, 1_700_000_000)
             .expect_err("too-short TSIG MAC");
 
-        assert_eq!(error, TsigError::BadTrunc);
+        assert_eq!(error, TsigError::MalformedTsig);
     }
 
     #[test]
@@ -1575,7 +1744,23 @@ mod tests {
             .verify_request(&overlong_message, 1_700_000_000)
             .expect_err("overlong TSIG MAC");
 
-        assert_eq!(error, TsigError::BadTrunc);
+        assert_eq!(error, TsigError::MalformedTsig);
+    }
+
+    #[test]
+    fn rejects_nonzero_request_tsig_error_as_malformed() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let signed = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+        let malformed = replace_tsig_error(&signed.message, &key, TSIG_ERROR_BADTIME);
+
+        let error = key
+            .verify_request(&malformed, 1_700_000_000)
+            .expect_err("a request TSIG Error field must be zero");
+
+        assert_eq!(error, TsigError::MalformedTsig);
     }
 
     #[test]
@@ -1820,6 +2005,51 @@ mod tests {
     }
 
     #[test]
+    fn rejects_tsig_in_answer_even_with_valid_final_tsig() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let source = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let source_tsig = final_tsig_record_view(&source.message)
+            .unwrap()
+            .expect("source TSIG");
+        let mut malformed = sample_soa_query();
+        malformed[6..8].copy_from_slice(&1u16.to_be_bytes());
+        malformed.extend_from_slice(&source.message[source_tsig.start..source_tsig.end]);
+        let signed = key
+            .sign_request(&malformed, 1_700_000_001, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+
+        let error = key
+            .verify_request(&signed.message, 1_700_000_001)
+            .expect_err("TSIG outside Additional must be rejected");
+
+        assert_eq!(error, TsigError::MisplacedTsig);
+    }
+
+    #[test]
+    fn rejects_tsig_in_authority_without_final_tsig_as_misplaced() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let source = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let source_tsig = final_tsig_record_view(&source.message)
+            .unwrap()
+            .expect("source TSIG");
+        let mut malformed = sample_soa_query();
+        malformed[8..10].copy_from_slice(&1u16.to_be_bytes());
+        malformed.extend_from_slice(&source.message[source_tsig.start..source_tsig.end]);
+
+        let error = key
+            .verify_request(&malformed, 1_700_000_000)
+            .expect_err("authority TSIG must be classified as misplaced");
+
+        assert_eq!(error, TsigError::MisplacedTsig);
+    }
+
+    #[test]
     fn rejects_tcp_response_stream_when_tsig_time_moves_backwards() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
@@ -1852,6 +2082,44 @@ mod tests {
             .expect_err("backwards TSIG time");
 
         assert_eq!(error, TsigError::NonMonotonicTimeSigned);
+    }
+
+    #[test]
+    fn rejects_tcp_continuation_invalid_mac_before_monotonic_time_check() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first = key
+            .sign_response(
+                &sample_response_with_id_and_serial(0x1234, 1),
+                &request.mac,
+                1_700_000_002,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let final_message = sample_response_with_id_and_serial(0x1234, 2);
+        let mut final_signed = key
+            .sign_tcp_response_continuation(
+                &final_message,
+                &first.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        final_signed.message[final_message.len() - 1] ^= 0x01;
+        let messages = vec![first.message, final_signed.message];
+
+        let borrowed_error = key
+            .verify_tcp_response_stream(&messages, &request.mac, 1_700_000_002)
+            .expect_err("unauthenticated backwards time must not be trusted");
+        let owned_error = key
+            .verify_tcp_response_stream_owned(messages, &request.mac, 1_700_000_002)
+            .expect_err("owned verifier must authenticate before checking time order");
+
+        assert_eq!(borrowed_error, TsigError::InvalidMac);
+        assert_eq!(owned_error, TsigError::InvalidMac);
     }
 
     #[test]
@@ -1939,6 +2207,68 @@ mod tests {
             .expect_err("tampered and expired response");
 
         assert_eq!(error, TsigError::InvalidMac);
+    }
+
+    #[test]
+    fn authenticates_signed_tsig_error_before_returning_response_error() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let server_time = 1_700_001_000u64;
+        let other_data = server_time.to_be_bytes()[2..].to_vec();
+        let mut signed_error = sign_tsig_error_response(
+            &sample_soa_response(),
+            &key,
+            TsigErrorResponseFields {
+                request_mac: &request.mac,
+                time_signed: 1_700_000_000,
+                fudge: DEFAULT_TSIG_FUDGE_SECS,
+                original_id: 0x1234,
+                error: TSIG_ERROR_BADTIME,
+                other_data: &other_data,
+            },
+        )
+        .expect("signed BADTIME response");
+        let unsigned_len = sample_soa_response().len();
+        signed_error.message[unsigned_len - 1] ^= 0x01;
+
+        let error = key
+            .verify_response(&signed_error.message, &request.mac, server_time)
+            .expect_err("tampered signed error response");
+
+        assert_eq!(error, TsigError::InvalidMac);
+    }
+
+    #[test]
+    fn returns_authenticated_badtime_without_applying_normal_response_time_check() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let server_time = 1_700_001_000u64;
+        let other_data = server_time.to_be_bytes()[2..].to_vec();
+        let signed_error = sign_tsig_error_response(
+            &sample_soa_response(),
+            &key,
+            TsigErrorResponseFields {
+                request_mac: &request.mac,
+                time_signed: 1,
+                fudge: DEFAULT_TSIG_FUDGE_SECS,
+                original_id: 0x1234,
+                error: TSIG_ERROR_BADTIME,
+                other_data: &other_data,
+            },
+        )
+        .expect("signed BADTIME response");
+
+        let error = key
+            .verify_response(&signed_error.message, &request.mac, server_time)
+            .expect_err("authenticated BADTIME response");
+
+        assert_eq!(error, TsigError::ResponseError(TSIG_ERROR_BADTIME));
     }
 
     #[test]
@@ -2050,6 +2380,25 @@ mod tests {
                 mac: replacement_mac,
                 original_id: tsig.original_id,
                 error: tsig.error,
+                other_data: &tsig.other_data,
+            },
+        );
+        unsigned
+    }
+
+    fn replace_tsig_error(message: &[u8], key: &TsigKey, replacement_error: u16) -> Vec<u8> {
+        let (mut unsigned, tsig) = remove_tsig(message).expect("message has TSIG");
+        let arcount = u16::from_be_bytes([unsigned[10], unsigned[11]]);
+        unsigned[10..12].copy_from_slice(&(arcount + 1).to_be_bytes());
+        append_tsig_rr(
+            &mut unsigned,
+            key,
+            TsigRecordFields {
+                time_signed: tsig.time_signed,
+                fudge: tsig.fudge,
+                mac: &tsig.mac,
+                original_id: tsig.original_id,
+                error: replacement_error,
                 other_data: &tsig.other_data,
             },
         );

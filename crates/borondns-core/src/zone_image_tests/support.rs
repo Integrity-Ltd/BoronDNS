@@ -162,7 +162,9 @@
                     PlanAnswer::Rrset(rrset_id) | PlanAnswer::RrsetWithOwner { rrset_id, .. } => {
                         rrset_id
                     }
-                    PlanAnswer::DynamicRecord(_) | PlanAnswer::SelectedRecord(_) => {
+                    PlanAnswer::DynamicRecord(_)
+                    | PlanAnswer::SelectedRecord(_)
+                    | PlanAnswer::SelectedRecordWithOwner { .. } => {
                         panic!("expected rrset answer")
                     }
                 };
@@ -189,7 +191,9 @@
                     PlanAnswer::Rrset(rrset_id) | PlanAnswer::RrsetWithOwner { rrset_id, .. } => {
                         rrset_id
                     }
-                    PlanAnswer::DynamicRecord(_) | PlanAnswer::SelectedRecord(_) => {
+                    PlanAnswer::DynamicRecord(_)
+                    | PlanAnswer::SelectedRecord(_)
+                    | PlanAnswer::SelectedRecordWithOwner { .. } => {
                         panic!("expected rrset answer")
                     }
                 };

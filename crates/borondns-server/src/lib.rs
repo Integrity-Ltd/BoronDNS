@@ -40,15 +40,12 @@ use borondns_core::{
         CatalogError, CatalogMember, CatalogMemberTransfer, ParsedCatalogMembers,
         parse_catalog_members_bounded_with_filter,
     },
-    config::{
-        CatalogZoneConfig, ConfigSecretString, MAX_RUNTIME_DURATION_SECS, TransferTransportConfig,
-        ZoneConfig,
-    },
+    config::{CatalogZoneConfig, ConfigSecretString, MAX_RUNTIME_DURATION_SECS, ZoneConfig},
     dns::{DomainName, Header, Opcode, Question, Rcode},
     tsig::{
-        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
-        TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
-        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, message_tsig_owner_name,
+        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME,
+        TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey, TsigMessageKey,
+        append_unsigned_tsig_error_for_message_key, message_tsig_key, message_tsig_request_data,
         sign_tsig_error_response,
     },
     zone::{
@@ -153,10 +150,11 @@ use tcp::{TcpServerSettings, serve_tcp_until};
 use transfer::{
     DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT, TransferIngestBudget, TransferIngestTracker,
     load_pem_certs, load_pem_private_key_from_file, poll_soa_from_primary_with_tsig,
-    query_id_from_random_bytes, tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
+    poll_soa_from_primary_with_tsig_and_source, query_id_from_random_bytes,
+    tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
 };
 use transfer::{
-    TransferSession, TransferTsig, poll_soa_from_primary_with_tsig_and_source,
+    TransferSession, TransferTsig, poll_soa_from_target_with_tsig_and_source,
     transfer_axfr_from_target_with_tsig_and_source, transfer_ixfr_from_target_with_tsig,
     transfer_query_id, tsig_time_signed, unix_timestamp_seconds,
 };
@@ -906,6 +904,7 @@ impl Runtime {
 struct RefreshRequest {
     zone: DomainName,
     requested_serial: Option<u32>,
+    preferred_primary_ip: Option<IpAddr>,
     reason: RefreshReason,
     retry_after_queue_drop: Option<RefreshReason>,
     notify_dedup_token: Option<NotifyDedupToken>,
@@ -917,6 +916,7 @@ impl RefreshRequest {
         Self {
             zone,
             requested_serial,
+            preferred_primary_ip: None,
             reason,
             retry_after_queue_drop: matches!(
                 reason,
@@ -931,6 +931,11 @@ impl RefreshRequest {
     fn with_notify_dedup_token(mut self, token: NotifyDedupToken) -> Self {
         self.plan_generation = token.plan_generation;
         self.notify_dedup_token = Some(token);
+        self
+    }
+
+    fn with_preferred_primary_ip(mut self, source: IpAddr) -> Self {
+        self.preferred_primary_ip = Some(source);
         self
     }
 
@@ -1214,12 +1219,14 @@ fn merge_refresh_request(existing: &mut RefreshRequest, mut incoming: RefreshReq
     if incoming.notify_dedup_token.is_some() {
         existing.notify_dedup_token = incoming.notify_dedup_token.take();
         existing.plan_generation = incoming.plan_generation;
+        existing.preferred_primary_ip = incoming.preferred_primary_ip;
     } else if incoming.reason != RefreshReason::Notify {
         // A catalog/control-plane/scheduled request belongs to the current
         // lifecycle and is independently retryable. Do not let a previously
         // queued NOTIFY token make the merged request stale after remove/readd.
         existing.notify_dedup_token = None;
         existing.plan_generation = incoming.plan_generation;
+        existing.preferred_primary_ip = None;
     }
     existing.reason = incoming.reason;
 }
@@ -1526,19 +1533,50 @@ impl CatalogManager {
             }
         }
 
-        let desired_members_by_key = members_by_key
+        let candidate_members_by_key = members_by_key
             .iter()
             .filter(|(key, _)| new_member_keys.contains(*key))
             .map(|(key, member)| (key.clone(), member.clone()))
             .collect::<HashMap<_, _>>();
-        self.desired_memberships_by_catalog
-            .lock()
-            .expect("catalog desired membership lock poisoned")
-            .insert(catalog_key.clone(), desired_members_by_key.clone());
-
-        tokio::task::yield_now().await;
 
         let reconcile_guard = self.reconcile_lock.lock().await;
+
+        // RFC 9432 section 5.2 gives ownership to the already configured
+        // instance. A later catalog listing the same member is a name clash
+        // and must be ignored; catalog-name ordering is not a migration rule.
+        let existing_owners = self
+            .member_owners_by_key
+            .lock()
+            .expect("catalog member owner lock poisoned")
+            .clone();
+        let mut desired_members_by_key = HashMap::new();
+        for (member_key, member) in candidate_members_by_key {
+            if existing_owners
+                .get(&member_key)
+                .is_some_and(|owner| owner != &catalog_key)
+            {
+                error!(
+                    category = "transfer",
+                    event = "catalog_member_name_clash",
+                    catalog_zone = %catalog.origin,
+                    zone = %member.zone,
+                    "catalog member zone is already managed by another catalog; ignoring incoming instance"
+                );
+                continue;
+            }
+            desired_members_by_key.insert(member_key, member);
+        }
+        let new_member_keys = desired_members_by_key
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        let previous_desired_members = self
+            .desired_memberships_by_catalog
+            .lock()
+            .expect("catalog desired membership lock poisoned")
+            .insert(catalog_key.clone(), desired_members_by_key.clone())
+            .unwrap_or_default();
 
         let (old_members_by_key, old_member_keys) = {
             let memberships = self
@@ -1565,22 +1603,7 @@ impl CatalogManager {
             .collect::<Vec<_>>();
         affected_member_keys.sort();
         for member_key in affected_member_keys {
-            // A zone may be listed by several catalogs. The lexicographically
-            // smallest canonical catalog-zone key is the sole policy owner.
-            // All catalogs remain in memberships_by_catalog for observability.
-            let owner = self
-                .desired_memberships_by_catalog
-                .lock()
-                .expect("catalog desired membership lock poisoned")
-                .iter()
-                .filter_map(|(known_catalog_key, members)| {
-                    members
-                        .get(&member_key)
-                        .map(|member| (known_catalog_key.clone(), member.clone()))
-                })
-                .min_by(|left, right| left.0.cmp(&right.0));
-
-            let Some((owner_catalog_key, owner_member)) = owner else {
+            let Some(owner_member) = desired_members_by_key.get(&member_key).cloned() else {
                 let member_origin = old_members_by_key
                     .get(&member_key)
                     .cloned()
@@ -1617,16 +1640,31 @@ impl CatalogManager {
                 continue;
             };
 
-            let Some(owner_catalog) = self.catalogs_by_key.get(&owner_catalog_key) else {
-                warn!(
+            let owner_catalog = catalog;
+            let member_node_changed =
+                previous_desired_members
+                    .get(&member_key)
+                    .is_some_and(|previous| {
+                        previous.member_node.canonical_key()
+                            != owner_member.member_node.canonical_key()
+                    });
+            if member_node_changed {
+                // RFC 9432 sections 5.4 and 5.6 require a member-node rename
+                // to be processed as remove/reset followed by a fresh add.
+                transfer_plan.remove(&owner_member.zone);
+                notify_authority.remove_zone(&owner_member.zone);
+                refresh_registry.remove_zone(&owner_member.zone);
+                self.remove_member_notify_registry_entry(&owner_member.zone);
+                removed_ixfr_members.push(owner_member.zone.clone());
+                info!(
                     category = "transfer",
-                    event = "catalog_member_owner_missing",
-                    catalog_zone = %owner_catalog_key,
+                    event = "catalog_member_node_changed",
+                    catalog_zone = %owner_catalog.origin,
                     zone = %owner_member.zone,
-                    "catalog member owner has no runtime configuration"
+                    member_node = %owner_member.member_node,
+                    "catalog member node changed; reset associated zone state before re-adding"
                 );
-                continue;
-            };
+            }
             let extensions_enabled = owner_catalog.config.member_transfer_extensions;
             let malformed_extension = extensions_enabled && owner_member.transfer.is_malformed();
             let transfer_override = extensions_enabled
@@ -1689,7 +1727,8 @@ impl CatalogManager {
             if plan_changed && let Some(current_plan) = current_plan.as_ref() {
                 changed_ixfr_members.push((current_plan.origin.clone(), current_plan.generation()));
             }
-            let zone_missing = !zones.contains_exact_zone_for_control(&owner_member.zone);
+            let zone_missing =
+                member_node_changed || !zones.contains_exact_zone_for_control(&owner_member.zone);
             if zone_missing {
                 loading_members.push(owner_member.zone.clone());
                 refresh_registry.record_loading_start(&owner_member.zone);
@@ -3302,6 +3341,7 @@ struct PreparedDnsMessage {
     notify_policy_token: Option<NotifyPolicyToken>,
 }
 
+#[derive(Clone)]
 struct ResponseTsig {
     key: Arc<TsigKey>,
     request_mac: Vec<u8>,
@@ -3479,30 +3519,6 @@ fn prepare_query_tsig_packet(
                 ..prepared
             };
         }
-        Err(error @ TsigError::UnsupportedAlgorithm(_)) => {
-            let question = match Question::parse(&prepared.packet) {
-                Ok(question) => question,
-                Err(_) => return prepared,
-            };
-            let Some(key) = message_tsig_owner_name(&prepared.packet)
-                .ok()
-                .flatten()
-                .and_then(|key_name| notify_authority.tsig_key_by_name(&key_name))
-            else {
-                return prepared;
-            };
-            return PreparedDnsMessage {
-                immediate_response: tsig_error_response(
-                    &prepared.packet,
-                    &header,
-                    &question,
-                    &key,
-                    &error,
-                    notify_authority.tsig_fudge_seconds,
-                ),
-                ..prepared
-            };
-        }
         Err(_) => return prepared,
     };
 
@@ -3511,17 +3527,27 @@ fn prepare_query_tsig_packet(
         Err(_) => return prepared,
     };
 
-    let Some(key) = notify_authority.tsig_key_by_name(&message_key.name) else {
-        let unsigned_error_key =
-            TsigKey::for_unsigned_error(message_key.name, message_key.algorithm);
+    if message_key.algorithm.is_none() {
         return PreparedDnsMessage {
-            immediate_response: tsig_error_response(
-                &prepared.packet,
+            immediate_response: unsigned_tsig_error_response(
                 &header,
                 &question,
-                &unsigned_error_key,
-                &TsigError::KeyMismatch,
+                &message_key,
                 notify_authority.tsig_fudge_seconds,
+                TSIG_ERROR_BADKEY,
+            ),
+            ..prepared
+        };
+    }
+
+    let Some(key) = notify_authority.tsig_key_by_name(&message_key.name) else {
+        return PreparedDnsMessage {
+            immediate_response: unsigned_tsig_error_response(
+                &header,
+                &question,
+                &message_key,
+                notify_authority.tsig_fudge_seconds,
+                TSIG_ERROR_BADKEY,
             ),
             ..prepared
         };
@@ -3557,7 +3583,7 @@ fn basic_error_response(packet: &[u8], header: &Header, rcode: Rcode) -> Option<
     let question = Question::parse(packet).ok();
     let mut response = Vec::new();
     response.extend_from_slice(&header.id.to_be_bytes());
-    response.extend_from_slice(&(0x8000u16 | (header.flags & 0x7800) | rcode as u16).to_be_bytes());
+    response.extend_from_slice(&(0x8000u16 | (header.flags & 0x7900) | rcode as u16).to_be_bytes());
     if let Some(question) = question {
         response.extend_from_slice(&1u16.to_be_bytes());
         response.extend_from_slice(&0u16.to_be_bytes());
@@ -3596,73 +3622,63 @@ fn tsig_error_response(
     error: &TsigError,
     tsig_fudge_seconds: u16,
 ) -> Option<Vec<u8>> {
+    if matches!(error, TsigError::MisplacedTsig | TsigError::MalformedTsig) {
+        return basic_error_response(packet, header, Rcode::FormErr);
+    }
+
     let now = tsig_time_signed();
-    let mut response = Vec::new();
-    response.extend_from_slice(&header.id.to_be_bytes());
-    response.extend_from_slice(
-        &(0x8000u16 | (header.flags & 0x7800) | Rcode::NotAuth as u16).to_be_bytes(),
-    );
-    response.extend_from_slice(&1u16.to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&question.qname.to_wire());
-    response.extend_from_slice(&question.qtype.to_be_bytes());
-    response.extend_from_slice(&question.qclass.to_be_bytes());
+    let response = tsig_notauth_response(header, question);
+    let request_data = message_tsig_request_data(packet).ok().flatten();
 
     match error {
-        TsigError::InvalidMac => append_unsigned_tsig_error(
-            &response,
-            key,
-            now,
-            tsig_fudge_seconds,
-            header.id,
-            TSIG_ERROR_BADSIG,
-            &[],
-        )
-        .ok(),
-        TsigError::BadTrunc => append_unsigned_tsig_error(
-            &response,
-            key,
-            now,
-            tsig_fudge_seconds,
-            header.id,
-            TSIG_ERROR_BADTRUNC,
-            &[],
-        )
-        .ok(),
-        TsigError::UnsupportedAlgorithm(_) => append_unsigned_tsig_error(
-            &response,
-            key,
-            now,
-            tsig_fudge_seconds,
-            header.id,
-            TSIG_ERROR_BADALG,
-            &[],
-        )
-        .ok(),
-        TsigError::MissingTsig | TsigError::KeyMismatch | TsigError::AlgorithmMismatch => {
-            append_unsigned_tsig_error(
-                &response,
-                key,
-                now,
+        TsigError::InvalidMac => request_data.as_ref().and_then(|request| {
+            unsigned_tsig_error_response(
+                header,
+                question,
+                &request.key,
                 tsig_fudge_seconds,
-                header.id,
-                TSIG_ERROR_BADKEY,
-                &[],
+                TSIG_ERROR_BADSIG,
             )
-            .ok()
-        }
-        TsigError::TimeOutsideFudge => {
-            let request_mac = extract_tsig_mac(packet).ok()?;
+        }),
+        TsigError::MissingTsig => Some(response),
+        TsigError::UnsupportedAlgorithm(_)
+        | TsigError::KeyMismatch
+        | TsigError::AlgorithmMismatch => request_data.as_ref().and_then(|request| {
+            unsigned_tsig_error_response(
+                header,
+                question,
+                &request.key,
+                tsig_fudge_seconds,
+                TSIG_ERROR_BADKEY,
+            )
+        }),
+        TsigError::BadTrunc => {
+            let request = request_data.as_ref()?;
             sign_tsig_error_response(
                 &response,
                 key,
                 TsigErrorResponseFields {
-                    request_mac: &request_mac,
-                    time_signed: now,
-                    fudge: tsig_fudge_seconds,
-                    original_id: header.id,
+                    request_mac: &request.mac,
+                    time_signed: request.time_signed,
+                    fudge: request.fudge,
+                    original_id: request.original_id,
+                    error: TSIG_ERROR_BADTRUNC,
+                    other_data: &[],
+                },
+            )
+            .ok()
+            .map(|signed| signed.message)
+        }
+        TsigError::TimeOutsideFudge => {
+            let request = request_data.as_ref()?;
+            sign_tsig_error_response(
+                &response,
+                key,
+                TsigErrorResponseFields {
+                    request_mac: &request.mac,
+                    time_signed: request.time_signed,
+                    fudge: request.fudge,
+                    original_id: request.original_id,
                     error: TSIG_ERROR_BADTIME,
                     other_data: &u48_bytes(now),
                 },
@@ -3672,6 +3688,41 @@ fn tsig_error_response(
         }
         _ => None,
     }
+}
+
+fn tsig_notauth_response(header: &Header, question: &Question) -> Vec<u8> {
+    let mut response = Vec::new();
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &(0x8000u16 | (header.flags & 0x7900) | Rcode::NotAuth as u16).to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&question.qname.to_wire());
+    response.extend_from_slice(&question.qtype.to_be_bytes());
+    response.extend_from_slice(&question.qclass.to_be_bytes());
+    response
+}
+
+fn unsigned_tsig_error_response(
+    header: &Header,
+    question: &Question,
+    key: &TsigMessageKey,
+    fudge: u16,
+    error: u16,
+) -> Option<Vec<u8>> {
+    append_unsigned_tsig_error_for_message_key(
+        &tsig_notauth_response(header, question),
+        key,
+        tsig_time_signed(),
+        fudge,
+        header.id,
+        error,
+        &[],
+    )
+    .ok()
 }
 
 fn u48_bytes(value: u64) -> Vec<u8> {
@@ -3699,6 +3750,61 @@ fn sign_tsig_response(
             response_tsig.fudge_seconds,
         )?
         .message)
+}
+
+fn sign_udp_tsig_response(
+    response: Vec<u8>,
+    response_tsig: Option<ResponseTsig>,
+    udp_ceiling: usize,
+) -> Result<Vec<u8>, TsigError> {
+    let Some(response_tsig) = response_tsig else {
+        return Ok(response);
+    };
+
+    let time_signed = tsig_time_signed();
+    let signed = response_tsig.key.sign_response(
+        &response,
+        &response_tsig.request_mac,
+        time_signed,
+        response_tsig.fudge_seconds,
+    )?;
+    if signed.message.len() <= udp_ceiling {
+        return Ok(signed.message);
+    }
+
+    let truncated = tsig_udp_truncated_response(&response)?;
+    let signed = response_tsig.key.sign_response(
+        &truncated,
+        &response_tsig.request_mac,
+        time_signed,
+        response_tsig.fudge_seconds,
+    )?;
+    if signed.message.len() > udp_ceiling {
+        return Err(TsigError::MalformedMessage);
+    }
+    Ok(signed.message)
+}
+
+fn tsig_udp_truncated_response(response: &[u8]) -> Result<Vec<u8>, TsigError> {
+    let header = Header::parse(response).map_err(|_| TsigError::MalformedMessage)?;
+    let question = if header.qdcount == 1 {
+        Some(Question::parse(response).map_err(|_| TsigError::MalformedMessage)?)
+    } else {
+        None
+    };
+    let mut truncated = Vec::new();
+    truncated.extend_from_slice(&header.id.to_be_bytes());
+    truncated.extend_from_slice(&((header.flags & !0x000f) | 0x0200).to_be_bytes());
+    truncated.extend_from_slice(&u16::from(question.is_some()).to_be_bytes());
+    truncated.extend_from_slice(&0u16.to_be_bytes());
+    truncated.extend_from_slice(&0u16.to_be_bytes());
+    truncated.extend_from_slice(&0u16.to_be_bytes());
+    if let Some(question) = question {
+        truncated.extend_from_slice(&question.qname.to_wire());
+        truncated.extend_from_slice(&question.qtype.to_be_bytes());
+        truncated.extend_from_slice(&question.qclass.to_be_bytes());
+    }
+    Ok(truncated)
 }
 
 #[derive(Debug, Clone)]
@@ -4008,7 +4114,8 @@ fn signal_notify_refresh(
         notify_refresh_tx
             .try_send(
                 RefreshRequest::new(qname.clone(), soa_serial, RefreshReason::Notify)
-                    .with_notify_dedup_token(token),
+                    .with_notify_dedup_token(token)
+                    .with_preferred_primary_ip(source),
             )
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => mpsc::error::TrySendError::Full(()),
@@ -4886,28 +4993,6 @@ async fn serve_refresh_requests(
                     return request_key;
                 };
 
-                if notify_serial_is_current(&zones, &request) {
-                    let zone = &request.zone;
-                    if let Some(metadata) = zones.exact_zone_control_metadata(zone)
-                        && !record_attempt_success_if_current_plan(
-                            &mut attempt,
-                            &catalog_runtime.transfer_plan,
-                            &plan,
-                            &metadata,
-                        )
-                    {
-                        return request_key;
-                    }
-                    info!(
-                        zone = %zone,
-                        requested_serial = ?request.requested_serial,
-                        action = "refresh_skipped_current",
-                        "NOTIFY serial is not newer than active zone"
-                    );
-                    attempt.finish();
-                    return request_key;
-                }
-
                 let Some(transfer_permit) = acquire_transfer_permit_for_current_plan(
                     &catalog_runtime.transfer_plan,
                     &plan,
@@ -4928,10 +5013,11 @@ async fn serve_refresh_requests(
                 let outcome = tokio::select! {
                     biased;
                     () = plan.cancelled() => RefreshZoneOutcome::obsolete(),
-                    outcome = refresh_zone_from_primaries_with_outcome(
+                    outcome = refresh_zone_from_primaries_with_outcome_preferring(
                         &zones,
                         &plan,
                         request.requested_serial,
+                        request.preferred_primary_ip,
                         &catalog_runtime.manager,
                         RefreshAttemptContext {
                             ixfr_cooldowns: &ixfr_cooldowns,
@@ -5546,25 +5632,6 @@ fn log_loading_warning(warning: LoadingWarning) {
     );
 }
 
-fn notify_serial_is_current(zones: &ZoneStore, request: &RefreshRequest) -> bool {
-    let Some(requested_serial) = request.requested_serial else {
-        return false;
-    };
-    let Some(metadata) = zones.exact_zone_control_metadata(&request.zone) else {
-        return false;
-    };
-    if metadata.state != ZoneState::Active {
-        // A same/older serial confirms content freshness, but an EXPIRED zone
-        // still needs the refresh path's identity-checked reactivation step.
-        return false;
-    }
-    let Some(current_serial) = metadata.serial else {
-        return false;
-    };
-
-    !serial_after(requested_serial, current_serial)
-}
-
 fn serial_after(candidate: u32, current: u32) -> bool {
     candidate != current && candidate.wrapping_sub(current) < 0x8000_0000
 }
@@ -5730,10 +5797,54 @@ async fn refresh_zone_metadata_from_primaries(
     })
 }
 
+#[cfg(test)]
+async fn refresh_zone_metadata_from_primaries_preferring(
+    zones: &ZoneStore,
+    plan: &ZoneTransferPlan,
+    primary_serial_hint: Option<u32>,
+    preferred_primary_ip: IpAddr,
+    context: RefreshAttemptContext<'_>,
+) -> Option<ZoneMetadata> {
+    let catalog_manager = CatalogManager::default();
+    let outcome = refresh_zone_from_primaries_with_outcome_preferring(
+        zones,
+        plan,
+        primary_serial_hint,
+        Some(preferred_primary_ip),
+        &catalog_manager,
+        context,
+    )
+    .await;
+    outcome.success.map(|success| match success {
+        RefreshZoneSuccess::Current(metadata) | RefreshZoneSuccess::Updated { metadata, .. } => {
+            metadata
+        }
+    })
+}
+
 async fn refresh_zone_from_primaries_with_outcome(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
+    catalog_manager: &CatalogManager,
+    context: RefreshAttemptContext<'_>,
+) -> RefreshZoneOutcome {
+    refresh_zone_from_primaries_with_outcome_preferring(
+        zones,
+        plan,
+        primary_serial_hint,
+        None,
+        catalog_manager,
+        context,
+    )
+    .await
+}
+
+async fn refresh_zone_from_primaries_with_outcome_preferring(
+    zones: &ZoneStore,
+    plan: &ZoneTransferPlan,
+    primary_serial_hint: Option<u32>,
+    preferred_primary_ip: Option<IpAddr>,
     catalog_manager: &CatalogManager,
     context: RefreshAttemptContext<'_>,
 ) -> RefreshZoneOutcome {
@@ -5753,6 +5864,7 @@ async fn refresh_zone_from_primaries_with_outcome(
             zones,
             plan,
             primary_serial_hint,
+            preferred_primary_ip,
             catalog_manager,
             context,
             snapshot,
@@ -5763,7 +5875,8 @@ async fn refresh_zone_from_primaries_with_outcome(
 async fn refresh_zone_from_primaries_with_snapshot(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
-    primary_serial_hint: Option<u32>,
+    _notify_serial_hint: Option<u32>,
+    preferred_primary_ip: Option<IpAddr>,
     catalog_manager: &CatalogManager,
     context: RefreshAttemptContext<'_>,
     secret_snapshot: Arc<secret_store::SecretSnapshot>,
@@ -5774,67 +5887,17 @@ async fn refresh_zone_from_primaries_with_snapshot(
     let mut last_failure_cause = None;
     let transfer_ingest_budget = context.transfer_plan.ingest_budget();
 
-    if let (Some(current_serial), Some(primary_serial)) = (current_serial, primary_serial_hint) {
-        if !serial_after(primary_serial, current_serial) {
-            info!(
-                zone = %plan.origin,
-                current_serial,
-                primary_serial,
-                reason = %context.reason,
-                "SOA serial hint confirmed zone current"
-            );
-            match confirm_current_zone_for_serial_with_secret(
-                zones,
-                &context.transfer_plan,
-                &context.secrets,
-                plan,
-                &secret_snapshot,
-                current_serial,
-            ) {
-                Ok(metadata) => {
-                    return RefreshZoneOutcome::current(metadata);
-                }
-                Err(CurrentZoneConfirmationError::Obsolete) => {
-                    warn!(
-                        zone = %plan.origin,
-                        reason = %context.reason,
-                        "SOA serial hint current result discarded because zone no longer has the same transfer plan"
-                    );
-                    return RefreshZoneOutcome::obsolete();
-                }
-                Err(CurrentZoneConfirmationError::Missing) => {
-                    warn!(
-                        zone = %plan.origin,
-                        reason = %context.reason,
-                        "current zone disappeared after SOA serial hint"
-                    );
-                }
-                Err(CurrentZoneConfirmationError::PublicationFailed(error)) => {
-                    warn!(
-                        zone = %plan.origin,
-                        reason = %context.reason,
-                        %error,
-                        "failed to reactivate current zone after SOA serial hint"
-                    );
-                }
-            }
-            warn!(
-                zone = %plan.origin,
-                reason = %context.reason,
-                "SOA serial hint matched a zone that is no longer present; continuing refresh"
-            );
-        } else {
-            info!(
-                zone = %plan.origin,
-                current_serial,
-                primary_serial,
-                reason = %context.reason,
-                "SOA serial hint found newer primary serial"
-            );
-        }
-    }
+    let primaries = plan
+        .primaries
+        .iter()
+        .filter(|primary| {
+            preferred_primary_ip.is_some_and(|preferred| primary.addr.ip() == preferred)
+        })
+        .chain(plan.primaries.iter().filter(|primary| {
+            preferred_primary_ip.is_none_or(|preferred| primary.addr.ip() != preferred)
+        }));
 
-    'primary: for configured_primary in &plan.primaries {
+    'primary: for configured_primary in primaries {
         let credentials = match resolve_transfer_credentials_from_snapshot(
             configured_primary,
             plan,
@@ -5861,10 +5924,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
         let primary = primary_target.addr;
         let transfer_source = plan.transfer_source_for(primary);
 
-        if primary_target.transport == TransferTransportConfig::Tcp
-            && primary_serial_hint.is_none()
-            && let Some(current_serial) = current_serial
-        {
+        if let Some(current_serial) = current_serial {
             let qid = match transfer_query_id() {
                 Ok(qid) => qid,
                 Err(error) => {
@@ -5880,14 +5940,16 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     continue;
                 }
             };
-            match poll_soa_from_primary_with_tsig_and_source(
-                primary,
+            match poll_soa_from_target_with_tsig_and_source(
+                &primary_target,
                 &plan.origin,
                 plan.qclass,
                 qid,
                 TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 transfer_source,
+                primary_target.xot_client_config.as_ref(),
                 context.axfr_timeout,
+                context.tcp_connect_timeout,
             )
             .await
             {

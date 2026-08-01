@@ -533,8 +533,8 @@
     }
 
     #[test]
-    fn parses_custom_edns_padding_block_size() {
-        let config = ServerConfig::from_toml_str(
+    fn rejects_edns_padding_without_encrypted_query_listener() {
+        let error = ServerConfig::from_toml_str(
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
@@ -547,9 +547,11 @@
                 primaries = ["192.0.2.53:53"]
             "#,
         )
-        .expect("valid config");
+        .expect_err("plaintext-only query listeners cannot emit RFC 7830 padding");
 
-        assert_eq!(config.limits.edns_padding_block_size, 128);
+        let rendered = error.to_string();
+        assert!(rendered.contains("edns_padding_block_size"));
+        assert!(rendered.contains("encrypted DNS query transport"));
     }
 
     #[test]

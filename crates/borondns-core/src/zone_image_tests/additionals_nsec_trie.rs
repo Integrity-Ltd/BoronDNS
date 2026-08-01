@@ -102,7 +102,7 @@
     }
 
     #[test]
-    fn referral_glue_uses_precomputed_delegation_filtered_spans() {
+    fn referral_glue_uses_precomputed_in_zone_target_spans() {
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let child = DomainName::from_absolute_str("child.example.test.").unwrap();
         let child_ns = DomainName::from_absolute_str("ns.child.example.test.").unwrap();
@@ -148,11 +148,13 @@
             .precomputed_referral_glue_rrsets(ns_rrset)
             .collect::<Vec<_>>();
 
-        assert_eq!(glue.len(), 1);
-        assert_eq!(
-            image.rrset_owner_wire(glue[0]).expect("glue owner wire"),
-            name_rdata("ns.child.example.test.").as_slice()
-        );
+        assert_eq!(glue.len(), 2);
+        let glue_owners = glue
+            .iter()
+            .map(|rrset| image.rrset_owner_wire(*rrset).expect("glue owner wire"))
+            .collect::<Vec<_>>();
+        assert!(glue_owners.contains(&name_rdata("ns.child.example.test.").as_slice()));
+        assert!(glue_owners.contains(&name_rdata("ns.sibling.example.test.").as_slice()));
 
         let plan = image.lookup_response_plan(
             &qname,
@@ -166,7 +168,7 @@
     }
 
     #[test]
-    fn referral_glue_delegation_owner_filter_uses_stored_wire() {
+    fn referral_glue_sibling_classification_uses_stored_wire() {
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let child = DomainName::from_absolute_str("CHILD.Example.TEST.").unwrap();
         let child_ns = DomainName::from_absolute_str("ns.child.example.test.").unwrap();
@@ -240,15 +242,17 @@
             &trailing,
             child.label_count(),
         ));
-        assert_eq!(glue.len(), 1);
-        assert_eq!(
-            image.rrset_owner_wire(glue[0]).expect("glue owner wire"),
-            child_ns.to_wire().as_slice()
-        );
+        assert_eq!(glue.len(), 2);
+        let glue_owners = glue
+            .iter()
+            .map(|rrset| image.rrset_owner_wire(*rrset).expect("glue owner wire"))
+            .collect::<Vec<_>>();
+        assert!(glue_owners.contains(&child_ns.to_wire().as_slice()));
+        assert!(glue_owners.contains(&sibling_ns_wire.as_slice()));
     }
 
     #[test]
-    fn nsec_covering_lookup_uses_precomputed_range_keys() {
+    fn incomplete_nsec_chain_is_not_used_for_denial() {
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let owner = DomainName::from_absolute_str("a.example.test.").unwrap();
         let covered = DomainName::from_absolute_str("M.Example.TEST.").unwrap();
@@ -275,7 +279,7 @@
         assert_eq!(image.stats().nsec_range_group_count, 1);
         assert_eq!(image.stats().nsec_indexed_range_group_count, 0);
         assert_eq!(image.nsec_ranges[0].rrset_id, nsec);
-        assert_eq!(image.nsec_rrset_covering_name(&covered, 1), Some(nsec));
+        assert_eq!(image.nsec_rrset_covering_name(&covered, 1), None);
     }
 
     #[test]
@@ -406,7 +410,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![name_rdata("z.example.test.")],
+                    vec![name_rdata("a.example.test.")],
                 ),
             ],
         );
@@ -525,24 +529,46 @@
         let owner = DomainName::from_absolute_str(&format!("{owner_hash}.example.test.")).unwrap();
         let other_owner =
             DomainName::from_absolute_str(&format!("{other_owner_hash}.example.test.")).unwrap();
+        let owner_hash_bytes = base32hex_sha1_no_padding_decode_lower(owner_hash.as_bytes())
+            .expect("owner hash decodes");
+        let other_owner_hash_bytes =
+            base32hex_sha1_no_padding_decode_lower(other_owner_hash.as_bytes())
+                .expect("other owner hash decodes");
         let snapshot = ZoneSnapshot::active(
             origin.clone(),
             Some(53),
             vec![
-                Rrset::new(origin, RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(
+                    origin,
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![vec![1, 0, 0, 0, 0]],
+                ),
                 Rrset::new(
                     owner.clone(),
                     RecordType::Nsec3 as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_next_hash(1, 0, &[], &[0x80; 20])],
+                    vec![nsec3_rdata_with_next_hash(
+                        1,
+                        0,
+                        &[],
+                        &other_owner_hash_bytes,
+                    )],
                 ),
                 Rrset::new(
                     other_owner.clone(),
                     RecordType::Nsec3 as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_next_hash(1, 0, &[], &[0x80; 20])],
+                    vec![nsec3_rdata_with_next_hash(
+                        1,
+                        0,
+                        &[],
+                        &owner_hash_bytes,
+                    )],
                 ),
             ],
         );
@@ -555,7 +581,7 @@
         assert_eq!(image.nsec3_ranges.len(), 2);
         assert_eq!(image.nsec3_param_sets.len(), 1);
         assert_eq!(image.stats().nsec3_range_group_count, 1);
-        assert_eq!(image.stats().nsec3_indexed_range_group_count, 0);
+        assert_eq!(image.stats().nsec3_indexed_range_group_count, 1);
         assert!(
             image.nsec3_ranges.iter().all(|range| range.param_set == 0),
             "NSEC3 ranges with shared algorithm/iterations/salt should share one parameter set"
@@ -603,10 +629,6 @@
                 &mut iterations_exceeded,
                 100,
             ),
-            Some(nsec3)
-        );
-        assert_eq!(
-            image.nsec3_rrset_for_wire_name(&qname.to_wire(), 1, &mut iterations_exceeded, 100),
             Some(nsec3)
         );
         assert!(!iterations_exceeded);

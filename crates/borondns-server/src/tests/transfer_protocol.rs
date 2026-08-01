@@ -99,6 +99,63 @@ async fn signed_axfr_completes_on_tsig_only_message_after_unsigned_terminating_s
 }
 
 #[tokio::test]
+async fn signed_axfr_authenticates_error_response_before_using_rcode() {
+    let primary = spawn_unsigned_transfer_error_primary(RecordType::Axfr, 5).await;
+    let target = TransferPrimaryConfig::tcp(primary);
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+    let error = super::transfer_axfr_from_target_with_tsig(
+        &target,
+        &apex,
+        1,
+        0x1234,
+        TransferSession::new(
+            TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
+            DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT,
+        ),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect_err("unsigned REFUSED must not be accepted as an authenticated AXFR result");
+
+    assert!(matches!(
+        error,
+        TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
+    ), "unexpected AXFR error: {error:?}");
+}
+
+#[tokio::test]
+async fn signed_ixfr_authenticates_error_response_before_using_rcode() {
+    let primary = spawn_unsigned_transfer_error_primary(RecordType::Ixfr, 5).await;
+    let target = TransferPrimaryConfig::tcp(primary);
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let current_zone = current_zone_with_serial(&apex, 1);
+    let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+    let error = super::transfer_ixfr_from_target_with_tsig(
+        &target,
+        &apex,
+        1,
+        0x1234,
+        &current_zone,
+        TransferSession::new(
+            TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
+            DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT,
+        ),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect_err("unsigned REFUSED must not be accepted as an authenticated IXFR result");
+
+    assert!(matches!(
+        error,
+        TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
+    ), "unexpected IXFR error: {error:?}");
+}
+
+#[tokio::test]
 async fn tcp_connect_timeout_abandons_pending_connect_attempt() {
     let primary = "192.0.2.53:53".parse().unwrap();
     let error = super::tcp_connect_with_timeout(
@@ -141,7 +198,7 @@ async fn transfer_axfr_enforces_ingestion_size_cap() {
 
 #[tokio::test]
 async fn transfer_ixfr_from_primary_accepts_mode2_axfr_fallback() {
-    let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
+    let primary = spawn_ixfr_mode2_transfer_primary_with_serial(2).await;
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let current_soa = record(
         "example.test.",
@@ -191,7 +248,7 @@ async fn transfer_ixfr_from_primary_accepts_mode2_axfr_fallback() {
 
 #[tokio::test]
 async fn transfer_ixfr_enforces_ingestion_size_cap() {
-    let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
+    let primary = spawn_ixfr_mode2_transfer_primary_with_serial(2).await;
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let current_zone = current_zone_with_serial(&apex, 1);
     let target = TransferPrimaryConfig::tcp(primary);
@@ -613,12 +670,12 @@ async fn concurrent_soa_polls_use_distinct_ephemeral_source_ports() {
 }
 
 #[tokio::test]
-async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
-    let primary = spawn_soa_primary_with_serial(7).await;
+async fn poll_soa_from_primary_discards_unsigned_response_then_accepts_signed_response() {
+    let primary = spawn_invalid_then_signed_soa_primary(7, false).await;
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
 
-    let error = poll_soa_from_primary_with_tsig(
+    let serial = poll_soa_from_primary_with_tsig(
         primary,
         &apex,
         1,
@@ -627,16 +684,13 @@ async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
         std::time::Duration::from_secs(5),
     )
     .await
-    .expect_err("unsigned response must fail");
+    .expect("unsigned response must be discarded while waiting for a signed response");
 
-    assert!(matches!(
-        error,
-        super::TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
-    ));
+    assert_eq!(serial, 7);
 }
 
 #[tokio::test]
-async fn signed_soa_poll_retries_udp_tc_over_tcp_before_tsig_verification() {
+async fn signed_soa_poll_verifies_udp_tc_before_tcp_retry() {
     let primary = spawn_truncated_udp_tcp_soa_primary(7).await;
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
@@ -651,6 +705,26 @@ async fn signed_soa_poll_retries_udp_tc_over_tcp_before_tsig_verification() {
     )
     .await
     .expect("UDP TC response should retry the SOA poll over TCP");
+
+    assert_eq!(serial, 7);
+}
+
+#[tokio::test]
+async fn signed_soa_poll_discards_unsigned_udp_tc_without_tcp_retry() {
+    let primary = spawn_invalid_then_signed_soa_primary(7, true).await;
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+    let serial = poll_soa_from_primary_with_tsig(
+        primary,
+        &apex,
+        1,
+        0x1234,
+        TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect("unsigned TC must be discarded before the signed UDP response");
 
     assert_eq!(serial, 7);
 }

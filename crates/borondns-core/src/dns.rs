@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    fmt,
+    hash::Hasher,
+    net::IpAddr,
+};
 
 use siphasher::sip::SipHasher24;
 use smallvec::SmallVec;
@@ -6,7 +12,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    zone::{PublishedZoneView, ResourceRecord, Rrset, ZoneState, ZoneStore},
+    zone::{PublishedZone, PublishedZoneView, ResourceRecord, Rrset, ZoneState, ZoneStore},
     zone_image::{
         PackedRdataEncoding, ZoneImage, ZoneImageLookupPlan, ZoneImagePlanResponseShape,
         ZoneImageWireRecord,
@@ -269,7 +275,7 @@ impl DomainName {
         let mut labels = Vec::new();
         let mut pos = offset;
         let mut consumed = None;
-        let mut visited_pointers = SmallVec::<[usize; 4]>::new();
+        let mut followed_pointers = 0usize;
         let mut total_len = 1usize;
         let mut ascii_lowercase = true;
 
@@ -284,13 +290,13 @@ impl DomainName {
                         return Err(DnsParseError::FormErr);
                     };
                     let pointer = (((len & 0x3f) as usize) << 8) | next as usize;
-                    if pointer >= packet.len() || visited_pointers.contains(&pointer) {
+                    if pointer >= pos {
                         return Err(DnsParseError::FormErr);
                     }
-                    if visited_pointers.len() >= MAX_COMPRESSED_NAME_POINTERS {
+                    if followed_pointers >= MAX_COMPRESSED_NAME_POINTERS {
                         return Err(DnsParseError::FormErr);
                     }
-                    visited_pointers.push(pointer);
+                    followed_pointers += 1;
                     consumed.get_or_insert_with(|| pos + 2 - offset);
                     pos = pointer;
                 }
@@ -538,18 +544,7 @@ impl DomainName {
     }
 
     pub fn canonical_key(&self) -> String {
-        if self.labels.is_empty() {
-            return ".".to_owned();
-        }
-
-        let mut key = String::new();
-        for label in &self.labels {
-            for byte in label {
-                key.push(byte.to_ascii_lowercase() as char);
-            }
-            key.push('.');
-        }
-        key
+        canonical_name_key_from_labels(self.labels.iter().map(Vec::as_slice))
     }
 
     pub(crate) fn to_ascii_lowercased(&self) -> Self {
@@ -594,6 +589,31 @@ impl DomainName {
     }
 }
 
+pub(crate) fn canonical_name_key_from_labels<'a>(
+    labels: impl IntoIterator<Item = &'a [u8]>,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut key = String::new();
+    for label in labels {
+        for byte in label {
+            let byte = byte.to_ascii_lowercase();
+            match byte {
+                b'\\' | b'.' | 0x00..=0x20 | 0x7f..=0xff => {
+                    write!(key, "\\{byte:03}")
+                        .expect("formatting a canonical DNS name key cannot fail");
+                }
+                byte => key.push(byte as char),
+            }
+        }
+        key.push('.');
+    }
+    if key.is_empty() {
+        key.push('.');
+    }
+    key
+}
+
 fn skip_compressed_name(packet: &[u8], offset: usize) -> Result<usize, DnsParseError> {
     scan_compressed_name(packet, offset, None).map(|scan| scan.consumed)
 }
@@ -612,7 +632,7 @@ fn scan_compressed_name(
 ) -> Result<CompressedNameScan, DnsParseError> {
     let mut pos = offset;
     let mut consumed = None;
-    let mut visited_pointers = SmallVec::<[usize; 4]>::new();
+    let mut followed_pointers = 0usize;
     let mut total_len = 1usize;
     let mut label_count = 0usize;
     let mut matches_expected = true;
@@ -628,13 +648,13 @@ fn scan_compressed_name(
                     return Err(DnsParseError::FormErr);
                 };
                 let pointer = (((len & 0x3f) as usize) << 8) | next as usize;
-                if pointer >= packet.len() || visited_pointers.contains(&pointer) {
+                if pointer >= pos {
                     return Err(DnsParseError::FormErr);
                 }
-                if visited_pointers.len() >= MAX_COMPRESSED_NAME_POINTERS {
+                if followed_pointers >= MAX_COMPRESSED_NAME_POINTERS {
                     return Err(DnsParseError::FormErr);
                 }
-                visited_pointers.push(pointer);
+                followed_pointers += 1;
                 consumed.get_or_insert_with(|| pos + 2 - offset);
                 pos = pointer;
             }
@@ -818,6 +838,8 @@ pub enum AnyResponseMode {
 pub enum Transport {
     Udp,
     Tcp,
+    /// DNS over an authenticated encrypted stream transport, such as TLS.
+    Tls,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1104,6 +1126,9 @@ fn answer_query_message(
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
+    if header.qdcount == 0 {
+        return answer_empty_question_cookie_query(header, packet, options);
+    }
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
             header,
@@ -1151,6 +1176,19 @@ fn answer_query_message(
                 options,
             ));
         }
+        Err(EdnsError::FormErrWithMetadata(metadata)) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                Some(&question),
+                &[],
+                &[],
+                &[],
+                metadata,
+                options,
+            ));
+        }
         Err(EdnsError::BadVers(metadata)) => {
             return DatagramAction::Respond(build_response(
                 header,
@@ -1165,6 +1203,20 @@ fn answer_query_message(
             ));
         }
     };
+
+    if metadata.has_malformed_tcp_keepalive(options.transport) {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
 
     if dns_cookie_requires_badcookie(metadata, options) {
         return DatagramAction::Respond(build_response(
@@ -1212,9 +1264,10 @@ fn answer_query_message(
         ));
     }
 
-    let Some(action) = zone_store.with_published_zone_with_ascii_lowercase_hint(
+    let Some(action) = zone_store.with_published_zone_for_query_with_ascii_lowercase_hint(
         &question.qname,
         question.qname_ascii_lowercase(),
+        question.qtype == RecordType::Ds as u16,
         |published_zone| {
             if published_zone.state() != ZoneState::Active {
                 return DatagramAction::Respond(build_response(
@@ -1235,6 +1288,7 @@ fn answer_query_message(
                 metadata,
                 options,
                 query_observer,
+                zone_store,
                 zone_image_provider,
                 &published_zone,
             ) {
@@ -1263,17 +1317,131 @@ fn answer_query_message(
     action
 }
 
+fn answer_empty_question_cookie_query(
+    header: &Header,
+    packet: &[u8],
+    options: AnswerOptions,
+) -> DatagramAction {
+    let metadata = match RequestMetadata::parse_without_question(header, packet) {
+        Ok(metadata) => metadata,
+        Err(EdnsError::FormErr) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                None,
+                &[],
+                &[],
+                &[],
+                RequestMetadata::empty(),
+                options,
+            ));
+        }
+        Err(EdnsError::FormErrWithMetadata(metadata)) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                None,
+                &[],
+                &[],
+                &[],
+                metadata,
+                options,
+            ));
+        }
+        Err(EdnsError::BadVers(metadata)) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::NoError,
+                false,
+                None,
+                &[],
+                &[],
+                &[],
+                metadata.with_extended_rcode(16),
+                options,
+            ));
+        }
+    };
+
+    if metadata.has_malformed_tcp_keepalive(options.transport) {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            None,
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
+
+    let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            None,
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    };
+    let Some(context) = options.dns_cookie else {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            None,
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    };
+
+    let rcode = if cookie.server.is_some() && !dns_server_cookie_is_valid(cookie, context) {
+        Rcode::BadCookie
+    } else {
+        Rcode::NoError
+    };
+    let metadata = if rcode == Rcode::BadCookie {
+        metadata.with_extended_rcode(Rcode::BadCookie as u16)
+    } else {
+        metadata
+    };
+    DatagramAction::Respond(build_response(
+        header,
+        rcode,
+        false,
+        None,
+        &[],
+        &[],
+        &[],
+        metadata,
+        options,
+    ))
+}
+
 enum ZoneImageAnswerAttempt {
     Respond(Vec<u8>),
     Failure(ZoneImageServeFailureReason),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_answer_with_zone_image(
     header: &Header,
     question: &Question,
     metadata: RequestMetadata,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
+    zone_store: &ZoneStore,
     zone_image_provider: ZoneImageProvider<'_>,
     published_zone: &dyn PublishedZoneView,
 ) -> ZoneImageAnswerAttempt {
@@ -1329,6 +1497,22 @@ fn try_answer_with_zone_image(
     } else {
         plan
     };
+    if plan.indirection_continuation().is_some()
+        && let Some(attempt) = try_answer_across_published_zone_images(
+            header,
+            question,
+            metadata,
+            options,
+            query_observer,
+            zone_store,
+            zone_image_provider,
+            published_zone,
+            image,
+            plan.clone(),
+        )
+    {
+        return attempt;
+    }
     let mut metadata = metadata;
     let response_sizing = if plan.nsec3_iterations_exceeded() {
         metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
@@ -1354,6 +1538,213 @@ fn try_answer_with_zone_image(
     };
     query_observer.observe_zone_image_plan(&plan, false);
     ZoneImageAnswerAttempt::Respond(response)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_answer_across_published_zone_images(
+    header: &Header,
+    question: &Question,
+    mut metadata: RequestMetadata,
+    options: AnswerOptions,
+    query_observer: &impl AnswerQueryObserver,
+    zone_store: &ZoneStore,
+    zone_image_provider: ZoneImageProvider<'_>,
+    initial_published_zone: &dyn PublishedZoneView,
+    initial_image: &ZoneImage,
+    initial_plan: ZoneImageLookupPlan,
+) -> Option<ZoneImageAnswerAttempt> {
+    let (first_target, first_remaining) = initial_plan.indirection_continuation()?;
+    let mut target = first_target.clone();
+    let mut remaining = first_remaining;
+    let mut current_origin_key = initial_published_zone.origin_key().to_owned();
+    let mut visited_names = HashSet::from([question.qname.canonical_key()]);
+    let mut child_stages = Vec::<(PublishedZone, ZoneImageLookupPlan)>::new();
+    let dnssec_requested = metadata.dnssec_requested();
+
+    loop {
+        if !visited_names.insert(target.canonical_key()) {
+            if let Some((_, plan)) = child_stages.last_mut() {
+                *plan = plan.clone().into_servfail(LookupTermination::CnameLoop);
+            } else {
+                return Some(ZoneImageAnswerAttempt::Failure(
+                    ZoneImageServeFailureReason::ResponseBuildFailed,
+                ));
+            }
+            break;
+        }
+
+        let Some(published_zone) = zone_store.find_published_zone(&target) else {
+            break;
+        };
+        if published_zone.state() != ZoneState::Active
+            || published_zone.origin_key() == current_origin_key
+        {
+            break;
+        }
+
+        let image = zone_image_provider(&published_zone);
+        let mut plan = image.lookup_response_plan(
+            &target,
+            question.qtype,
+            question.qclass,
+            remaining,
+            options.any_response,
+        );
+        if dnssec_requested {
+            plan = image.augment_lookup_plan_with_dnssec(
+                plan,
+                &target,
+                question.qclass,
+                options.nsec3_max_iterations,
+            );
+        }
+
+        let continuation = plan
+            .indirection_continuation()
+            .map(|(next_target, next_remaining)| (next_target.clone(), next_remaining));
+        current_origin_key = published_zone.origin_key().to_owned();
+        child_stages.push((published_zone, plan));
+        let Some((next_target, next_remaining)) = continuation else {
+            break;
+        };
+        target = next_target;
+        remaining = next_remaining;
+    }
+
+    // No separately served target was found. The original zone's partial alias
+    // chain is still the complete authoritative answer.
+    if child_stages.is_empty() {
+        return None;
+    }
+
+    let mut answers = Vec::new();
+    let mut authorities = Vec::new();
+    let mut additionals = Vec::new();
+    if !append_zone_image_plan_answers(initial_image, &initial_plan, &mut answers) {
+        return Some(ZoneImageAnswerAttempt::Failure(
+            ZoneImageServeFailureReason::ResponseBuildFailed,
+        ));
+    }
+
+    for (index, (published_zone, plan)) in child_stages.iter().enumerate() {
+        let image = zone_image_provider(published_zone);
+        let is_final = index + 1 == child_stages.len();
+        let converted = if is_final {
+            append_zone_image_plan_sections(
+                image,
+                plan,
+                &mut answers,
+                &mut authorities,
+                &mut additionals,
+            )
+        } else {
+            append_zone_image_plan_answers(image, plan, &mut answers)
+        };
+        if !converted {
+            return Some(ZoneImageAnswerAttempt::Failure(
+                ZoneImageServeFailureReason::ResponseBuildFailed,
+            ));
+        }
+    }
+
+    let (_, final_plan) = child_stages.last().expect("non-empty child stages");
+    if initial_plan.nsec3_iterations_exceeded()
+        || child_stages
+            .iter()
+            .any(|(_, plan)| plan.nsec3_iterations_exceeded())
+    {
+        metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
+    }
+    if answers.len() > usize::from(u16::MAX)
+        || authorities.len() > usize::from(u16::MAX)
+        || additionals
+            .len()
+            .saturating_add(usize::from(metadata.edns.is_some()))
+            > usize::from(u16::MAX)
+    {
+        return Some(ZoneImageAnswerAttempt::Failure(
+            ZoneImageServeFailureReason::ResponseBuildFailed,
+        ));
+    }
+
+    let response = build_response(
+        header,
+        final_plan.rcode(),
+        initial_plan.authoritative(),
+        Some(question),
+        &answers,
+        &authorities,
+        &additionals,
+        metadata,
+        options,
+    );
+    query_observer.observe_zone_image_plan(final_plan, false);
+    Some(ZoneImageAnswerAttempt::Respond(response))
+}
+
+fn append_zone_image_plan_answers(
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    answers: &mut Vec<ResourceRecord>,
+) -> bool {
+    let valid = Cell::new(true);
+    image.visit_plan_record_sections(
+        plan,
+        |record| match zone_image_wire_record_to_resource_record(record) {
+            Some(record) => answers.push(record),
+            None => valid.set(false),
+        },
+        |_| {},
+        |_| {},
+    );
+    valid.get()
+}
+
+fn append_zone_image_plan_sections(
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    answers: &mut Vec<ResourceRecord>,
+    authorities: &mut Vec<ResourceRecord>,
+    additionals: &mut Vec<ResourceRecord>,
+) -> bool {
+    let valid = Cell::new(true);
+    image.visit_plan_record_sections(
+        plan,
+        |record| match zone_image_wire_record_to_resource_record(record) {
+            Some(record) => answers.push(record),
+            None => valid.set(false),
+        },
+        |record| match zone_image_wire_record_to_resource_record(record) {
+            Some(record) => authorities.push(record),
+            None => valid.set(false),
+        },
+        |record| match zone_image_wire_record_to_resource_record(record) {
+            Some(record) => additionals.push(record),
+            None => valid.set(false),
+        },
+    );
+    valid.get()
+}
+
+fn zone_image_wire_record_to_resource_record(
+    record: ZoneImageWireRecord<'_>,
+) -> Option<ResourceRecord> {
+    let (owner, consumed) = DomainName::parse(record.owner_wire, 0).ok()?;
+    if consumed != record.owner_wire.len() {
+        return None;
+    }
+    Some(ResourceRecord {
+        owner,
+        rr_type: u16::from_be_bytes([record.fixed_fields[0], record.fixed_fields[1]]),
+        class: u16::from_be_bytes([record.fixed_fields[2], record.fixed_fields[3]]),
+        ttl: u32::from_be_bytes([
+            record.fixed_fields[4],
+            record.fixed_fields[5],
+            record.fixed_fields[6],
+            record.fixed_fields[7],
+        ]),
+        rdata: record.rdata.to_vec(),
+    })
 }
 
 pub fn chaos_query_observation(
@@ -1546,6 +1937,10 @@ fn answer_notify_message(
     notify_authorized: &impl Fn(&DomainName, u16) -> bool,
     notify_accepted: &impl Fn(&DomainName, u16, Option<u32>),
 ) -> DatagramAction {
+    const NOTIFY_ALLOWED_REQUEST_FLAGS: u16 = 0x7800 | 0x0400;
+    if header.flags & !NOTIFY_ALLOWED_REQUEST_FLAGS != 0 {
+        return DatagramAction::Discard;
+    }
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
             header,
@@ -1590,6 +1985,19 @@ fn answer_notify_message(
                 &[],
                 &[],
                 RequestMetadata::empty(),
+                options,
+            ));
+        }
+        Err(EdnsError::FormErrWithMetadata(metadata)) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                Some(&question),
+                &[],
+                &[],
+                &[],
+                metadata,
                 options,
             ));
         }
@@ -1974,7 +2382,7 @@ fn build_truncated_zone_image_response(
             response_shape,
             &metadata,
             options,
-            true,
+            false,
             stripped_response_sizing,
         )?;
         if response.len() <= response_sizing.udp_ceiling {
@@ -1991,6 +2399,7 @@ fn build_truncated_zone_image_response(
         SmallVec::with_capacity(usize::from(response_shape.additional_count));
     let mut section_counts = ZoneImageRetrySectionCounts::from_response_shape(response_shape);
     let mut body_wire_upper_bound = response_shape.body_wire_upper_bound;
+    let mut truncated = false;
     let mut removable_authority_indices = SmallVec::<[usize; 4]>::new();
     image.visit_plan_record_sections_with_authority_removability(
         plan,
@@ -2013,7 +2422,7 @@ fn build_truncated_zone_image_response(
             header,
             question,
             response_shape.response_flag_bits,
-            true,
+            truncated,
             section_counts,
             &kept_answers,
             &kept_authorities,
@@ -2027,10 +2436,14 @@ fn build_truncated_zone_image_response(
             return Some(response);
         }
 
-        let removed_record = if let Some(record) = kept_additionals.pop() {
-            section_counts.decrement_additional();
-            Some(record)
+        let removed_records = if !kept_additionals.is_empty() {
+            let records = pop_last_zone_image_rrset(&mut kept_additionals);
+            for _ in &records {
+                section_counts.decrement_additional();
+            }
+            records
         } else if let Some(index) = removable_authority_indices.pop() {
+            truncated = true;
             let removed = if index + 1 == kept_authorities.len() {
                 kept_authorities.pop()
             } else {
@@ -2039,24 +2452,47 @@ fn build_truncated_zone_image_response(
             if removed.is_some() {
                 section_counts.decrement_authority();
             }
-            removed
+            removed.into_iter().collect()
         } else if let Some(record) = kept_answers.pop() {
+            truncated = true;
             section_counts.decrement_answer();
-            Some(record)
+            smallvec::smallvec![record]
         } else {
+            truncated = true;
             let removed = kept_authorities.pop();
             if removed.is_some() {
                 section_counts.decrement_authority();
             }
-            removed
+            removed.into_iter().collect()
         };
 
-        let Some(record) = removed_record else {
+        if removed_records.is_empty() {
             return Some(response);
-        };
-        body_wire_upper_bound =
-            body_wire_upper_bound.saturating_sub(zone_image_wire_record_uncompressed_len(record));
+        }
+        for record in removed_records {
+            body_wire_upper_bound = body_wire_upper_bound
+                .saturating_sub(zone_image_wire_record_uncompressed_len(record));
+        }
     }
+}
+
+fn pop_last_zone_image_rrset<'a>(
+    records: &mut SmallVec<[ZoneImageWireRecord<'a>; 8]>,
+) -> SmallVec<[ZoneImageWireRecord<'a>; 8]> {
+    let Some(last) = records.last().copied() else {
+        return SmallVec::new();
+    };
+    let mut first = records.len() - 1;
+    while first > 0 {
+        let candidate = records[first - 1];
+        if candidate.owner_wire != last.owner_wire
+            || candidate.fixed_fields[..4] != last.fixed_fields[..4]
+        {
+            break;
+        }
+        first -= 1;
+    }
+    records.drain(first..).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2208,9 +2644,7 @@ fn zone_image_edns_sizing(
     ZoneImageEdnsSizing {
         additional_count: 1,
         capacity_hint: 11usize.saturating_add(base_shape.rdata_len),
-        reserve_full_udp_capacity: options.transport == Transport::Udp
-            && edns.padding_requested
-            && options.edns_padding_block_size > 0,
+        reserve_full_udp_capacity: false,
         base_shape: Some(base_shape),
     }
 }
@@ -2502,7 +2936,7 @@ fn build_truncated_response(
             header,
             rcode,
             authoritative,
-            true,
+            false,
             question,
             &kept_answers,
             &kept_authorities,
@@ -2515,12 +2949,13 @@ fn build_truncated_response(
         }
     }
 
+    let mut truncated = false;
     loop {
         let response = build_response_inner(
             header,
             rcode,
             authoritative,
-            true,
+            truncated,
             question,
             &kept_answers,
             &kept_authorities,
@@ -2532,21 +2967,38 @@ fn build_truncated_response(
             return response;
         }
 
-        let removed_record = if kept_additionals.pop().is_some() {
+        let removed_record = if !kept_additionals.is_empty() {
+            pop_last_resource_record_rrset(&mut kept_additionals);
             true
         } else if let Some(index) = kept_authorities
             .iter()
             .rposition(|record| record.rr_type != RecordType::Soa as u16)
         {
+            truncated = true;
             kept_authorities.remove(index);
             true
         } else {
+            truncated = true;
             kept_answers.pop().is_some() || kept_authorities.pop().is_some()
         };
 
         if !removed_record {
             return response;
         }
+    }
+}
+
+fn pop_last_resource_record_rrset(records: &mut Vec<ResourceRecord>) {
+    let Some(last) = records.last() else {
+        return;
+    };
+    let owner = last.owner.clone();
+    let rr_type = last.rr_type;
+    let class = last.class;
+    while records.last().is_some_and(|record| {
+        record.owner == owner && record.rr_type == rr_type && record.class == class
+    }) {
+        records.pop();
     }
 }
 
@@ -3164,7 +3616,7 @@ fn edns_response_base_shape(
     extended_dns_error: Option<ExtendedDnsError>,
 ) -> EdnsResponseBaseShape {
     let tcp_keepalive_response =
-        options.transport == Transport::Tcp && edns.tcp_keepalive_requested;
+        options.transport != Transport::Udp && edns.tcp_keepalive_requested;
     let nsid_len = if edns.nsid_requested && !options.nsid.is_empty() {
         options.nsid.len()
     } else {
@@ -3211,7 +3663,10 @@ fn edns_response_options_shape_from_base(
     udp_ceiling: usize,
 ) -> EdnsResponseOptionsShape {
     let mut rdata_len = base_shape.rdata_len;
-    let padding_len = if edns.padding_requested && options.edns_padding_block_size > 0 {
+    let padding_len = if options.transport == Transport::Tls
+        && edns.padding_requested
+        && options.edns_padding_block_size > 0
+    {
         let block_size = options.edns_padding_block_size as usize;
         let total_before_padding_data = response_len_before_opt + 11 + rdata_len + 4;
         let padding_len = (block_size - (total_before_padding_data % block_size)) % block_size;
@@ -3295,6 +3750,21 @@ pub fn request_has_valid_dns_server_cookie(packet: &[u8], context: DnsCookieCont
     )
 }
 
+pub fn request_udp_payload_ceiling(packet: &[u8], max_udp_payload: u16) -> Option<usize> {
+    let header = Header::parse(packet).ok()?;
+    if header.is_response() || header.qdcount > 1 {
+        return None;
+    }
+    let metadata = if header.qdcount == 0 {
+        RequestMetadata::parse_without_question(&header, packet).ok()?
+    } else {
+        let question = Question::parse(packet).ok()?;
+        RequestMetadata::parse(&header, packet, &question).ok()?
+    };
+    let client_payload = metadata.edns.map_or(512, |edns| edns.payload_size) as usize;
+    Some(client_payload.min(max_udp_payload as usize))
+}
+
 pub fn dns_cookie_request_status(
     packet: &[u8],
     context: Option<DnsCookieContext>,
@@ -3302,14 +3772,16 @@ pub fn dns_cookie_request_status(
     let Ok(header) = Header::parse(packet) else {
         return None;
     };
-    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount != 1 {
+    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount > 1 {
         return None;
     }
-    let Ok(question) = Question::parse(packet) else {
-        return None;
-    };
-    let Ok(metadata) = RequestMetadata::parse(&header, packet, &question) else {
-        return None;
+    let metadata = if header.qdcount == 0 {
+        RequestMetadata::parse_without_question(&header, packet).ok()?
+    } else {
+        let Ok(question) = Question::parse(packet) else {
+            return None;
+        };
+        RequestMetadata::parse(&header, packet, &question).ok()?
     };
     let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
         return Some(DnsCookieRequestStatus::NoCookie);
@@ -3467,7 +3939,22 @@ impl RequestMetadata {
     }
 
     fn parse(header: &Header, packet: &[u8], question: &Question) -> Result<Self, EdnsError> {
-        let mut offset = DNS_HEADER_LEN + question.wire_len();
+        Self::parse_from_offset(header, packet, DNS_HEADER_LEN + question.wire_len())
+    }
+
+    fn parse_without_question(header: &Header, packet: &[u8]) -> Result<Self, EdnsError> {
+        Self::parse_from_offset(header, packet, DNS_HEADER_LEN)
+    }
+
+    fn parse_from_offset(
+        header: &Header,
+        packet: &[u8],
+        mut offset: usize,
+    ) -> Result<Self, EdnsError> {
+        if header.opcode() == Some(Opcode::Query) && (header.ancount != 0 || header.nscount != 0) {
+            return Err(EdnsError::FormErr);
+        }
+
         for _ in 0..header.ancount {
             let (rr_type, consumed) = parse_record_header(packet, offset)?;
             if rr_type == RecordType::Opt as u16 {
@@ -3485,36 +3972,77 @@ impl RequestMetadata {
 
         let mut edns = None;
         for _ in 0..header.arcount {
-            let (record, consumed) = parse_record_view(packet, offset)?;
-            offset += consumed;
-            if record.rr_type == RecordType::Opt as u16 {
-                if edns.is_some() || !record.owner_is_root {
-                    return Err(EdnsError::FormErr);
-                }
-
-                let parsed_options = parse_edns_options(record.rdata)?;
-                let metadata = EdnsMetadata {
-                    payload_size: record.class.max(512),
-                    version: ((record.ttl >> 16) & 0xff) as u8,
-                    do_bit: record.ttl & 0x8000 != 0,
-                    tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
-                    nsid_requested: parsed_options.nsid_requested,
-                    cookie: parsed_options.cookie,
-                    padding_requested: parsed_options.padding_requested,
-                };
-                if metadata.version > 0 {
-                    return Err(EdnsError::BadVers(Self {
-                        edns: Some(metadata),
+            let (record, consumed) = match parse_record_view(packet, offset) {
+                Ok(parsed) => parsed,
+                Err(EdnsError::FormErr) if edns.is_some() => {
+                    return Err(EdnsError::FormErrWithMetadata(Self {
+                        edns,
                         extended_rcode: 0,
                         extended_dns_error: None,
                     }));
                 }
+                Err(error) => return Err(error),
+            };
+            offset += consumed;
+            if record.rr_type == RecordType::Opt as u16 {
+                let fixed_metadata = EdnsMetadata {
+                    payload_size: record.class.max(512),
+                    version: ((record.ttl >> 16) & 0xff) as u8,
+                    do_bit: record.ttl & 0x8000 != 0,
+                    tcp_keepalive_requested: false,
+                    malformed_tcp_keepalive: false,
+                    nsid_requested: false,
+                    cookie: None,
+                    padding_requested: false,
+                };
+                if edns.is_some() || !record.owner_is_root {
+                    return Err(EdnsError::FormErrWithMetadata(Self {
+                        edns: edns.or(Some(fixed_metadata)),
+                        extended_rcode: 0,
+                        extended_dns_error: None,
+                    }));
+                }
+
+                let parsed_options =
+                    parse_edns_options(record.rdata).map_err(|error| match error {
+                        EdnsError::FormErr => EdnsError::FormErrWithMetadata(Self {
+                            edns: Some(fixed_metadata),
+                            extended_rcode: 0,
+                            extended_dns_error: None,
+                        }),
+                        other => other,
+                    })?;
+                let metadata = EdnsMetadata {
+                    payload_size: fixed_metadata.payload_size,
+                    version: fixed_metadata.version,
+                    do_bit: fixed_metadata.do_bit,
+                    tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
+                    malformed_tcp_keepalive: parsed_options.malformed_tcp_keepalive,
+                    nsid_requested: parsed_options.nsid_requested,
+                    cookie: parsed_options.cookie,
+                    padding_requested: parsed_options.padding_requested,
+                };
                 edns = Some(metadata);
             }
         }
 
         if offset != packet.len() {
-            return Err(EdnsError::FormErr);
+            return match edns {
+                Some(edns) => Err(EdnsError::FormErrWithMetadata(Self {
+                    edns: Some(edns),
+                    extended_rcode: 0,
+                    extended_dns_error: None,
+                })),
+                None => Err(EdnsError::FormErr),
+            };
+        }
+
+        if edns.is_some_and(|metadata| metadata.version > 0) {
+            return Err(EdnsError::BadVers(Self {
+                edns,
+                extended_rcode: 0,
+                extended_dns_error: None,
+            }));
         }
 
         Ok(Self {
@@ -3543,6 +4071,10 @@ impl RequestMetadata {
         self.edns.is_some_and(|edns| edns.do_bit)
     }
 
+    fn has_malformed_tcp_keepalive(&self, transport: Transport) -> bool {
+        transport != Transport::Udp && self.edns.is_some_and(|edns| edns.malformed_tcp_keepalive)
+    }
+
     fn udp_ceiling(&self, options: AnswerOptions) -> usize {
         let client_payload = self.edns.map_or(512, |edns| edns.payload_size) as usize;
         client_payload.min(options.max_udp_payload as usize)
@@ -3555,6 +4087,7 @@ struct EdnsMetadata {
     version: u8,
     do_bit: bool,
     tcp_keepalive_requested: bool,
+    malformed_tcp_keepalive: bool,
     nsid_requested: bool,
     cookie: Option<EdnsCookie>,
     padding_requested: bool,
@@ -3582,6 +4115,7 @@ struct EdnsResponseOptionsShape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct EdnsOptions {
     tcp_keepalive_requested: bool,
+    malformed_tcp_keepalive: bool,
     nsid_requested: bool,
     cookie: Option<EdnsCookie>,
     padding_requested: bool,
@@ -3612,6 +4146,7 @@ struct ParsedRecordView<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EdnsError {
     FormErr,
+    FormErrWithMetadata(RequestMetadata),
     BadVers(RequestMetadata),
 }
 
@@ -3713,8 +4248,19 @@ fn parse_edns_options(rdata: &[u8]) -> Result<EdnsOptions, EdnsError> {
                     options.cookie = Some(cookie);
                 }
             }
-            EDNS_TCP_KEEPALIVE_OPTION => options.tcp_keepalive_requested = true,
-            EDNS_PADDING_OPTION => options.padding_requested = true,
+            EDNS_TCP_KEEPALIVE_OPTION => {
+                if option_len == 0 {
+                    options.tcp_keepalive_requested = true;
+                } else {
+                    options.malformed_tcp_keepalive = true;
+                }
+            }
+            EDNS_PADDING_OPTION => {
+                if options.padding_requested {
+                    return Err(EdnsError::FormErr);
+                }
+                options.padding_requested = true;
+            }
             _ => {}
         }
         offset += option_len;

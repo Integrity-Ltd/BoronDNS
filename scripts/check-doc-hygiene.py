@@ -174,7 +174,7 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/health-metrics-interface.md": [
         "`BDS-NFR-OBS-003..009`",
         "current `borondns_dnssec_nsec3_iterations_exceed_cap_total` evidence is",
-        "driven by lookup-time NSEC3 proof-omission observation",
+        "driven by the lookup-time NSEC3 cap observation",
         "with `edns.extended_dns_errors = \"off\"",
         "EDE INFO-CODE 27 is absent",
     ],

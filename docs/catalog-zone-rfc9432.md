@@ -170,12 +170,20 @@ transfers. When `[secret_store]` is configured, new or rotated TSIG keys and
 named XoT profiles can be loaded from the filesystem snapshot and then used by
 catalog member references without restarting BoronDNS.
 
-When several configured catalogs list the same member zone, membership remains
-observable under every catalog but only one catalog owns its transfer and
-NOTIFY policy. The owner is the lexicographically smallest canonical catalog
-zone name, so snapshot arrival order cannot change the selected policy. If that
-catalog stops listing the member, ownership moves immediately to the next
-canonical catalog; BoronDNS removes the member only when no catalog lists it.
+When several configured catalogs list the same member zone, the already-applied
+instance keeps its transfer and NOTIFY policy. A later clashing instance is
+ignored and logged, as required by RFC 9432 section 5.2; catalog-name ordering
+does not replace an existing instance. If the owning catalog removes the
+member, BoronDNS removes that instance. A catalog whose earlier listing was
+ignored must subsequently publish a new change (or be retransferred) before its
+instance can be accepted; ownership does not move automatically from stale
+clash state.
+
+Changing the member-node Unique identifier while retaining the same PTR target
+is a remove/reset/re-add operation under RFC 9432 section 5.4. BoronDNS discards
+the old transfer plan, refresh/NOTIFY state, and active snapshot, then starts the
+renamed member in LOADING with a new plan generation. This prevents state tied
+to the old member node from leaking into the replacement instance.
 
 The useful mental model is:
 

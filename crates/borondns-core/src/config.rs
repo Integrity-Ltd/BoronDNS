@@ -427,9 +427,9 @@ impl ServerConfig {
                 "limits.max_concurrent_transfers must not exceed {MAX_TOKIO_SEMAPHORE_PERMITS}"
             )));
         }
-        if self.limits.edns_padding_block_size == 1 {
+        if self.limits.edns_padding_block_size != 0 {
             return Err(ConfigError::Invalid(
-                "limits.edns_padding_block_size must be 0 to disable padding or at least 2"
+                "limits.edns_padding_block_size must be 0 because BoronDNS does not expose an encrypted DNS query transport; RFC 7830 forbids padding on plaintext DNS"
                     .to_owned(),
             ));
         }

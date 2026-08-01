@@ -263,11 +263,44 @@ impl ZoneSnapshot {
     }
 
     pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
-        self.rrsets.values().flat_map(Rrset::records).collect()
+        self.rrsets
+            .iter()
+            .flat_map(|(key, rrset)| {
+                rrset.rdatas.iter().map(move |rdata| ResourceRecord {
+                    owner: rrset.owner.clone(),
+                    rr_type: rrset.rr_type,
+                    class: rrset.class,
+                    ttl: self.record_ttl_by_owner_key(
+                        key.owner.as_ref(),
+                        rrset.class,
+                        rrset.rr_type,
+                        rrset.ttl,
+                        rdata,
+                    ),
+                    rdata: rdata.clone(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn rrsets(&self) -> impl Iterator<Item = &Rrset> {
         self.rrsets.values()
+    }
+
+    pub(crate) fn record_ttl_by_owner_key(
+        &self,
+        owner_key: &str,
+        class: u16,
+        rr_type: u16,
+        fallback_ttl: u32,
+        rdata: &[u8],
+    ) -> u32 {
+        if rr_type != RecordType::Rrsig as u16 || rdata.len() < 2 {
+            return fallback_ttl;
+        }
+        let covered_type = u16::from_be_bytes([rdata[0], rdata[1]]);
+        self.rrset_by_name_key(owner_key, covered_type, class)
+            .map_or(fallback_ttl, |covered| covered.ttl)
     }
 
     /// Return a narrow borrowed view for RFC 9432 catalog-zone parsing.
@@ -521,6 +554,11 @@ impl ZoneSnapshot {
         }
 
         let target_key = target.canonical_key();
+        if let Some(delegation) = self.delegation_for(&target, qclass)
+            && !(qtype == RecordType::Ds as u16 && target_key == delegation.owner.canonical_key())
+        {
+            return LookupResult::positive_records(answers);
+        }
         if visited.contains(&target_key) {
             let original_qname = visited.first().map(String::as_str).unwrap_or("<unknown>");
             warn!(
@@ -697,7 +735,7 @@ impl ZoneSnapshot {
 
     fn glue_for_ns_records(
         &self,
-        delegation_owner: &DomainName,
+        _delegation_owner: &DomainName,
         ns_records: &[ResourceRecord],
         qclass: u16,
     ) -> Vec<ResourceRecord> {
@@ -706,7 +744,7 @@ impl ZoneSnapshot {
             let Some(target) = ns_target(record) else {
                 continue;
             };
-            if !target.is_equal_or_subdomain_of(delegation_owner) {
+            if !target.is_equal_or_subdomain_of(&self.origin) {
                 continue;
             }
 
@@ -733,6 +771,27 @@ impl ZoneSnapshot {
             };
             if !target.is_equal_or_subdomain_of(&self.origin) {
                 continue;
+            }
+            if self.delegation_for(&target, qclass).is_some() {
+                continue;
+            }
+
+            if (record.rr_type == RecordType::Svcb as u16
+                || record.rr_type == RecordType::Https as u16)
+                && target != record.owner
+                && let Some(rrset) = self.rrset(&target, record.rr_type, qclass)
+            {
+                for additional in rrset.records() {
+                    let key = (
+                        additional.owner.canonical_key(),
+                        additional.rr_type,
+                        additional.class,
+                        additional.rdata.clone(),
+                    );
+                    if seen.insert(key) {
+                        additionals.push(additional);
+                    }
+                }
             }
 
             for rr_type in [RecordType::A as u16, RecordType::Aaaa as u16] {
@@ -1172,7 +1231,13 @@ fn additional_address_target(record: &ResourceRecord) -> Option<DomainName> {
         rr_type if rr_type == RecordType::Srv as u16 => srv_target(record),
         rr_type if rr_type == RecordType::Naptr as u16 => naptr_replacement(record),
         rr_type if rr_type == RecordType::Svcb as u16 || rr_type == RecordType::Https as u16 => {
-            svcb_target_name(record)
+            let target = svcb_target_name(record)?;
+            let priority = u16::from_be_bytes([record.rdata[0], record.rdata[1]]);
+            if priority != 0 && target.label_count() == 0 {
+                Some(record.owner.clone())
+            } else {
+                Some(target)
+            }
         }
         _ => None,
     }
@@ -1745,6 +1810,27 @@ impl ZoneStore {
         Some(visit(PublishedZoneRef { entry }))
     }
 
+    /// Borrow the query's published zone, optionally preferring the closest
+    /// visible strict parent when the query name is an exact published origin.
+    ///
+    /// RFC 4035 places a child-apex DS RRset in the parent zone. Query serving
+    /// uses this only for DS when both the child and its parent are configured
+    /// locally; ordinary queries continue to use longest-zone matching.
+    pub fn with_published_zone_for_query_with_ascii_lowercase_hint<R>(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+        prefer_parent_of_exact_child: bool,
+        visit: impl FnOnce(PublishedZoneRef<'_>) -> R,
+    ) -> Option<R> {
+        let zones = self.zones.load();
+        let entry = prefer_parent_of_exact_child
+            .then(|| zones.find_parent_of_exact_match_ref(qname, qname_ascii_lowercase))
+            .flatten()
+            .or_else(|| zones.find_best_match_ref(qname, qname_ascii_lowercase))?;
+        Some(visit(PublishedZoneRef { entry }))
+    }
+
     /// Return cheap published-zone metadata for status and metrics without
     /// cloning the underlying snapshots. Query serving should use
     /// `find_published_zone` and answer from the published `ZoneImage`.
@@ -2109,6 +2195,31 @@ impl ZoneDirectory {
             return Some(entry);
         }
         None
+    }
+
+    fn find_parent_of_exact_match_ref(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+    ) -> Option<&ZoneStoreEntry> {
+        let (qname_key, prefix_lengths) =
+            canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
+        let exact = self.suffix_index.get(qname_key.as_slice())?;
+        if exact.hidden || prefix_lengths.is_empty() {
+            return None;
+        }
+
+        for prefix_len in prefix_lengths[..prefix_lengths.len() - 1].iter().rev() {
+            if let Some(entry) = self.suffix_index.get(&qname_key[..*prefix_len])
+                && !entry.hidden
+            {
+                return Some(entry.as_ref());
+            }
+        }
+        self.suffix_index
+            .get([].as_slice())
+            .filter(|entry| !entry.hidden)
+            .map(Arc::as_ref)
     }
 }
 

@@ -352,7 +352,14 @@ def rust_use_imports(text: str) -> list[tuple[tuple[str, ...], str | None]]:
     imports: list[tuple[tuple[str, ...], str | None]] = []
     token_pattern = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|::|[{},;*]")
 
-    for use_match in re.finditer(r"\buse\b", text):
+    # Match Rust item syntax rather than arbitrary `use` words in comments or
+    # strings. A comment containing a brace and a later semicolon previously
+    # produced a malformed token tree whose nested parser made no progress and
+    # appended the same prefix until the audit exhausted memory.
+    use_item_pattern = re.compile(
+        r"(?m)^[ \t]*(?:pub(?:[ \t]*\([^\n)]*\))?[ \t]+)?use[ \t]+"
+    )
+    for use_match in use_item_pattern.finditer(text):
         statement_start = use_match.end()
         depth = 0
         statement_end = None
@@ -373,6 +380,7 @@ def rust_use_imports(text: str) -> list[tuple[tuple[str, ...], str | None]]:
 
         def parse_item(prefix: tuple[str, ...]) -> None:
             nonlocal position
+            initial_position = position
             segments: list[str] = []
             while position < len(tokens):
                 token = tokens[position]
@@ -401,6 +409,10 @@ def rust_use_imports(text: str) -> list[tuple[tuple[str, ...], str | None]]:
                 path = path[:-1]
             if path:
                 imports.append((path, alias))
+            if position == initial_position:
+                # Fail closed on an unexpected token without permitting an
+                # unbounded no-progress loop in this structural audit.
+                position += 1
 
         while position < len(tokens) and tokens[position] != ";":
             parse_item(())
@@ -409,6 +421,21 @@ def rust_use_imports(text: str) -> list[tuple[tuple[str, ...], str | None]]:
             elif position < len(tokens) and tokens[position] not in (";", "}"):
                 position += 1
     return imports
+
+_use_parser_probe = rust_use_imports(
+    "// use { malformed;\n"
+    "use std::fs;\n"
+    "pub(crate) use crate::{alpha, beta as gamma};\n"
+)
+if _use_parser_probe != [
+    (("std", "fs"), None),
+    (("crate", "alpha"), None),
+    (("crate", "beta"), "gamma"),
+]:
+    raise SystemExit(
+        "architectural audit Rust use-tree parser self-check failed: "
+        f"{_use_parser_probe!r}"
+    )
 
 def crate_aliases(text: str, crate: str) -> set[str]:
     aliases = {crate} | EXTERNAL_CRATE_ALIASES.get(crate, set())
@@ -2073,8 +2100,12 @@ if "ImageTargetNode::OutOfZoneParentSuffix => self.target_node_hint(synthesized_
     dname_hint_failures.append("parent-suffix DNAME targets do not keep synthesized-target lookup")
 if "ImageTargetNode::OutOfZone => ImageTargetNode::OutOfZone" not in dname_hint_text:
     dname_hint_failures.append("unrelated out-of-zone DNAME targets still fall through to synthesized-target lookup")
-if "ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix => {}" not in resolve_indirection_text:
-    dname_hint_failures.append("indirection additional lookup does not treat both out-of-zone target hints as out-of-zone")
+out_of_zone_guard = resolve_indirection_text.find(
+    "ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix"
+)
+target_trie_lookup = resolve_indirection_text.find("self.query_node_handles(target, false)")
+if out_of_zone_guard < 0 or target_trie_lookup < 0 or out_of_zone_guard > target_trie_lookup:
+    dname_hint_failures.append("indirection additional lookup does not return both out-of-zone target hints before trie lookup")
 if dname_hint_failures:
     print("status=failed")
     for failure in dname_hint_failures:
@@ -2304,7 +2335,10 @@ if "let answer_has_records = plan.answer_has_records()" not in zone_image_text:
     one_pass_composer_failures.append("DNSSEC denial classifier does not read answer presence directly from the plan")
 if "fn plan_needs_dnssec_denial_query_node_handles" in zone_image_text:
     one_pass_composer_failures.append("DNSSEC denial query-node gating regressed to a duplicate classifier helper")
-if "let referral_candidate = self.dnssec_referral_augmentation_possible" not in zone_image_text:
+if (
+    "let referral_candidate =\n            self.dnssec_referral_augmentation_possible"
+    not in zone_image_text
+):
     one_pass_composer_failures.append("DNSSEC augmentation does not compute referral candidacy before allocating augmentation state")
 if (
     "if !referral_candidate\n            && !self.dnssec_rrsig_augmentation_possible\n            && !nodata_candidate\n            && !nxdomain_candidate\n            && !wildcard_candidate" not in zone_image_text
@@ -2316,10 +2350,8 @@ if "let denial_candidate = nodata_candidate || nxdomain_candidate" not in zone_i
     one_pass_composer_failures.append("DNSSEC denial query-node gating does not reuse the computed denial candidate")
 if "let (exact_qname_node, closest_qname_node) = if denial_has_authority_soa" not in zone_image_text:
     one_pass_composer_failures.append("DNSSEC denial query-node lookup is not gated behind the authority-SOA proof precondition")
-if "if nodata_candidate && denial_has_authority_soa" not in zone_image_text:
-    one_pass_composer_failures.append("NODATA proof helper is not gated at the DNSSEC augmentation callsite")
-if "if nxdomain_candidate && denial_has_authority_soa" not in zone_image_text:
-    one_pass_composer_failures.append("NXDOMAIN proof helper is not gated at the DNSSEC augmentation callsite")
+if "if denial_has_authority_soa {\n                match denial_context" not in zone_image_text:
+    one_pass_composer_failures.append("NODATA/NXDOMAIN proof dispatch is not gated at the DNSSEC augmentation callsite")
 if "if wildcard_candidate {" not in zone_image_text:
     one_pass_composer_failures.append("wildcard proof helper is not gated at the DNSSEC augmentation callsite")
 dnssec_augment_start = zone_image_text.find("    pub fn augment_lookup_plan_with_dnssec(")
@@ -2331,14 +2363,14 @@ dnssec_augment_text = (
 )
 if "augment_lookup_plan_with_dnssec_ascii_lowercase_hint" not in dnssec_augment_text:
     one_pass_composer_failures.append("DNSSEC augmentation does not expose a parser-carried lowercase QNAME hint")
-if "self.query_node_handles(qname, qname_ascii_lowercase)" not in dnssec_augment_text:
+if "self.query_node_handles(proof_name, proof_name_ascii_lowercase)" not in dnssec_augment_text:
     one_pass_composer_failures.append("DNSSEC denial augmentation does not pass the lowercase QNAME hint into trie lookup")
 if "qname_ascii_lowercase: bool" not in dnssec_augment_text:
     one_pass_composer_failures.append("DNSSEC denial augmentation does not carry the lowercase QNAME hint through proof selection")
 if (
-    "exact_qname_node,\n                    qname_ascii_lowercase," not in dnssec_augment_text
-    or "closest_qname_node,\n                    qname_ascii_lowercase," not in dnssec_augment_text
-    or "qclass,\n                    qname_ascii_lowercase," not in dnssec_augment_text
+    "let proof_name_ascii_lowercase = denial_context.is_some() || qname_ascii_lowercase" not in dnssec_augment_text
+    or "exact_qname_node,\n                            proof_name_ascii_lowercase," not in dnssec_augment_text
+    or "closest_qname_node,\n                            proof_name_ascii_lowercase," not in dnssec_augment_text
 ):
     one_pass_composer_failures.append("DNSSEC denial augmentation does not pass the lowercase QNAME hint into proof helpers")
 nodata_helper_start = zone_image_text.find("    fn add_nodata_nsec_augmentations(")
@@ -2369,7 +2401,7 @@ for helper_name, helper_text in (
 ):
     if "_candidate: bool" in helper_text or "denial_has_authority_soa: bool" in helper_text:
         one_pass_composer_failures.append(f"{helper_name} DNSSEC proof helper still accepts callsite candidate booleans")
-if "self.push_nsec3_for_name(qname, qclass, qname_ascii_lowercase" not in zone_image_text:
+if "self.nsec3_exact_rrset_for_name(" not in nodata_helper_text or "qname_ascii_lowercase," not in nodata_helper_text:
     one_pass_composer_failures.append("NSEC3 proof selection does not reuse the parser-carried lowercase QNAME fact")
 if "ascii_lowercase: qname_ascii_lowercase" not in zone_image_text:
     one_pass_composer_failures.append("NSEC/NSEC3 label-view proof selection does not carry lowercase-label state")
@@ -2409,11 +2441,11 @@ if "find_rrset_at_node(qname_node, qtype" in nodata_nsec_text:
     one_pass_composer_failures.append("NODATA DNSSEC augmentation still repeats exact qtype lookup instead of trusting plan answer presence")
 if "find_rrset_at_node(qname_node, RecordType::Nsec as u16, qclass)" not in nodata_nsec_text:
     one_pass_composer_failures.append("NODATA DNSSEC augmentation no longer uses the exact qname node only for the NSEC proof lookup")
-if "!self.nsec_ranges.is_empty()" not in nodata_nsec_text:
+if "self.nsec_denial_active()" not in nodata_nsec_text:
     one_pass_composer_failures.append("NODATA DNSSEC augmentation probes exact-name NSEC even when the compiled image has no NSEC proof family")
-if "let has_nsec_ranges = !self.nsec_ranges.is_empty()" not in nxdomain_nsec_text:
+if "let has_nsec_ranges = self.nsec_denial_active()" not in nxdomain_nsec_text:
     one_pass_composer_failures.append("NXDOMAIN DNSSEC augmentation missing a compiled NSEC proof-family gate")
-if "let has_nsec3_ranges = !self.nsec3_ranges.is_empty()" not in nxdomain_nsec_text:
+if "let has_nsec3_ranges = self.nsec3_denial_active()" not in nxdomain_nsec_text:
     one_pass_composer_failures.append("NXDOMAIN DNSSEC augmentation missing a compiled NSEC3 proof-family gate")
 if "if has_nsec_ranges" not in nxdomain_nsec_text:
     one_pass_composer_failures.append("NXDOMAIN DNSSEC augmentation still enters NSEC helpers without the compiled NSEC gate")
@@ -2421,9 +2453,9 @@ if "if has_nsec3_ranges" not in nxdomain_nsec_text:
     one_pass_composer_failures.append("NXDOMAIN DNSSEC augmentation still enters NSEC3 helpers without the compiled NSEC3 gate")
 if "(has_nsec_ranges || has_nsec3_ranges)" not in nxdomain_nsec_text:
     one_pass_composer_failures.append("NXDOMAIN closest-encloser proof work is not guarded by proof-family presence")
-if "if !self.nsec_ranges.is_empty()" not in wildcard_nsec_text:
+if "if self.nsec_denial_active()" not in wildcard_nsec_text:
     one_pass_composer_failures.append("wildcard DNSSEC augmentation still enters NSEC helpers without the compiled NSEC gate")
-if "if !self.nsec3_ranges.is_empty()" not in wildcard_nsec_text:
+if "if self.nsec3_denial_active()" not in wildcard_nsec_text:
     one_pass_composer_failures.append("wildcard DNSSEC augmentation still enters NSEC3 helpers without the compiled NSEC3 gate")
 if "pub(crate) fn authority_first_rrset_is_soa(&self) -> bool" not in zone_image_text:
     one_pass_composer_failures.append("ZoneImageLookupPlan missing first-authority-SOA plan-bit accessor")
@@ -2720,7 +2752,7 @@ if "with_dnssec_augmented" in dns_text or "truncated_dnssec_augmented" in dns_te
     one_pass_composer_failures.append("response truncation still carries dead DNSSEC-augmented response metadata bookkeeping")
 if "zone_image_wire_record_is_dnssec" in dns_text:
     one_pass_composer_failures.append("truncation retry still classifies removed wire records for dead DNSSEC bookkeeping")
-if "body_wire_upper_bound.saturating_sub(zone_image_wire_record_uncompressed_len(record))" not in truncation_text:
+if ".saturating_sub(zone_image_wire_record_uncompressed_len(record))" not in truncation_text:
     one_pass_composer_failures.append("truncation retry does not decrement kept-record wire bounds when records are removed")
 if "body_wire_upper_bound: usize" not in wire_rebuild_text:
     one_pass_composer_failures.append("wire-record response rebuild does not accept carried body wire bounds")
@@ -2827,7 +2859,7 @@ nsec3_precompute_text = (
     if nsec3_precompute_start >= 0 and nsec3_precompute_end >= 0
     else ""
 )
-nsec3_lookup_start = zone_image_text.find("    fn nsec3_rrset_for_wire_name(")
+nsec3_lookup_start = zone_image_text.find("    fn nsec3_exact_rrset_for_label_view(")
 nsec3_lookup_end = zone_image_text.find("    fn nsec3_param_set(", nsec3_lookup_start)
 nsec3_lookup_text = (
     zone_image_text[nsec3_lookup_start:nsec3_lookup_end]
@@ -2877,16 +2909,12 @@ if "SmallVec::<[(u16, Option<[u8; 20]>); 1]>" not in nsec3_lookup_text:
     nsec3_owner_failures.append("NSEC3 runtime hash cache is not keyed by compact parameter indexes")
 if "nsec3_hash_label_view_param_cache_index(" not in nsec3_lookup_text:
     nsec3_owner_failures.append("NSEC3 label-view lookup does not use parameter-index hash cache")
-if "nsec3_hash_wire_name_param_cache_index(" not in nsec3_lookup_text:
-    nsec3_owner_failures.append("NSEC3 wire-name lookup does not use parameter-index hash cache")
 if "SmallVec::<[(Nsec3Params" in nsec3_lookup_text:
     nsec3_owner_failures.append("NSEC3 runtime lookup cache still searches by full parameter tuple")
 if "self.nsec3_params_from_set(param_set)" in nsec3_lookup_text:
     nsec3_owner_failures.append("NSEC3 range loop materializes parameter salt before cache lookup")
 if "fn nsec3_hash_label_view_param_cache_index(" not in nsec3_param_cache_text:
     nsec3_owner_failures.append("NSEC3 lazy label-view parameter cache helper is missing")
-if "fn nsec3_hash_wire_name_param_cache_index(" not in nsec3_param_cache_text:
-    nsec3_owner_failures.append("NSEC3 lazy wire-name parameter cache helper is missing")
 if "self.nsec3_params_from_set(param_set)" not in nsec3_param_cache_text:
     nsec3_owner_failures.append("NSEC3 parameter cache helpers do not materialize parameters inside the miss path")
 if "param_set: &ImageNsec3ParamSet" not in nsec3_param_cache_text:
@@ -3284,7 +3312,7 @@ if "record_index: u32" in selected_struct_text:
     selected_record_failures.append("selected DNSSEC records still retain the stale record table index after carrying RDATA")
 if "selected.wire_len as usize" not in selected_len_text:
     selected_record_failures.append("selected_record_wire_len does not read the selected-record handle length")
-if "fixed_fields: rrset.fixed_fields" not in selected_from_relation_text:
+if "let mut fixed_fields = rrset.fixed_fields;" not in selected_from_relation_text or "fixed_fields," not in selected_from_relation_text:
     selected_record_failures.append("selected-record handle does not copy immutable RRset fixed fields")
 if "rdata: record.rdata" not in selected_from_relation_text:
     selected_record_failures.append("selected-record handle does not copy immutable record RDATA range")
@@ -3302,12 +3330,12 @@ if "owner_wire_len: u8" not in relation_struct_text:
 if "usize::from(relation.owner_wire_len)" not in selected_from_relation_text or "usize::from(relation.rdata_len)" not in selected_from_relation_text:
     selected_record_failures.append("selected-record handle does not use relation-carried owner/RDATA lengths")
 if (
-    "owner_wire_len: checked_u8(" not in push_rrsig_text
+    "checked_u8(" not in push_rrsig_text
     or "blob_len(rrsig_rrset.owner_wire)" not in push_rrsig_text
     or '"selected RRSIG owner wire length"' not in push_rrsig_text
 ):
     selected_record_failures.append("RRSIG relation owner wire length is not checked and copied from immutable metadata")
-if "rdata_len: record.rdata.len" not in push_rrsig_text:
+if "record.rdata.len," not in push_rrsig_text:
     selected_record_failures.append("RRSIG relation RDATA length is not copied from immutable record metadata")
 if "covered.covered_type == RecordType::Rrsig as u16" not in rrsig_by_covered_text:
     selected_record_failures.append("RRSIG relation compiler does not skip RRSIG RRsets")
@@ -3439,7 +3467,10 @@ if "self.push_additionals_for_rrset_targets(rrset, &mut seen_additionals, plan)"
     additional_relation_failures.append("exact full-ANY planning does not dedupe additionals during the streamed pass")
 if "self.for_each_any_rrset_at_node(node_index, qclass, |rrset|" not in wildcard_full_any_push_text:
     additional_relation_failures.append("wildcard full-ANY planning does not stream compiled-order RRsets")
-if "self.push_additionals_for_rrset_targets(rrset, &mut seen_additionals, plan)" not in wildcard_full_any_push_text:
+if (
+    "self.push_additionals_for_rrset_targets_with_effective_owner(" not in wildcard_full_any_push_text
+    or "&mut seen_additionals," not in wildcard_full_any_push_text
+):
     additional_relation_failures.append("wildcard full-ANY planning does not dedupe additionals during the streamed pass")
 if "has_precomputed_additional_address_relations" not in additional_relation_gate_text:
     additional_relation_failures.append("relation-slice helper does not keep the bitmap fast gate for empty relation sets")
@@ -3526,14 +3557,12 @@ if "owner_from_wire(" in referral_glue_text:
     referral_glue_failures.append("referral-glue relation compiler reparses delegation owner wire into DomainName")
 if "single_name_rdata_wire(rdata)" not in referral_glue_text:
     referral_glue_failures.append("referral-glue relation compiler does not borrow NS target wire from RDATA")
-if "wire_name_is_equal_or_subdomain_of_wire(target_wire, owner_wire, owner_label_count)" not in referral_glue_text:
-    referral_glue_failures.append("referral-glue relation compiler does not filter NS target wire against stored owner wire")
+if "wire_name_is_equal_or_subdomain_of_domain(target_wire, &self.origin)" not in referral_glue_text:
+    referral_glue_failures.append("referral-glue relation compiler does not filter NS target wire against the served parent zone")
 if "push_address_relations_for_target_wire(" not in referral_glue_text:
     referral_glue_failures.append("referral-glue relation compiler does not look up glue from target wire")
 if "wire_name_equals_domain_with_label_count_ignore_ascii_case(" not in referral_glue_text:
     referral_glue_failures.append("referral-glue relation compiler does not compare apex owner directly from wire")
-if "fn wire_name_is_equal_or_subdomain_of_wire(" not in zone_image_text:
-    referral_glue_failures.append("wire-name suffix helper is missing")
 if "DomainName::parse" in referral_glue_text or ".canonical_key()" in referral_glue_text:
     referral_glue_failures.append("referral-glue relation compiler reparses NS target wire into DomainName")
 if "fn owner_from_wire(" in zone_image_text:
@@ -3548,7 +3577,7 @@ if referral_glue_failures:
     )
 else:
     print("status=passed")
-    print("evidence=ZoneImage referral-glue relation compilation compares delegation apex and glue target suffixes against stored owner wire and builds glue lookups from target wire without materializing the delegation owner or NS target as DomainName values.")
+    print("evidence=ZoneImage referral-glue relation compilation compares the delegation apex directly from stored owner wire, admits available in-parent-zone sibling glue per RFC 9471, and builds glue lookups from target wire without materializing the delegation owner or NS target as DomainName values.")
 
 print()
 print("check=ZoneImage referral DNSSEC uses plan-carried NS handle")
@@ -4129,8 +4158,12 @@ parse_lowercase_text = (
 )
 if "let mut ascii_lowercase = true" not in parse_lowercase_text:
     compression_failures.append("DomainName parser does not initialize lowercase tracking during parse")
-if "let mut visited_pointers = SmallVec::<[usize; 4]>::new()" not in parse_lowercase_text:
-    compression_failures.append("DomainName parser does not keep compressed-name pointer tracking inline")
+if (
+    "let mut followed_pointers = 0usize" not in parse_lowercase_text
+    or "if pointer >= pos" not in parse_lowercase_text
+    or "if followed_pointers >= MAX_COMPRESSED_NAME_POINTERS" not in parse_lowercase_text
+):
+    compression_failures.append("DomainName parser does not enforce backward-only constant-space pointer tracking")
 if "ascii_lowercase &= packet[pos..pos + label_len]" not in parse_lowercase_text:
     compression_failures.append("DomainName parser does not update lowercase tracking while walking label bytes")
 if "return Ok((Self { labels }, consumed, ascii_lowercase))" not in parse_lowercase_text:
@@ -4665,6 +4698,8 @@ if (
     "find_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
     not in dns_text
     and "with_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
+    not in dns_text
+    and "with_published_zone_for_query_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
     not in dns_text
 ):
     zone_store_api_failures.append("query serving does not pass the parser-carried lowercase QNAME fact into zone suffix lookup")

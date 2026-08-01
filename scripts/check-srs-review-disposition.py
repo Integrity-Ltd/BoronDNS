@@ -460,7 +460,7 @@ FEATURES = {
         ],
         "test_needles": [
             "do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs",
-            "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+            "nsec3_iterations_over_cap_fails_closed_and_emits_ede_when_enabled",
         ],
     },
     "RRL": {
@@ -582,7 +582,7 @@ FEATURES = {
             "edns_nsid_request_returns_configured_identifier",
             "tcp_edns_keepalive_request_gets_timeout_response",
             "udp_edns_keepalive_request_is_ignored",
-            "configured_edns_padding_aligns_response_to_block_size",
+            "configured_encrypted_edns_padding_aligns_response_to_block_size",
             "configured_udp_edns_padding_is_omitted_when_it_would_exceed_ceiling",
             "malformed_edns_options_get_formerr",
             "unsupported_edns_version_gets_badvers_opt_response",
@@ -613,7 +613,7 @@ FEATURES = {
         ],
         "test_needles": [
             "ede_not_ready_is_opt_in_for_loading_zones",
-            "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+            "nsec3_iterations_over_cap_fails_closed_and_emits_ede_when_enabled",
         ],
     },
     "CHAOS": {

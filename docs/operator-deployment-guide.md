@@ -320,16 +320,17 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
 - `[query]`: query response policy, including QTYPE ANY behavior.
 - `[edns]`: EDNS diagnostics. `extended_dns_errors = "off"` is the default;
   `minimal` enables RFC 8914 EDE INFO-CODE 14 for not-ready zones and
-  INFO-CODE 27 for NSEC3 iteration-cap downgrades when the client sent an OPT
+  INFO-CODE 27 for fail-closed NSEC3 iteration-cap responses when the client sent an OPT
   RR.
 - `[chaos]`: optional CHAOS-class CH/TXT self-identification. Empty
   `version` makes `version.bind.` and `version.server.` REFUSED. Empty
   `hostname` makes `hostname.bind.` and `id.server.` fall back to printable
   `[server].nsid` when available, otherwise REFUSED.
 - `[dnssec]`: DNSSEC serving safeguards. `nsec3_max_iterations = 100` limits
-  NSEC3 denial-proof hashing work; responses above the cap keep the base RCODE
-  but may omit NSEC3 proof RRsets and, with minimal EDE enabled, include EDE
-  INFO-CODE 27.
+  NSEC3 denial-proof hashing work; a negative query requiring a chain above the
+  cap fails closed with SERVFAIL instead of emitting an unauthenticated
+  NODATA/NXDOMAIN response. With minimal EDE enabled, the response can include
+  INFO-CODE 27. Positive answers remain available.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
   timestamp tolerance windows, optional in-process server-secret rotation, and
   configured shared Server Secret material. For anycast or load-balanced
@@ -517,8 +518,9 @@ Production configuration notes:
   parseable truncation envelope are rejected at configuration validation.
 - Bind `health` to loopback or a private management interface. The health and
   metrics HTTP endpoint is not an authenticated administration interface.
-- Set `[limits].edns_padding_block_size = 0` unless padding is intentionally
-  required and tested.
+- Keep `[limits].edns_padding_block_size = 0`. BoronDNS currently exposes only
+  plaintext UDP/TCP client-query listeners, and RFC 7830 forbids DNS message
+  padding when no encryption is in use; startup rejects a nonzero value.
 - Keep `[limits].udp_batch_size = 1` unless a local or physical benchmark
   artifact shows that the standard UDP batch path improves throughput or tail
   latency without increasing drops. Benchmark artifacts record UDP receive/send
@@ -552,12 +554,14 @@ Production configuration notes:
   even when every redirected packet is rejected during userspace validation;
   reject-only exhaustion yields so shutdown and other runtime work stay fair.
 - Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
-  diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
-  downgrades. The `minimal` profile emits numeric EDE codes only, with no
+  diagnostic EDE options for LOADING/EXPIRED zones and fail-closed NSEC3
+  iteration-cap responses. The `minimal` profile emits numeric EDE codes only, with no
   EXTRA-TEXT.
 - Keep `[dnssec].nsec3_max_iterations = 100` for legacy compatibility, or lower
   it toward `0` where the primary estate is known to follow RFC 9276 guidance.
-  Values above 100 are accepted but produce `nsec3_iterations_large`.
+  Negative queries requiring more work than the cap return SERVFAIL; positive
+  answers are unaffected. Values above 100 are accepted but produce
+  `nsec3_iterations_large`.
 - Keep `[rrl].enabled = true` for Internet-facing UDP service unless an
   upstream mitigation layer has been validated.
 - Ensure the service soft file-descriptor limit satisfies the startup formula:

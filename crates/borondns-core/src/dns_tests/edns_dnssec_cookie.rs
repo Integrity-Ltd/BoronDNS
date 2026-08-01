@@ -60,6 +60,27 @@
     }
 
     #[test]
+    fn tcp_edns_keepalive_request_with_timeout_gets_formerr_and_opt() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &[0, EDNS_TCP_KEEPALIVE_OPTION as u8, 0, 2, 0, 50],
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions::tcp(),
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
     fn udp_edns_keepalive_request_is_ignored() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
         append_opt(
@@ -235,6 +256,105 @@
             dns_cookie_request_status(&packet, Some(context)),
             Some(DnsCookieRequestStatus::ClientCookieOnly)
         );
+    }
+
+    #[test]
+    fn empty_question_client_cookie_query_returns_noerror_cookie() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut packet = vec![
+            0x12, 0x34, 0, 0, // ID and QUERY flags
+            0, 0, // QDCOUNT
+            0, 0, // ANCOUNT
+            0, 0, // NSCOUNT
+            0, 0, // ARCOUNT, incremented by append_opt
+        ];
+        append_opt(
+            &mut packet,
+            1232,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &hex_to_vec("2464c4abcf10c957")),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                dns_cookie: Some(context),
+                ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
+            },
+        );
+
+        assert_eq!(full_response_rcode(&response), Rcode::NoError as u16);
+        assert_eq!(
+            (
+                u16::from_be_bytes([response[4], response[5]]),
+                u16::from_be_bytes([response[6], response[7]]),
+                u16::from_be_bytes([response[8], response[9]]),
+                u16::from_be_bytes([response[10], response[11]]),
+            ),
+            (0, 0, 0, 1)
+        );
+        assert_eq!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::ClientCookieOnly)
+        );
+    }
+
+    #[test]
+    fn empty_question_cookie_query_uses_rfc7873_rcodes() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let mut context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        context.policy = DnsCookiePolicy::Strict;
+
+        for (cookie_hex, expected_rcode) in [
+            (
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480",
+                Rcode::NoError as u16,
+            ),
+            (
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29481",
+                Rcode::BadCookie as u16,
+            ),
+        ] {
+            let mut packet = vec![
+                0x12, 0x34, 0, 0, // ID and QUERY flags
+                0, 0, // QDCOUNT
+                0, 0, // ANCOUNT
+                0, 0, // NSCOUNT
+                0, 0, // ARCOUNT, incremented by append_opt
+            ];
+            append_opt(
+                &mut packet,
+                1232,
+                0,
+                &edns_option(EDNS_COOKIE_OPTION, &hex_to_vec(cookie_hex)),
+            );
+
+            let response = store_response_with_options(
+                &packet,
+                &ZoneStore::new(),
+                AnswerOptions {
+                    dns_cookie: Some(context),
+                    ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
+                },
+            );
+
+            assert_eq!(full_response_rcode(&response), expected_rcode);
+            assert_eq!(u16::from_be_bytes([response[4], response[5]]), 0);
+            assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+            assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
+            assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+            assert!(response_opt_option(&response, EDNS_COOKIE_OPTION).is_some());
+        }
     }
 
     #[test]
@@ -526,6 +646,11 @@
                 Rcode::FormErr as u8,
                 "cookie length {cookie_len} should be FORMERR"
             );
+            assert_eq!(
+                u16::from_be_bytes([response[10], response[11]]),
+                1,
+                "COOKIE format errors must retain a response OPT"
+            );
         }
     }
 
@@ -701,7 +826,7 @@
     }
 
     #[test]
-    fn explicit_nsec3_query_without_do_returns_nsec3_without_augmentation() {
+    fn explicit_nsec3_query_for_nsec3_only_owner_returns_nxdomain() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -723,11 +848,8 @@
 
         let response = store_response(&packet, &store);
 
-        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
-        assert_eq!(
-            response_answer_types(&response),
-            vec![RecordType::Nsec3 as u16]
-        );
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert!(response_answer_types(&response).is_empty());
         assert_eq!(response_opt_ttl(&response), Some(0));
     }
 
@@ -823,7 +945,7 @@
     }
 
     #[test]
-    fn configured_edns_padding_aligns_response_to_block_size() {
+    fn configured_plaintext_udp_edns_padding_is_not_emitted() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0, &[0, EDNS_PADDING_OPTION as u8, 0, 0]);
 
@@ -842,6 +964,25 @@
                 nsid: &[],
                 chaos: ChaosOptions::default(),
                 dns_cookie: None,
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn configured_encrypted_edns_padding_aligns_response_to_block_size() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[0, EDNS_PADDING_OPTION as u8, 0, 0]);
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Tls,
+                edns_padding_block_size: 32,
+                ..AnswerOptions::tcp()
             },
         );
 
@@ -893,7 +1034,8 @@
         let response = store_response(&packet, &ZoneStore::new());
 
         assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
-        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 0);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
     }
 
     #[test]
@@ -905,6 +1047,46 @@
         let response = store_response(&packet, &ZoneStore::new());
 
         assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn unsupported_version_before_second_opt_gets_formerr() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 1 << 16, &[]);
+        append_opt(&mut packet, 4096, 0, &[]);
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+    }
+
+    #[test]
+    fn duplicate_padding_options_get_formerr_and_opt() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &[
+                0,
+                EDNS_PADDING_OPTION as u8,
+                0,
+                0,
+                0,
+                EDNS_PADDING_OPTION as u8,
+                0,
+                0,
+            ],
+        );
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
     }
 
     #[test]

@@ -236,7 +236,7 @@
     }
 
     #[test]
-    fn dnssec_denial_candidate_reuses_answer_presence_classification() {
+    fn dnssec_denial_candidate_uses_terminal_context_even_with_alias_answers() {
         let snapshot = semantic_snapshot();
         let image = ZoneImage::compile(&snapshot).expect("zone image compiles");
 
@@ -294,7 +294,10 @@
         let dname_denial_candidate =
             plan_is_nodata_candidate(&dname_plan, dname_plan.answer_has_records())
                 || plan_is_nxdomain_candidate(&dname_plan, dname_plan.answer_has_records());
-        assert!(!dname_denial_candidate);
+        assert!(
+            dname_denial_candidate,
+            "a DNAME/CNAME chain ending in NODATA still requires a terminal denial proof"
+        );
         assert!(!plan_is_wildcard_synthesis_candidate(
             &dname_plan,
             dname_plan.answer_has_records()
@@ -343,7 +346,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("www.example.test.")],
                 ),
             ],
         );
@@ -454,7 +457,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("example.test.")],
                 ),
             ],
         ))
@@ -487,7 +490,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("example.test.")],
                 ),
             ],
         ))

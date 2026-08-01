@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use crate::{
     dns::{
         AnyResponseMode, DomainName, InlineNameWire, LookupTermination, Rcode, RecordType,
-        wire_name_len_at,
+        canonical_name_key_from_labels, wire_name_len_at,
     },
     zone::ZoneSnapshot,
 };
@@ -35,6 +35,8 @@ const DIRECT_ANSWER_BODY_RECORDS_FALLBACK: u32 = u32::MAX;
 const LOW_RRTYPE_BITMAP_WORDS: usize = 4;
 const NO_AUTHORITY_SOA_INDEX: u16 = u16::MAX;
 const NO_NODE_LOW_RRTYPE_BITMAP: u32 = u32::MAX;
+const NODE_DEPTH_MASK: u16 = 0x7fff;
+const NODE_FLAG_ORDINARY_NAME_EXISTS: u16 = 0x8000;
 type OwnerOverrideWire = InlineNameWire;
 type LowercaseLabelKey = SmallVec<[u8; LABEL_INLINE_CAPACITY]>;
 type Nsec3ParamHashCache = SmallVec<[(u16, Option<[u8; 20]>); 1]>;
@@ -62,6 +64,7 @@ pub struct ZoneImage {
     additional_address_rrset_flags: Box<[u64]>,
     rrsig_rrset_flags: Box<[u64]>,
     records: Box<[ImageRecord]>,
+    record_ttl_overrides: Box<[ImageRecordTtlOverride]>,
     rrset_relations: Box<[ImageRrsetRelation]>,
     rrset_relation_spans: Box<[ImageRrsetRelationSpan]>,
     single_name_targets: Box<[ImageSingleNameTarget]>,
@@ -70,6 +73,8 @@ pub struct ZoneImage {
     nsec3_param_sets: Box<[ImageNsec3ParamSet]>,
     nsec3_ranges: Box<[ImageNsec3Range]>,
     nsec3_range_groups: Box<[ImageNsec3RangeGroup]>,
+    active_nsec3_param_set: Option<(u16, u16)>,
+    dnssec_denial_broken: bool,
     apex_in_soa_rrset: Option<ZoneImageRrsetId>,
     dnssec_augmentation_possible: bool,
     dnssec_denial_augmentation_possible: bool,
@@ -161,10 +166,12 @@ pub struct ZoneImageLookupPlan {
     answer_items: SmallVec<[PlanAnswer; 1]>,
     authority_rrsets: SmallVec<[ZoneImageRrsetId; 2]>,
     additional_rrsets: SmallVec<[ZoneImageRrsetId; 4]>,
+    additional_rrsets_with_owner: SmallVec<[(ZoneImageRrsetId, u16); 1]>,
     owner_overrides: SmallVec<[OwnerOverrideWire; 1]>,
     dynamic_answers: SmallVec<[ZoneImageSynthesizedRecord; 1]>,
     selected_authorities: SmallVec<[ZoneImageSelectedRecord; 1]>,
     selected_additionals: SmallVec<[ZoneImageSelectedRecord; 1]>,
+    selected_additionals_with_owner: SmallVec<[(ZoneImageSelectedRecord, u16); 1]>,
     answer_record_count: u32,
     authority_record_count: u32,
     additional_record_count: u32,
@@ -174,6 +181,27 @@ pub struct ZoneImageLookupPlan {
     authority_soa_index: u16,
     flags: u8,
     termination: Option<LookupTermination>,
+    continuation: Option<ZoneImageIndirectionContinuation>,
+    denial_context: Option<ZoneImageDenialContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ZoneImageIndirectionContinuation {
+    target: Box<DomainName>,
+    remaining: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ZoneImageDenialContext {
+    terminal_name: Box<DomainName>,
+    kind: ZoneImageDenialKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ZoneImageDenialKind {
+    NoData,
+    NameError,
+    WildcardNoData { wildcard_name: Box<DomainName> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +213,10 @@ enum PlanAnswer {
     },
     DynamicRecord(u16),
     SelectedRecord(ZoneImageSelectedRecord),
+    SelectedRecordWithOwner {
+        record: ZoneImageSelectedRecord,
+        owner_index: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,6 +398,12 @@ struct ImageRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageRecordTtlOverride {
+    record_index: u64,
+    ttl: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ZoneImageRrsetPlanMetrics {
     rr_type: u16,
     record_count: usize,
@@ -451,11 +489,53 @@ enum ImageRrsetRelationKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ImageRrsetRelation {
-    kind: ImageRrsetRelationKind,
+    kind_and_flags: u8,
     rrset_id: ZoneImageRrsetId,
     record_index: u64,
     rdata_len: u16,
     owner_wire_len: u8,
+}
+
+impl ImageRrsetRelation {
+    const EFFECTIVE_OWNER: u8 = 0x80;
+
+    fn new(
+        kind: ImageRrsetRelationKind,
+        rrset_id: ZoneImageRrsetId,
+        record_index: u64,
+        rdata_len: u16,
+        owner_wire_len: u8,
+        effective_owner: bool,
+    ) -> Self {
+        Self {
+            kind_and_flags: kind as u8
+                | if effective_owner {
+                    Self::EFFECTIVE_OWNER
+                } else {
+                    0
+                },
+            rrset_id,
+            record_index,
+            rdata_len,
+            owner_wire_len,
+        }
+    }
+
+    fn kind(self) -> ImageRrsetRelationKind {
+        match self.kind_and_flags & !Self::EFFECTIVE_OWNER {
+            1 => ImageRrsetRelationKind::AdditionalAddress,
+            2 => ImageRrsetRelationKind::Rrsig,
+            3 => ImageRrsetRelationKind::ReferralGlue,
+            4 => ImageRrsetRelationKind::SingleNameTarget,
+            5 => ImageRrsetRelationKind::DelegationDs,
+            6 => ImageRrsetRelationKind::DelegationNsec,
+            _ => unreachable!("image relations are built with a known kind"),
+        }
+    }
+
+    fn effective_owner(self) -> bool {
+        self.kind_and_flags & Self::EFFECTIVE_OWNER != 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -578,7 +658,7 @@ fn relation_kind_offset(
 ) -> Result<u16, ZoneImageBuildError> {
     relations
         .iter()
-        .position(|relation| relation.kind == kind)
+        .position(|relation| relation.kind() == kind)
         .map(|offset| checked_u16(offset, "rrset relation offset"))
         .transpose()
         .map(|offset| offset.unwrap_or(NO_RELATION_OFFSET))
@@ -816,19 +896,30 @@ impl ZoneImage {
 
         let mut builder = ZoneImageBuilder::new(snapshot.origin.clone());
         for (owner_key, rrset) in rrsets {
-            let mut rdatas = rrset
+            let mut records = rrset
                 .rdatas()
                 .iter()
-                .map(Vec::as_slice)
-                .collect::<SmallVec<[&[u8]; 1]>>();
-            rdatas.sort_unstable();
+                .map(|rdata| {
+                    (
+                        rdata.as_slice(),
+                        snapshot.record_ttl_by_owner_key(
+                            owner_key.as_str(),
+                            rrset.class,
+                            rrset.rr_type,
+                            rrset.ttl,
+                            rdata,
+                        ),
+                    )
+                })
+                .collect::<SmallVec<[(&[u8], u32); 1]>>();
+            records.sort_unstable_by(|left, right| left.0.cmp(right.0));
             let rrset_id = builder.push_rrset(
                 owner_key,
                 &rrset.owner,
                 rrset.rr_type,
                 rrset.class,
                 rrset.ttl,
-                &rdatas,
+                &records,
             )?;
             builder.attach_rrset(&rrset.owner, rrset_id)?;
         }
@@ -881,6 +972,9 @@ impl ZoneImage {
                 ZoneImageLookupOutcome::OutOfZone
             };
         };
+        if !self.ordinary_name_exists(node_index) {
+            return ZoneImageLookupOutcome::NameError;
+        }
 
         if !self.low_rrtype_may_exist(qtype) {
             return ZoneImageLookupOutcome::NoData;
@@ -947,6 +1041,9 @@ impl ZoneImage {
         }
 
         let node_index = self.find_node_with_ascii_lowercase_hint(qname, qname_ascii_lowercase)?;
+        if !self.ordinary_name_exists(node_index) {
+            return None;
+        }
         let rrset_id = self.find_rrset_at_node(node_index, qtype, qclass)?;
         if self.covering_delegation_blocks_direct_answer(node_index, qtype, qclass)
             || self.covering_dname_blocks_direct_answer(node_index, qclass)
@@ -999,6 +1096,13 @@ impl ZoneImage {
             return plan;
         }
 
+        if self.low_rrtype_may_exist(RecordType::Dname as u16)
+            && let Some(node_index) = closest_or_exact_node
+            && let Some(dname) = self.dname_for_node(exact_node, node_index, qclass)
+        {
+            return self.lookup_dname(qname, qtype, qclass, max_cname_chain, exact_node, dname);
+        }
+
         if qtype == 255 {
             if let Some(node_index) = exact_node {
                 if any_response == AnyResponseMode::Minimal {
@@ -1047,15 +1151,8 @@ impl ZoneImage {
             return plan;
         }
 
-        if self.low_rrtype_may_exist(RecordType::Dname as u16)
-            && let Some(node_index) = closest_or_exact_node
-            && let Some(dname) = self.dname_for_node(exact_node, node_index, qclass)
-        {
-            return self.lookup_dname(qname, qtype, qclass, max_cname_chain, exact_node, dname);
-        }
-
         if exact_node.is_some() {
-            return self.nodata_plan(qclass);
+            return self.nodata_plan(qname, qclass);
         }
 
         if let Some(closest_node) = closest_or_exact_node
@@ -1071,7 +1168,7 @@ impl ZoneImage {
             return wildcard_plan;
         }
 
-        self.nxdomain_plan(qclass)
+        self.nxdomain_plan(qname, qclass)
     }
 
     pub fn augment_lookup_plan_with_dnssec(
@@ -1102,9 +1199,9 @@ impl ZoneImage {
             return plan;
         }
 
-        let referral_candidate = self.dnssec_referral_augmentation_possible
-            && !plan.authoritative()
-            && plan.referral_ns_rrset().is_some();
+        let referral_candidate =
+            self.dnssec_referral_augmentation_possible && plan.referral_ns_rrset().is_some();
+        let denial_context = plan.denial_context.clone();
         let (nodata_candidate, nxdomain_candidate, wildcard_candidate) =
             if self.dnssec_denial_augmentation_possible {
                 let answer_has_records = plan.answer_has_records();
@@ -1116,6 +1213,11 @@ impl ZoneImage {
             } else {
                 (false, false, false)
             };
+        if self.dnssec_denial_broken
+            && (nodata_candidate || nxdomain_candidate || wildcard_candidate)
+        {
+            return plan.into_dnssec_proof_servfail();
+        }
         if !referral_candidate
             && !self.dnssec_rrsig_augmentation_possible
             && !nodata_candidate
@@ -1144,31 +1246,68 @@ impl ZoneImage {
             } else {
                 false
             };
+            let proof_name = denial_context
+                .as_ref()
+                .map_or(qname, |context| context.terminal_name.as_ref());
+            let proof_name_ascii_lowercase = denial_context.is_some() || qname_ascii_lowercase;
             let (exact_qname_node, closest_qname_node) = if denial_has_authority_soa {
-                self.query_node_handles(qname, qname_ascii_lowercase)
+                self.query_node_handles(proof_name, proof_name_ascii_lowercase)
             } else {
                 (None, None)
             };
 
-            if nodata_candidate && denial_has_authority_soa {
-                self.add_nodata_nsec_augmentations(
-                    qname,
-                    qclass,
-                    exact_qname_node,
-                    qname_ascii_lowercase,
-                    &mut plan,
-                    &mut state,
-                );
-            }
-            if nxdomain_candidate && denial_has_authority_soa {
-                self.add_nxdomain_nsec_augmentations(
-                    qname,
-                    qclass,
-                    closest_qname_node,
-                    qname_ascii_lowercase,
-                    &mut plan,
-                    &mut state,
-                );
+            if denial_has_authority_soa {
+                match denial_context.as_ref().map(|context| &context.kind) {
+                    Some(ZoneImageDenialKind::NoData) if nodata_candidate => {
+                        self.add_nodata_nsec_augmentations(
+                            proof_name,
+                            qclass,
+                            exact_qname_node,
+                            proof_name_ascii_lowercase,
+                            &mut plan,
+                            &mut state,
+                        );
+                    }
+                    Some(ZoneImageDenialKind::NameError) if nxdomain_candidate => {
+                        self.add_nxdomain_nsec_augmentations(
+                            proof_name,
+                            qclass,
+                            closest_qname_node,
+                            proof_name_ascii_lowercase,
+                            &mut plan,
+                            &mut state,
+                        );
+                    }
+                    Some(ZoneImageDenialKind::WildcardNoData { wildcard_name })
+                        if nodata_candidate =>
+                    {
+                        self.add_wildcard_nodata_nsec_augmentations(
+                            proof_name,
+                            wildcard_name,
+                            qclass,
+                            closest_qname_node,
+                            &mut plan,
+                            &mut state,
+                        );
+                    }
+                    None if nodata_candidate => self.add_nodata_nsec_augmentations(
+                        qname,
+                        qclass,
+                        exact_qname_node,
+                        qname_ascii_lowercase,
+                        &mut plan,
+                        &mut state,
+                    ),
+                    None if nxdomain_candidate => self.add_nxdomain_nsec_augmentations(
+                        qname,
+                        qclass,
+                        closest_qname_node,
+                        qname_ascii_lowercase,
+                        &mut plan,
+                        &mut state,
+                    ),
+                    _ => {}
+                }
             }
             if wildcard_candidate {
                 self.add_wildcard_nsec_augmentations(
@@ -1336,6 +1475,23 @@ impl ZoneImage {
             wire_upper_bound =
                 wire_upper_bound.saturating_add(self.selected_record_wire_len(*selected));
         }
+        for (rrset, owner_index) in &plan.additional_rrsets_with_owner {
+            let metrics = self.rrset_plan_metrics_with_owner_len(
+                *rrset,
+                plan.owner_overrides[usize::from(*owner_index)].len(),
+            );
+            additional_count += metrics.record_count;
+            wire_upper_bound = wire_upper_bound.saturating_add(metrics.wire_upper_bound);
+        }
+        for (selected, owner_index) in &plan.selected_additionals_with_owner {
+            additional_count += 1;
+            wire_upper_bound = wire_upper_bound.saturating_add(
+                plan.owner_overrides[usize::from(*owner_index)]
+                    .len()
+                    .saturating_add(10)
+                    .saturating_add(selected.rdata.len()),
+            );
+        }
 
         (
             answer_count,
@@ -1389,6 +1545,29 @@ impl ZoneImage {
                 .map(|selected| self.selected_record_wire_len(*selected))
                 .sum::<usize>(),
         );
+        bytes = bytes.saturating_add(
+            plan.additional_rrsets_with_owner
+                .iter()
+                .map(|(rrset, owner_index)| {
+                    self.rrset_plan_metrics_with_owner_len(
+                        *rrset,
+                        plan.owner_overrides[usize::from(*owner_index)].len(),
+                    )
+                    .wire_upper_bound
+                })
+                .sum::<usize>(),
+        );
+        bytes = bytes.saturating_add(
+            plan.selected_additionals_with_owner
+                .iter()
+                .map(|(selected, owner_index)| {
+                    plan.owner_overrides[usize::from(*owner_index)]
+                        .len()
+                        .saturating_add(10)
+                        .saturating_add(selected.rdata.len())
+                })
+                .sum::<usize>(),
+        );
         bytes = bytes.saturating_add(self.rrset_list_wire_upper_bound(&plan.additional_rrsets));
         bytes = bytes.saturating_add(
             plan.selected_additionals
@@ -1422,6 +1601,14 @@ impl ZoneImage {
                 PlanAnswer::SelectedRecord(selected) => {
                     self.append_selected_record_wire(*selected, out);
                 }
+                PlanAnswer::SelectedRecordWithOwner {
+                    record,
+                    owner_index,
+                } => self.append_selected_record_wire_with_owner(
+                    *record,
+                    &plan.owner_overrides[usize::from(*owner_index)],
+                    out,
+                ),
             };
         }
     }
@@ -1490,6 +1677,20 @@ impl ZoneImage {
         for selected in &plan.selected_additionals {
             self.append_selected_record_wire(*selected, out);
         }
+        for (rrset, owner_index) in &plan.additional_rrsets_with_owner {
+            self.append_rrset_wire_with_owner(
+                *rrset,
+                &plan.owner_overrides[usize::from(*owner_index)],
+                out,
+            );
+        }
+        for (selected, owner_index) in &plan.selected_additionals_with_owner {
+            self.append_selected_record_wire_with_owner(
+                *selected,
+                &plan.owner_overrides[usize::from(*owner_index)],
+                out,
+            );
+        }
     }
 
     pub(crate) fn visit_plan_records<'a>(
@@ -1554,6 +1755,14 @@ impl ZoneImage {
                     }
                     PlanAnswer::SelectedRecord(selected) => {
                         visit(self.selected_wire_record(*selected));
+                    }
+                    PlanAnswer::SelectedRecordWithOwner {
+                        record,
+                        owner_index,
+                    } => {
+                        let mut wire_record = self.selected_wire_record(*record);
+                        wire_record.owner_wire = &plan.owner_overrides[usize::from(*owner_index)];
+                        visit(wire_record);
                     }
                 }
             }
@@ -1719,6 +1928,18 @@ impl ZoneImage {
         for selected in &plan.selected_additionals {
             visit(self.selected_wire_record(*selected));
         }
+        for (rrset, owner_index) in &plan.additional_rrsets_with_owner {
+            self.visit_rrset_records_with_owner(
+                *rrset,
+                &plan.owner_overrides[usize::from(*owner_index)],
+                visit,
+            );
+        }
+        for (selected, owner_index) in &plan.selected_additionals_with_owner {
+            let mut record = self.selected_wire_record(*selected);
+            record.owner_wire = &plan.owner_overrides[usize::from(*owner_index)];
+            visit(record);
+        }
     }
 
     #[cfg(test)]
@@ -1753,6 +1974,16 @@ impl ZoneImage {
                 PlanAnswer::SelectedRecord(selected) => {
                     (1, self.selected_record_wire_len(*selected))
                 }
+                PlanAnswer::SelectedRecordWithOwner {
+                    record,
+                    owner_index,
+                } => (
+                    1,
+                    plan.owner_overrides[usize::from(*owner_index)]
+                        .len()
+                        .saturating_add(10)
+                        .saturating_add(record.rdata.len()),
+                ),
             };
             record_count += item_count;
             bytes = bytes.saturating_add(item_bytes);
@@ -1871,7 +2102,9 @@ impl ZoneImage {
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u64::from(offset)) as usize];
+            let record_index = rrset.first_record + u64::from(offset);
+            let record = self.records[record_index as usize];
+            let fixed_fields = self.record_fixed_fields(record_index, fixed_fields);
             visit(ZoneImageWireRecord {
                 owner_wire,
                 fixed_fields,
@@ -1919,10 +2152,10 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         rrset: ZoneImageRrsetId,
         owner: &DomainName,
-    ) {
+    ) -> u16 {
         let owner_wire = owner_override_wire(owner);
         let metrics = self.rrset_plan_metrics_with_owner_len(rrset, owner_wire.len());
-        plan.push_answer_rrset_with_owner_wire(rrset, owner_wire, metrics);
+        plan.push_answer_rrset_with_owner_wire(rrset, owner_wire, metrics)
     }
 
     fn push_answer_rrset_with_owner_index_to_plan(
@@ -1954,6 +2187,19 @@ impl ZoneImage {
         plan.push_additional_rrset(rrset, metrics);
     }
 
+    fn push_additional_rrset_with_owner_to_plan(
+        &self,
+        plan: &mut ZoneImageLookupPlan,
+        rrset: ZoneImageRrsetId,
+        owner_index: u16,
+    ) {
+        let metrics = self.rrset_plan_metrics_with_owner_len(
+            rrset,
+            plan.owner_overrides[usize::from(owner_index)].len(),
+        );
+        plan.push_additional_rrset_with_owner(rrset, owner_index, metrics);
+    }
+
     fn push_full_any_rrsets_at_node(
         &self,
         node_index: u32,
@@ -1981,7 +2227,7 @@ impl ZoneImage {
         debug_assert!(plan.owner_overrides.is_empty());
         debug_assert!(plan.additional_rrsets.is_empty());
         let mut owner_index_and_len = None;
-        let mut seen_additionals = SmallVec::<[ZoneImageRrsetId; 4]>::new();
+        let mut seen_additionals = SmallVec::<[(ZoneImageRrsetId, bool); 4]>::new();
         self.for_each_any_rrset_at_node(node_index, qclass, |rrset| {
             let (owner_index, owner_wire_len) = *owner_index_and_len.get_or_insert_with(|| {
                 plan.set_flag(PLAN_FLAG_WILDCARD_SYNTHESIZED, true);
@@ -1995,7 +2241,12 @@ impl ZoneImage {
                 owner_index,
                 owner_wire_len,
             );
-            self.push_additionals_for_rrset_targets(rrset, &mut seen_additionals, plan);
+            self.push_additionals_for_rrset_targets_with_effective_owner(
+                rrset,
+                owner_index as u16,
+                &mut seen_additionals,
+                plan,
+            );
         });
     }
 
@@ -2003,6 +2254,21 @@ impl ZoneImage {
         let rrset = self.rrsets[selected.rrset_id.0 as usize];
         append_stored_record_fields_wire(
             self.blob(&self.names, rrset.owner_wire),
+            selected.fixed_fields,
+            selected.rdata,
+            self.rdata_blob(selected.rdata),
+            out,
+        );
+    }
+
+    fn append_selected_record_wire_with_owner(
+        &self,
+        selected: ZoneImageSelectedRecord,
+        owner_wire: &[u8],
+        out: &mut Vec<u8>,
+    ) {
+        append_stored_record_fields_wire(
+            owner_wire,
             selected.fixed_fields,
             selected.rdata,
             self.rdata_blob(selected.rdata),
@@ -2066,7 +2332,9 @@ impl ZoneImage {
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u64::from(offset)) as usize];
+            let record_index = rrset.first_record + u64::from(offset);
+            let record = self.records[record_index as usize];
+            let fixed_fields = self.record_fixed_fields(record_index, fixed_fields);
             append_stored_record_fields_wire(
                 owner_wire,
                 fixed_fields,
@@ -2088,20 +2356,20 @@ impl ZoneImage {
         fixed_fields
     }
 
-    fn nodata_plan(&self, qclass: u16) -> ZoneImageLookupPlan {
+    fn nodata_plan(&self, terminal_name: &DomainName, qclass: u16) -> ZoneImageLookupPlan {
         let mut plan = ZoneImageLookupPlan::nodata();
         if let Some(soa) = self.soa_rrset(qclass) {
             self.push_authority_rrset_to_plan(&mut plan, soa);
         }
-        plan
+        plan.with_denial_context(terminal_name, ZoneImageDenialKind::NoData)
     }
 
-    fn nxdomain_plan(&self, qclass: u16) -> ZoneImageLookupPlan {
+    fn nxdomain_plan(&self, terminal_name: &DomainName, qclass: u16) -> ZoneImageLookupPlan {
         let mut plan = ZoneImageLookupPlan::nxdomain();
         if let Some(soa) = self.soa_rrset(qclass) {
             self.push_authority_rrset_to_plan(&mut plan, soa);
         }
-        plan
+        plan.with_denial_context(terminal_name, ZoneImageDenialKind::NameError)
     }
 
     #[cfg(test)]
@@ -2309,7 +2577,7 @@ impl ZoneImage {
                 .origin
                 .labels()
                 .len()
-                .saturating_add(node.depth as usize)
+                .saturating_add(usize::from(node.depth & NODE_DEPTH_MASK))
     }
 
     fn query_is_ds_at_delegation_owner(
@@ -2438,6 +2706,168 @@ impl ZoneImage {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_dname_at<'a>(
+        &'a self,
+        current: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        mut plan: ZoneImageLookupPlan,
+        state: ChainState<'a>,
+        dname: ZoneImageRrsetId,
+    ) -> ZoneImageLookupPlan {
+        if state.remaining == 0 {
+            return plan.into_servfail(LookupTermination::CnameChainLimit);
+        }
+        if self.rrsets[dname.0 as usize].record_count != 1 {
+            plan = plan.into_servfail(LookupTermination::MalformedDname);
+            self.push_answer_rrset_to_plan(&mut plan, dname);
+            return plan;
+        }
+        let Some(target) = self.single_name_rrset_target(dname) else {
+            plan = plan.into_servfail(LookupTermination::MalformedDname);
+            self.push_answer_rrset_to_plan(&mut plan, dname);
+            return plan;
+        };
+        let dname_owner_wire = self.blob(&self.names, self.rrsets[dname.0 as usize].owner_wire);
+        let target_wire = self.single_name_target_wire(target);
+        if target.node_hint == ImageTargetNode::OutOfZone {
+            let Some((synthesized_target_wire, _)) = current
+                .with_replaced_wire_suffix_wire_counted(
+                    dname_owner_wire,
+                    usize::from(self.rrsets[dname.0 as usize].owner_label_count),
+                    target_wire,
+                )
+            else {
+                plan.rcode = Rcode::YxDomain;
+                self.push_answer_rrset_to_plan(&mut plan, dname);
+                if let Some(soa) = self.soa_rrset(qclass) {
+                    self.push_authority_rrset_to_plan(&mut plan, soa);
+                }
+                return plan;
+            };
+            self.push_answer_rrset_to_plan(&mut plan, dname);
+            let fixed_fields =
+                synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize]);
+            plan.push_synthesized_answer(
+                current,
+                fixed_fields,
+                PackedRdataEncoding::single_name(),
+                synthesized_target_wire,
+            );
+            return plan;
+        }
+
+        let Some((synthesized_target, synthesized_target_wire, prefix_len)) = current
+            .with_replaced_wire_suffix_and_stored_wire_parts_counted(
+                dname_owner_wire,
+                usize::from(self.rrsets[dname.0 as usize].owner_label_count),
+                &target.name,
+                target_wire,
+            )
+        else {
+            plan.rcode = Rcode::YxDomain;
+            self.push_answer_rrset_to_plan(&mut plan, dname);
+            if let Some(soa) = self.soa_rrset(qclass) {
+                self.push_authority_rrset_to_plan(&mut plan, soa);
+            }
+            return plan;
+        };
+        self.push_answer_rrset_to_plan(&mut plan, dname);
+        let fixed_fields = synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize]);
+        let synthesized_index = plan.push_synthesized_answer(
+            current,
+            fixed_fields,
+            PackedRdataEncoding::single_name(),
+            synthesized_target_wire,
+        );
+        self.resolve_indirection_target(
+            &synthesized_target,
+            IndirectionTargetWire::DynamicAnswer(synthesized_index),
+            self.dname_synthesized_target_node_hint(
+                target,
+                &synthesized_target,
+                current,
+                prefix_len,
+            ),
+            qtype,
+            qclass,
+            plan,
+            ChainState {
+                remaining: state.remaining - 1,
+                ..state
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_wildcard_continuation_at<'a>(
+        &'a self,
+        closest_node: u32,
+        target: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        mut plan: ZoneImageLookupPlan,
+        state: ChainState<'a>,
+    ) -> Option<ZoneImageLookupPlan> {
+        let wildcard_node = self.find_child(closest_node, b"*")?;
+        if self.low_rrtype_may_exist(qtype)
+            && let Some(rrset) = self.find_rrset_at_node(wildcard_node, qtype, qclass)
+        {
+            let owner_index = self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, target);
+            self.add_precomputed_additionals_for_wildcard_answer_rrset(
+                rrset,
+                owner_index,
+                &mut plan,
+            );
+            return Some(plan);
+        }
+        if qtype != RecordType::Cname as u16
+            && self.low_rrtype_may_exist(RecordType::Cname as u16)
+            && let Some(cname) =
+                self.find_rrset_at_node(wildcard_node, RecordType::Cname as u16, qclass)
+        {
+            if state.remaining == 0 {
+                warn!(
+                    qname = %state.original_qname,
+                    zone = %self.origin,
+                    reason = "cname_chain_limit",
+                    current = %target,
+                    "wildcard CNAME chain limit reached; returning SERVFAIL with partial chain"
+                );
+                return Some(plan.into_servfail(LookupTermination::CnameChainLimit));
+            }
+            self.push_answer_rrset_with_owner_to_plan(&mut plan, cname, target);
+            let cname_target = self.single_name_rrset_target(cname)?;
+            return Some(self.resolve_indirection_target(
+                &cname_target.name,
+                IndirectionTargetWire::Borrowed(self.single_name_target_wire(cname_target)),
+                cname_target.node_hint,
+                qtype,
+                qclass,
+                plan,
+                ChainState {
+                    remaining: state.remaining - 1,
+                    ..state
+                },
+            ));
+        }
+        if self.ordinary_name_exists(wildcard_node) {
+            plan.rcode = Rcode::NoError;
+            if let Some(soa) = self.soa_rrset(qclass) {
+                self.push_authority_rrset_to_plan(&mut plan, soa);
+            }
+            let wildcard_name = self.wildcard_name_at_closest_node(target, closest_node)?;
+            return Some(plan.with_denial_context(
+                target,
+                ZoneImageDenialKind::WildcardNoData {
+                    wildcard_name: Box::new(wildcard_name),
+                },
+            ));
+        }
+        None
+    }
+
     fn lookup_wildcard_at_closest_node(
         &self,
         closest_node: u32,
@@ -2453,8 +2883,13 @@ impl ZoneImage {
             if any_response == AnyResponseMode::Minimal {
                 if let Some(rrset) = self.minimal_any_rrset_at_node(wildcard_node, qclass) {
                     let mut plan = ZoneImageLookupPlan::positive();
-                    self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, qname);
-                    self.add_precomputed_additionals_for_single_answer_rrset(rrset, &mut plan);
+                    let owner_index =
+                        self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, qname);
+                    self.add_precomputed_additionals_for_wildcard_answer_rrset(
+                        rrset,
+                        owner_index,
+                        &mut plan,
+                    );
                     return Some(plan);
                 }
             } else {
@@ -2473,8 +2908,12 @@ impl ZoneImage {
             && let Some(rrset) = self.find_rrset_at_node(wildcard_node, qtype, qclass)
         {
             let mut plan = ZoneImageLookupPlan::positive();
-            self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, qname);
-            self.add_precomputed_additionals_for_single_answer_rrset(rrset, &mut plan);
+            let owner_index = self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, qname);
+            self.add_precomputed_additionals_for_wildcard_answer_rrset(
+                rrset,
+                owner_index,
+                &mut plan,
+            );
             return Some(plan);
         }
 
@@ -2500,8 +2939,15 @@ impl ZoneImage {
             return Some(plan);
         }
 
-        if self.nodes[wildcard_node as usize].rrset_count > 0 {
-            return Some(self.nodata_plan(qclass));
+        if self.ordinary_name_exists(wildcard_node) {
+            let wildcard_name = self.wildcard_name_at_closest_node(qname, closest_node)?;
+            let plan = self.nodata_plan(qname, qclass).with_denial_context(
+                qname,
+                ZoneImageDenialKind::WildcardNoData {
+                    wildcard_name: Box::new(wildcard_name),
+                },
+            );
+            return Some(plan);
         }
         None
     }
@@ -2558,6 +3004,12 @@ impl ZoneImage {
         mut plan: ZoneImageLookupPlan,
         mut state: ChainState<'a>,
     ) -> ZoneImageLookupPlan {
+        let target_node = match target_node {
+            ImageTargetNode::InZoneNode(node) if !self.ordinary_name_exists(node) => {
+                ImageTargetNode::InZoneMissing
+            }
+            target_node => target_node,
+        };
         if target_matches_original_query(target, target_wire, target_node, &state, &plan) {
             warn!(
                 qname = %state.original_qname,
@@ -2569,8 +3021,53 @@ impl ZoneImage {
             return plan.into_servfail(LookupTermination::CnameLoop);
         }
 
+        if matches!(
+            target_node,
+            ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix
+        ) {
+            return plan.with_indirection_continuation(target, state.remaining);
+        }
+
+        let (exact_target_node, closest_target_node) = self.query_node_handles(target, false);
+        if let Some(closest_target_node) = closest_target_node
+            && let Some(delegation) = self.delegation_for_node(closest_target_node, qclass)
+            && !self.query_is_ds_at_delegation_owner(
+                exact_target_node,
+                closest_target_node,
+                qtype,
+                delegation,
+            )
+        {
+            plan.referral_ns_rrset = delegation.0;
+            self.push_authority_rrset_to_plan(&mut plan, delegation);
+            self.add_glue_for_ns_rrset(delegation, &mut plan);
+            return plan.with_indirection_continuation(target, state.remaining);
+        }
+
+        if self.low_rrtype_may_exist(RecordType::Dname as u16)
+            && let Some(closest_target_node) = closest_target_node
+            && let Some(dname) = self.dname_for_node(exact_target_node, closest_target_node, qclass)
+        {
+            return self.resolve_dname_at(target, qtype, qclass, plan, state, dname);
+        }
+        if exact_target_node.is_none()
+            && let Some(closest_target_node) = closest_target_node
+            && let Some(wildcard_plan) = self.resolve_wildcard_continuation_at(
+                closest_target_node,
+                target,
+                qtype,
+                qclass,
+                plan.clone(),
+                state.clone(),
+            )
+        {
+            return wildcard_plan;
+        }
+
         match target_node {
-            ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix => {}
+            ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix => unreachable!(
+                "out-of-zone indirection targets return before trie and delegation lookup"
+            ),
             ImageTargetNode::InZoneNode(target_node) => {
                 if state.visited_target_nodes.contains(&target_node) {
                     warn!(
@@ -2604,12 +3101,14 @@ impl ZoneImage {
                 if let Some(soa) = self.soa_rrset(qclass) {
                     self.push_authority_rrset_to_plan(&mut plan, soa);
                 }
+                plan = plan.with_denial_context(target, ZoneImageDenialKind::NoData);
             }
             ImageTargetNode::InZoneMissing => {
                 plan.rcode = Rcode::NxDomain;
                 if let Some(soa) = self.soa_rrset(qclass) {
                     self.push_authority_rrset_to_plan(&mut plan, soa);
                 }
+                plan = plan.with_denial_context(target, ZoneImageDenialKind::NameError);
             }
         }
         plan
@@ -2639,6 +3138,22 @@ impl ZoneImage {
         added
     }
 
+    fn add_precomputed_additionals_for_wildcard_answer_rrset(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        owner_index: u16,
+        plan: &mut ZoneImageLookupPlan,
+    ) {
+        debug_assert!(plan.additional_rrsets.is_empty());
+        let mut seen = SmallVec::<[(ZoneImageRrsetId, bool); 4]>::new();
+        self.push_additionals_for_rrset_targets_with_effective_owner(
+            rrset_id,
+            owner_index,
+            &mut seen,
+            plan,
+        );
+    }
+
     fn push_additionals_for_rrset_targets(
         &self,
         rrset_id: ZoneImageRrsetId,
@@ -2649,6 +3164,28 @@ impl ZoneImage {
             let rrset = relation.rrset_id;
             if !seen.contains(&rrset) {
                 seen.push(rrset);
+                self.push_additional_rrset_to_plan(plan, rrset);
+            }
+        }
+    }
+
+    fn push_additionals_for_rrset_targets_with_effective_owner(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        owner_index: u16,
+        seen: &mut SmallVec<[(ZoneImageRrsetId, bool); 4]>,
+        plan: &mut ZoneImageLookupPlan,
+    ) {
+        for relation in self.precomputed_additional_relations_if_present(rrset_id) {
+            let rrset = relation.rrset_id;
+            let identity = (rrset, relation.effective_owner());
+            if seen.contains(&identity) {
+                continue;
+            }
+            seen.push(identity);
+            if relation.effective_owner() {
+                self.push_additional_rrset_with_owner_to_plan(plan, rrset, owner_index);
+            } else {
                 self.push_additional_rrset_to_plan(plan, rrset);
             }
         }
@@ -2689,7 +3226,7 @@ impl ZoneImage {
         debug_assert!(
             relations
                 .iter()
-                .all(|relation| relation.kind == ImageRrsetRelationKind::AdditionalAddress)
+                .all(|relation| relation.kind() == ImageRrsetRelationKind::AdditionalAddress)
         );
         relations
     }
@@ -2719,7 +3256,7 @@ impl ZoneImage {
         debug_assert!(
             relations
                 .iter()
-                .all(|relation| relation.kind == ImageRrsetRelationKind::ReferralGlue)
+                .all(|relation| relation.kind() == ImageRrsetRelationKind::ReferralGlue)
         );
         relations
     }
@@ -2787,7 +3324,7 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        let Some(rrset_id) = plan.referral_ns_rrset().filter(|_| !plan.authoritative()) else {
+        let Some(rrset_id) = plan.referral_ns_rrset() else {
             return;
         };
         self.add_referral_dnssec_for_ns_rrset(rrset_id, plan, state);
@@ -2802,11 +3339,145 @@ impl ZoneImage {
         let rrset = self.rrsets[rrset_id.0 as usize];
         debug_assert_eq!(rrset.rr_type(), RecordType::Ns as u16);
         if let Some(relation) = self.precomputed_referral_dnssec_rrset(rrset_id) {
-            self.push_authority_rrset(plan, relation.rrset_id, state);
-        } else {
-            let owner_wire = self.blob(&self.names, rrset.owner_wire);
-            self.push_nsec3_for_wire_name(owner_wire, rrset.class(), plan, state);
+            match relation.kind() {
+                ImageRrsetRelationKind::DelegationDs => {
+                    self.push_authority_rrset(plan, relation.rrset_id, state);
+                    return;
+                }
+                ImageRrsetRelationKind::DelegationNsec if self.nsec_denial_active() => {
+                    self.push_authority_rrset(plan, relation.rrset_id, state);
+                    return;
+                }
+                ImageRrsetRelationKind::DelegationNsec => {}
+                _ => unreachable!("referral DNSSEC relation has delegation kind"),
+            }
         }
+        if self.dnssec_denial_broken {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+        } else if self.nsec3_denial_active() {
+            let owner_wire = self.blob(&self.names, rrset.owner_wire);
+            self.add_nsec3_unsigned_referral_proof(owner_wire, rrset.class(), plan, state);
+        }
+    }
+
+    fn add_nsec3_unsigned_referral_proof(
+        &self,
+        delegation_wire: &[u8],
+        qclass: u16,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) {
+        let Ok((delegation, consumed)) = DomainName::parse(delegation_wire, 0) else {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+            return;
+        };
+        if consumed != delegation_wire.len() {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+            return;
+        }
+
+        if let Some(exact) = self.nsec3_exact_rrset_for_name(
+            &delegation,
+            qclass,
+            &mut state.nsec3_iterations_exceeded,
+            state.nsec3_max_iterations,
+            false,
+        ) {
+            if self.selected_nsec3_rrset_has_types(exact, true, false) {
+                self.push_authority_rrset(plan, exact, state);
+            } else {
+                *plan = plan.clone().into_dnssec_proof_servfail();
+            }
+            return;
+        }
+
+        let Some((label_ranges, consumed)) = canonical_wire_label_ranges(delegation_wire) else {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+            return;
+        };
+        let relative_labels = delegation
+            .label_count()
+            .saturating_sub(self.origin.label_count());
+        if consumed != delegation_wire.len() || relative_labels == 0 {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+            return;
+        }
+
+        for removed_labels in 1..=relative_labels {
+            let closest_start = label_ranges[removed_labels].0.saturating_sub(1);
+            let Ok((closest, _)) = DomainName::parse(delegation_wire, closest_start) else {
+                continue;
+            };
+            let Some(exact_closest) = self.nsec3_exact_rrset_for_name(
+                &closest,
+                qclass,
+                &mut state.nsec3_iterations_exceeded,
+                state.nsec3_max_iterations,
+                false,
+            ) else {
+                continue;
+            };
+            let next_closer_start = label_ranges[removed_labels - 1].0.saturating_sub(1);
+            let Ok((next_closer, _)) = DomainName::parse(delegation_wire, next_closer_start) else {
+                break;
+            };
+            let covering_next = self.nsec3_covering_rrset_for_label_view(
+                NameLabelView {
+                    prefix: None,
+                    labels: next_closer.labels(),
+                    ascii_lowercase: false,
+                },
+                qclass,
+                &mut state.nsec3_iterations_exceeded,
+                state.nsec3_max_iterations,
+            );
+            if let Some(covering_next) = covering_next
+                && self.selected_nsec3_rrset_is_optout(covering_next)
+            {
+                self.push_authority_rrset(plan, exact_closest, state);
+                self.push_authority_rrset(plan, covering_next, state);
+                return;
+            }
+            break;
+        }
+
+        *plan = plan.clone().into_dnssec_proof_servfail();
+    }
+
+    fn selected_nsec3_rrset_is_optout(&self, rrset_id: ZoneImageRrsetId) -> bool {
+        self.selected_nsec3_rrset_rdatas(rrset_id)
+            .any(|rdata| rdata.get(1).is_some_and(|flags| flags & 1 != 0))
+    }
+
+    fn selected_nsec3_rrset_has_types(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        require_ns: bool,
+        require_ds: bool,
+    ) -> bool {
+        self.selected_nsec3_rrset_rdatas(rrset_id).any(|rdata| {
+            nsec3_type_bitmap_contains(rdata, RecordType::Ns as u16) == Some(require_ns)
+                && nsec3_type_bitmap_contains(rdata, RecordType::Ds as u16) == Some(require_ds)
+        })
+    }
+
+    fn selected_nsec3_rrset_rdatas(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+    ) -> impl Iterator<Item = &[u8]> {
+        let rrset = self.rrsets[rrset_id.0 as usize];
+        let active = self.active_nsec3_param_set;
+        (0..rrset.record_count).filter_map(move |offset| {
+            let record = self.records[(rrset.first_record + u64::from(offset)) as usize];
+            let rdata = self.rdata_blob(record.rdata);
+            let params = nsec3_params_from_rdata(rdata)?;
+            let (_, active_param_set) = active?;
+            let param_set = self.nsec3_param_set(active_param_set);
+            (params.hash_algorithm == param_set.hash_algorithm
+                && params.iterations == param_set.iterations
+                && params.salt == self.blob(&self.rdata, param_set.salt))
+            .then_some(rdata)
+        })
     }
 
     fn add_nodata_nsec_augmentations(
@@ -2822,13 +3493,26 @@ impl ZoneImage {
             return;
         };
 
-        let has_nsec_ranges = !self.nsec_ranges.is_empty();
-        if has_nsec_ranges
-            && let Some(nsec) = self.find_rrset_at_node(qname_node, RecordType::Nsec as u16, qclass)
-        {
-            self.push_authority_rrset(plan, nsec, state);
-        } else if !self.nsec3_ranges.is_empty() {
-            self.push_nsec3_for_name(qname, qclass, qname_ascii_lowercase, plan, state);
+        let has_nsec_ranges = self.nsec_denial_active();
+        if has_nsec_ranges {
+            if let Some(nsec) = self.find_rrset_at_node(qname_node, RecordType::Nsec as u16, qclass)
+            {
+                self.push_authority_rrset(plan, nsec, state);
+            } else {
+                *plan = plan.clone().into_dnssec_proof_servfail();
+            }
+        } else if self.nsec3_denial_active() {
+            if let Some(nsec3) = self.nsec3_exact_rrset_for_name(
+                qname,
+                qclass,
+                &mut state.nsec3_iterations_exceeded,
+                state.nsec3_max_iterations,
+                qname_ascii_lowercase,
+            ) {
+                self.push_authority_rrset(plan, nsec3, state);
+            } else {
+                *plan = plan.clone().into_dnssec_proof_servfail();
+            }
         }
     }
 
@@ -2841,13 +3525,10 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        let has_nsec_ranges = !self.nsec_ranges.is_empty();
-        let has_nsec3_ranges = !self.nsec3_ranges.is_empty();
+        let has_nsec_ranges = self.nsec_denial_active();
+        let has_nsec3_ranges = self.nsec3_denial_active();
         if has_nsec_ranges {
             self.push_nsec_covering_name(qname, qclass, plan, state);
-        }
-        if has_nsec3_ranges {
-            self.push_nsec3_for_name(qname, qclass, qname_ascii_lowercase, plan, state);
         }
         if (has_nsec_ranges || has_nsec3_ranges)
             && let Some(closest_labels) =
@@ -2867,8 +3548,115 @@ impl ZoneImage {
                 self.push_nsec_covering_label_view(wildcard_child, qclass, plan, state);
             }
             if has_nsec3_ranges {
-                self.push_nsec3_for_label_view(closest_encloser, qclass, plan, state);
-                self.push_nsec3_for_label_view(wildcard_child, qclass, plan, state);
+                let next_closer_start = qname
+                    .labels()
+                    .len()
+                    .checked_sub(closest_labels.len().saturating_add(1));
+                let exact_closest = self.nsec3_exact_rrset_for_label_view(
+                    closest_encloser,
+                    qclass,
+                    &mut state.nsec3_iterations_exceeded,
+                    state.nsec3_max_iterations,
+                );
+                let covering_next_closer = next_closer_start.and_then(|start| {
+                    self.nsec3_covering_rrset_for_label_view(
+                        NameLabelView {
+                            prefix: None,
+                            labels: &qname.labels()[start..],
+                            ascii_lowercase: qname_ascii_lowercase,
+                        },
+                        qclass,
+                        &mut state.nsec3_iterations_exceeded,
+                        state.nsec3_max_iterations,
+                    )
+                });
+                let covering_wildcard = self.nsec3_covering_rrset_for_label_view(
+                    wildcard_child,
+                    qclass,
+                    &mut state.nsec3_iterations_exceeded,
+                    state.nsec3_max_iterations,
+                );
+                if let (Some(exact_closest), Some(covering_next_closer), Some(covering_wildcard)) =
+                    (exact_closest, covering_next_closer, covering_wildcard)
+                {
+                    self.push_authority_rrset(plan, exact_closest, state);
+                    self.push_authority_rrset(plan, covering_next_closer, state);
+                    self.push_authority_rrset(plan, covering_wildcard, state);
+                } else {
+                    *plan = plan.clone().into_dnssec_proof_servfail();
+                }
+            }
+        } else if has_nsec3_ranges {
+            *plan = plan.clone().into_dnssec_proof_servfail();
+        }
+    }
+
+    fn add_wildcard_nodata_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        wildcard_name: &DomainName,
+        qclass: u16,
+        closest_qname_node: Option<u32>,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) {
+        if self.nsec_denial_active() {
+            self.push_nsec_covering_name(qname, qclass, plan, state);
+            if let Some(wildcard_node) = self.find_node(wildcard_name)
+                && let Some(nsec) =
+                    self.find_rrset_at_node(wildcard_node, RecordType::Nsec as u16, qclass)
+            {
+                self.push_authority_rrset(plan, nsec, state);
+            }
+        }
+        if self.nsec3_denial_active() {
+            if let Some(closest_labels) =
+                self.closest_encloser_labels_from_node(qname, closest_qname_node)
+            {
+                let next_closer_start = qname
+                    .labels()
+                    .len()
+                    .checked_sub(closest_labels.len().saturating_add(1));
+                let exact_closest = self.nsec3_exact_rrset_for_label_view(
+                    NameLabelView {
+                        prefix: None,
+                        labels: closest_labels,
+                        ascii_lowercase: false,
+                    },
+                    qclass,
+                    &mut state.nsec3_iterations_exceeded,
+                    state.nsec3_max_iterations,
+                );
+                let covering_next_closer = next_closer_start.and_then(|start| {
+                    self.nsec3_covering_rrset_for_label_view(
+                        NameLabelView {
+                            prefix: None,
+                            labels: &qname.labels()[start..],
+                            ascii_lowercase: false,
+                        },
+                        qclass,
+                        &mut state.nsec3_iterations_exceeded,
+                        state.nsec3_max_iterations,
+                    )
+                });
+                let exact_wildcard = self.nsec3_exact_rrset_for_name(
+                    wildcard_name,
+                    qclass,
+                    &mut state.nsec3_iterations_exceeded,
+                    state.nsec3_max_iterations,
+                    false,
+                );
+                if let (Some(exact_closest), Some(covering_next_closer), Some(exact_wildcard)) =
+                    (exact_closest, covering_next_closer, exact_wildcard)
+                {
+                    self.push_authority_rrset(plan, exact_closest, state);
+                    self.push_authority_rrset(plan, covering_next_closer, state);
+                    self.push_authority_rrset(plan, exact_wildcard, state);
+                } else {
+                    *plan = plan.clone().into_dnssec_proof_servfail();
+                }
+            } else {
+                *plan = plan.clone().into_dnssec_proof_servfail();
             }
         }
     }
@@ -2881,11 +3669,38 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        if !self.nsec_ranges.is_empty() {
+        if self.nsec_denial_active() {
             self.push_nsec_covering_name(qname, qclass, plan, state);
         }
-        if !self.nsec3_ranges.is_empty() {
-            self.push_nsec3_for_name(qname, qclass, qname_ascii_lowercase, plan, state);
+        if self.nsec3_denial_active() {
+            let closest_node = self.closest_encloser_node(qname);
+            let covering_next_closer = closest_node
+                .and_then(|closest_node| {
+                    self.closest_encloser_labels_from_node(qname, Some(closest_node))
+                })
+                .and_then(|closest_labels| {
+                    qname
+                        .labels()
+                        .len()
+                        .checked_sub(closest_labels.len().saturating_add(1))
+                })
+                .and_then(|start| {
+                    self.nsec3_covering_rrset_for_label_view(
+                        NameLabelView {
+                            prefix: None,
+                            labels: &qname.labels()[start..],
+                            ascii_lowercase: qname_ascii_lowercase,
+                        },
+                        qclass,
+                        &mut state.nsec3_iterations_exceeded,
+                        state.nsec3_max_iterations,
+                    )
+                });
+            if let Some(covering_next_closer) = covering_next_closer {
+                self.push_authority_rrset(plan, covering_next_closer, state);
+            } else {
+                *plan = plan.clone().into_dnssec_proof_servfail();
+            }
         }
     }
 
@@ -2898,7 +3713,7 @@ impl ZoneImage {
             let answer_rrset_count = plan.answer_rrsets.len();
             for index in 0..answer_rrset_count {
                 let rrset_id = plan.answer_rrsets[index];
-                self.push_rrsig_for_rrset(DnssecSection::Answer, rrset_id, plan, state);
+                self.push_rrsig_for_rrset(DnssecSection::Answer, rrset_id, None, plan, state);
             }
         } else {
             let answer_item_count = plan.answer_items.len();
@@ -2906,11 +3721,27 @@ impl ZoneImage {
                 let item = plan.answer_items[index];
                 match item {
                     PlanAnswer::Rrset(rrset_id) => {
-                        self.push_rrsig_for_rrset(DnssecSection::Answer, rrset_id, plan, state);
+                        self.push_rrsig_for_rrset(
+                            DnssecSection::Answer,
+                            rrset_id,
+                            None,
+                            plan,
+                            state,
+                        );
                     }
-                    PlanAnswer::RrsetWithOwner { .. }
-                    | PlanAnswer::DynamicRecord(_)
-                    | PlanAnswer::SelectedRecord(_) => {}
+                    PlanAnswer::RrsetWithOwner {
+                        rrset_id,
+                        owner_index,
+                    } => self.push_rrsig_for_rrset(
+                        DnssecSection::Answer,
+                        rrset_id,
+                        Some(owner_index),
+                        plan,
+                        state,
+                    ),
+                    PlanAnswer::DynamicRecord(_)
+                    | PlanAnswer::SelectedRecord(_)
+                    | PlanAnswer::SelectedRecordWithOwner { .. } => {}
                 }
             }
         }
@@ -2918,13 +3749,24 @@ impl ZoneImage {
         let authority_rrset_count = plan.authority_rrsets.len();
         for index in 0..authority_rrset_count {
             let rrset_id = plan.authority_rrsets[index];
-            self.push_rrsig_for_rrset(DnssecSection::Authority, rrset_id, plan, state);
+            self.push_rrsig_for_rrset(DnssecSection::Authority, rrset_id, None, plan, state);
         }
 
         let additional_rrset_count = plan.additional_rrsets.len();
         for index in 0..additional_rrset_count {
             let rrset_id = plan.additional_rrsets[index];
-            self.push_rrsig_for_rrset(DnssecSection::Additional, rrset_id, plan, state);
+            self.push_rrsig_for_rrset(DnssecSection::Additional, rrset_id, None, plan, state);
+        }
+        let additional_with_owner_count = plan.additional_rrsets_with_owner.len();
+        for index in 0..additional_with_owner_count {
+            let (rrset_id, owner_index) = plan.additional_rrsets_with_owner[index];
+            self.push_rrsig_for_rrset(
+                DnssecSection::Additional,
+                rrset_id,
+                Some(owner_index),
+                plan,
+                state,
+            );
         }
     }
 
@@ -2948,6 +3790,15 @@ impl ZoneImage {
         state.dnssec_augmented = true;
     }
 
+    fn nsec_denial_active(&self) -> bool {
+        self.active_nsec3_param_set.is_none()
+            && self.nsec_range_groups.iter().any(|group| group.indexed)
+    }
+
+    fn nsec3_denial_active(&self) -> bool {
+        self.active_nsec3_param_set.is_some()
+    }
+
     fn push_nsec_covering_name(
         &self,
         name: &DomainName,
@@ -2955,7 +3806,7 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        if self.nsec_ranges.is_empty() {
+        if !self.nsec_denial_active() {
             return;
         }
         let Some(nsec) = self.nsec_rrset_covering_name(name, qclass) else {
@@ -2971,7 +3822,7 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        if self.nsec_ranges.is_empty() {
+        if !self.nsec_denial_active() {
             return;
         }
         let Some(nsec) = self.nsec_rrset_covering_label_view(name, qclass) else {
@@ -2997,30 +3848,23 @@ impl ZoneImage {
         qclass: u16,
     ) -> Option<ZoneImageRrsetId> {
         for group in &self.nsec_range_groups {
-            if !qclass_matches(group.class, qclass) {
+            if !group.indexed || !qclass_matches(group.class, qclass) {
                 continue;
             }
             let ranges = self.nsec_ranges_for_group(group)?;
-            if group.indexed {
-                let insertion = ranges.partition_point(|range| {
-                    cmp_canonical_order_wire_key_to_label_view(
-                        self.blob(&self.names, range.owner_key),
-                        name,
-                    ) == Ordering::Less
-                });
-                let candidate = if insertion == 0 {
-                    ranges.last()
-                } else {
-                    ranges.get(insertion - 1)
-                };
-                if candidate.is_some_and(|range| self.nsec_range_covers(range, name)) {
-                    return candidate.map(|range| range.rrset_id);
-                }
-            } else if let Some(range) = ranges
-                .iter()
-                .find(|range| self.nsec_range_covers(range, name))
-            {
-                return Some(range.rrset_id);
+            let insertion = ranges.partition_point(|range| {
+                cmp_canonical_order_wire_key_to_label_view(
+                    self.blob(&self.names, range.owner_key),
+                    name,
+                ) == Ordering::Less
+            });
+            let candidate = if insertion == 0 {
+                ranges.last()
+            } else {
+                ranges.get(insertion - 1)
+            };
+            if candidate.is_some_and(|range| self.nsec_range_covers(range, name)) {
+                return candidate.map(|range| range.rrset_id);
             }
         }
         None
@@ -3041,6 +3885,7 @@ impl ZoneImage {
         )
     }
 
+    #[cfg(test)]
     fn push_nsec3_for_name(
         &self,
         name: &DomainName,
@@ -3049,7 +3894,7 @@ impl ZoneImage {
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
-        if self.nsec3_ranges.is_empty() {
+        if !self.nsec3_denial_active() {
             return;
         }
         let Some(nsec3) = self.nsec3_rrset_for_name(
@@ -3064,48 +3909,7 @@ impl ZoneImage {
         self.push_authority_rrset(plan, nsec3, state);
     }
 
-    fn push_nsec3_for_label_view(
-        &self,
-        name: NameLabelView<'_>,
-        qclass: u16,
-        plan: &mut ZoneImageLookupPlan,
-        state: &mut ZoneImageDnssecState,
-    ) {
-        if self.nsec3_ranges.is_empty() {
-            return;
-        }
-        let Some(nsec3) = self.nsec3_rrset_for_label_view(
-            name,
-            qclass,
-            &mut state.nsec3_iterations_exceeded,
-            state.nsec3_max_iterations,
-        ) else {
-            return;
-        };
-        self.push_authority_rrset(plan, nsec3, state);
-    }
-
-    fn push_nsec3_for_wire_name(
-        &self,
-        wire_name: &[u8],
-        qclass: u16,
-        plan: &mut ZoneImageLookupPlan,
-        state: &mut ZoneImageDnssecState,
-    ) {
-        if self.nsec3_ranges.is_empty() {
-            return;
-        }
-        let Some(nsec3) = self.nsec3_rrset_for_wire_name(
-            wire_name,
-            qclass,
-            &mut state.nsec3_iterations_exceeded,
-            state.nsec3_max_iterations,
-        ) else {
-            return;
-        };
-        self.push_authority_rrset(plan, nsec3, state);
-    }
-
+    #[cfg(test)]
     fn nsec3_rrset_for_name(
         &self,
         name: &DomainName,
@@ -3126,17 +3930,39 @@ impl ZoneImage {
         )
     }
 
-    fn nsec3_rrset_for_wire_name(
+    fn nsec3_exact_rrset_for_name(
         &self,
-        wire_name: &[u8],
+        name: &DomainName,
+        qclass: u16,
+        nsec3_iterations_exceeded: &mut bool,
+        nsec3_max_iterations: u16,
+        qname_ascii_lowercase: bool,
+    ) -> Option<ZoneImageRrsetId> {
+        self.nsec3_exact_rrset_for_label_view(
+            NameLabelView {
+                prefix: None,
+                labels: name.labels(),
+                ascii_lowercase: qname_ascii_lowercase,
+            },
+            qclass,
+            nsec3_iterations_exceeded,
+            nsec3_max_iterations,
+        )
+    }
+
+    fn nsec3_exact_rrset_for_label_view(
+        &self,
+        name: NameLabelView<'_>,
         qclass: u16,
         nsec3_iterations_exceeded: &mut bool,
         nsec3_max_iterations: u16,
     ) -> Option<ZoneImageRrsetId> {
         let mut hash_cache = SmallVec::<[(u16, Option<[u8; 20]>); 1]>::new();
-        let mut covering_rrset = None;
         for group in &self.nsec3_range_groups {
-            if !qclass_matches(group.class, qclass) {
+            if self.active_nsec3_param_set != Some((group.class, group.param_set))
+                || !group.indexed
+                || !qclass_matches(group.class, qclass)
+            {
                 continue;
             }
             let param_set = self.nsec3_param_set(group.param_set);
@@ -3144,8 +3970,8 @@ impl ZoneImage {
                 *nsec3_iterations_exceeded = true;
                 continue;
             }
-            let hash_index = self.nsec3_hash_wire_name_param_cache_index(
-                wire_name,
+            let hash_index = self.nsec3_hash_label_view_param_cache_index(
+                name,
                 group.param_set,
                 param_set,
                 &mut hash_cache,
@@ -3153,17 +3979,50 @@ impl ZoneImage {
             let Some(hash) = hash_cache[hash_index].1.as_ref() else {
                 continue;
             };
-            if let Some((rrset_id, exact)) = self.nsec3_range_match(group, hash) {
-                if exact {
-                    return Some(rrset_id);
-                }
-                covering_rrset.get_or_insert(rrset_id);
+            if let Some((rrset_id, true)) = self.nsec3_range_match(group, hash) {
+                return Some(rrset_id);
             }
         }
-
-        covering_rrset
+        None
     }
 
+    fn nsec3_covering_rrset_for_label_view(
+        &self,
+        name: NameLabelView<'_>,
+        qclass: u16,
+        nsec3_iterations_exceeded: &mut bool,
+        nsec3_max_iterations: u16,
+    ) -> Option<ZoneImageRrsetId> {
+        let mut hash_cache = SmallVec::<[(u16, Option<[u8; 20]>); 1]>::new();
+        for group in &self.nsec3_range_groups {
+            if self.active_nsec3_param_set != Some((group.class, group.param_set))
+                || !group.indexed
+                || !qclass_matches(group.class, qclass)
+            {
+                continue;
+            }
+            let param_set = self.nsec3_param_set(group.param_set);
+            if param_set.iterations > nsec3_max_iterations {
+                *nsec3_iterations_exceeded = true;
+                continue;
+            }
+            let hash_index = self.nsec3_hash_label_view_param_cache_index(
+                name,
+                group.param_set,
+                param_set,
+                &mut hash_cache,
+            );
+            let Some(hash) = hash_cache[hash_index].1.as_ref() else {
+                continue;
+            };
+            if let Some((rrset_id, false)) = self.nsec3_range_match(group, hash) {
+                return Some(rrset_id);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
     fn nsec3_rrset_for_label_view(
         &self,
         name: NameLabelView<'_>,
@@ -3174,7 +4033,10 @@ impl ZoneImage {
         let mut hash_cache = SmallVec::<[(u16, Option<[u8; 20]>); 1]>::new();
         let mut covering_rrset = None;
         for group in &self.nsec3_range_groups {
-            if !qclass_matches(group.class, qclass) {
+            if self.active_nsec3_param_set != Some((group.class, group.param_set))
+                || !group.indexed
+                || !qclass_matches(group.class, qclass)
+            {
                 continue;
             }
             let param_set = self.nsec3_param_set(group.param_set);
@@ -3271,30 +4133,11 @@ impl ZoneImage {
         cache.len() - 1
     }
 
-    fn nsec3_hash_wire_name_param_cache_index(
-        &self,
-        wire_name: &[u8],
-        param_set_index: u16,
-        param_set: &ImageNsec3ParamSet,
-        cache: &mut Nsec3ParamHashCache,
-    ) -> usize {
-        if let Some(index) = cache
-            .iter()
-            .position(|(cached_param_set, _)| *cached_param_set == param_set_index)
-        {
-            return index;
-        }
-
-        let params = self.nsec3_params_from_set(param_set);
-        let hash = nsec3_hash_wire_name(wire_name, params);
-        cache.push((param_set_index, hash));
-        cache.len() - 1
-    }
-
     fn push_rrsig_for_rrset(
         &self,
         section: DnssecSection,
         covered_rrset_id: ZoneImageRrsetId,
+        owner_index: Option<u16>,
         plan: &mut ZoneImageLookupPlan,
         state: &mut ZoneImageDnssecState,
     ) {
@@ -3303,7 +4146,22 @@ impl ZoneImage {
             if !insert_selected_record(&mut state.seen_selected_records, selected) {
                 continue;
             }
-            plan.push_selected_record_section(section, selected);
+            if let Some(owner_index) = owner_index {
+                match section {
+                    DnssecSection::Answer => {
+                        plan.push_selected_answer_record_with_owner(selected, owner_index)
+                    }
+                    DnssecSection::Additional => {
+                        plan.push_selected_additional_record_with_owner(selected, owner_index)
+                    }
+                    DnssecSection::Authority => {
+                        debug_assert!(false, "authority owner overrides are not supported");
+                        plan.push_selected_record_section(section, selected);
+                    }
+                }
+            } else {
+                plan.push_selected_record_section(section, selected);
+            }
             state.dnssec_augmented = true;
         }
     }
@@ -3325,11 +4183,15 @@ impl ZoneImage {
         let wire_len = usize::from(relation.owner_wire_len)
             .saturating_add(10)
             .saturating_add(usize::from(relation.rdata_len));
+        let mut fixed_fields = rrset.fixed_fields;
+        if let Some(ttl) = self.record_ttl_override(relation.record_index) {
+            fixed_fields[4..8].copy_from_slice(&ttl.to_be_bytes());
+        }
         ZoneImageSelectedRecord {
             rrset_id: relation.rrset_id,
             wire_len: u32::try_from(wire_len)
                 .expect("selected immutable DNS record wire length must fit u32"),
-            fixed_fields: rrset.fixed_fields,
+            fixed_fields,
             rdata: record.rdata,
         }
     }
@@ -3349,7 +4211,7 @@ impl ZoneImage {
         debug_assert!(
             relations
                 .iter()
-                .all(|relation| relation.kind == ImageRrsetRelationKind::Rrsig)
+                .all(|relation| relation.kind() == ImageRrsetRelationKind::Rrsig)
         );
         relations
     }
@@ -3384,6 +4246,9 @@ impl ZoneImage {
                 PlanAnswer::SelectedRecord(selected) => {
                     insert_selected_record(seen, *selected);
                 }
+                PlanAnswer::SelectedRecordWithOwner { record, .. } => {
+                    insert_selected_record(seen, *record);
+                }
                 PlanAnswer::Rrset(_)
                 | PlanAnswer::RrsetWithOwner { .. }
                 | PlanAnswer::DynamicRecord(_) => {}
@@ -3393,6 +4258,9 @@ impl ZoneImage {
             insert_selected_record(seen, *selected);
         }
         for selected in &plan.selected_additionals {
+            insert_selected_record(seen, *selected);
+        }
+        for (selected, _) in &plan.selected_additionals_with_owner {
             insert_selected_record(seen, *selected);
         }
     }
@@ -3409,7 +4277,7 @@ impl ZoneImage {
         let relation = self
             .rrset_relations
             .get(span.first_relation as usize + usize::from(span.single_name_target_offset))?;
-        debug_assert_eq!(relation.kind, ImageRrsetRelationKind::SingleNameTarget);
+        debug_assert_eq!(relation.kind(), ImageRrsetRelationKind::SingleNameTarget);
         self.single_name_targets.get(relation.record_index as usize)
     }
 
@@ -3430,7 +4298,7 @@ impl ZoneImage {
         closest_node: Option<u32>,
     ) -> Option<DomainName> {
         let closest_node = closest_node?;
-        let relative_depth = usize::from(self.nodes[closest_node as usize].depth);
+        let relative_depth = usize::from(self.nodes[closest_node as usize].depth & NODE_DEPTH_MASK);
         let origin_labels = self.origin.label_count();
         let relative_labels = qname.label_count().checked_sub(origin_labels)?;
         if relative_depth > relative_labels {
@@ -3446,7 +4314,7 @@ impl ZoneImage {
         closest_node: Option<u32>,
     ) -> Option<&'a [Vec<u8>]> {
         let closest_node = closest_node?;
-        let relative_depth = usize::from(self.nodes[closest_node as usize].depth);
+        let relative_depth = usize::from(self.nodes[closest_node as usize].depth & NODE_DEPTH_MASK);
         let origin_labels = self.origin.label_count();
         let relative_labels = qname.label_count().checked_sub(origin_labels)?;
         if relative_depth > relative_labels {
@@ -3456,7 +4324,22 @@ impl ZoneImage {
         Some(&qname.labels()[relative_labels - relative_depth..])
     }
 
-    #[cfg(test)]
+    fn wildcard_name_at_closest_node(
+        &self,
+        qname: &DomainName,
+        closest_node: u32,
+    ) -> Option<DomainName> {
+        let closest_labels = self.closest_encloser_labels_from_node(qname, Some(closest_node))?;
+        let mut wire = InlineNameWire::new();
+        wire.extend_from_slice(b"\x01*");
+        for label in closest_labels {
+            wire.push(u8::try_from(label.len()).ok()?);
+            wire.extend_from_slice(label);
+        }
+        wire.push(0);
+        DomainName::from_uncompressed_wire(&wire).ok()
+    }
+
     fn closest_encloser_node(&self, qname: &DomainName) -> Option<u32> {
         let labels = relative_label_slice(qname, &self.origin)?;
         if labels.is_empty() {
@@ -3610,6 +4493,7 @@ impl ZoneImage {
             return ImageTargetNode::OutOfZone;
         }
         self.find_node(qname)
+            .filter(|node| self.ordinary_name_exists(*node))
             .map_or(ImageTargetNode::InZoneMissing, ImageTargetNode::InZoneNode)
     }
 
@@ -3646,7 +4530,7 @@ impl ZoneImage {
         };
 
         let mut node_index = 0u32;
-        let mut closest = Some(node_index);
+        let mut closest = self.ordinary_name_exists(node_index).then_some(node_index);
         for label in labels.iter().rev() {
             let Some(child) =
                 self.find_child_with_ascii_lowercase_hint(node_index, label, qname_ascii_lowercase)
@@ -3654,9 +4538,18 @@ impl ZoneImage {
                 return (None, closest);
             };
             node_index = child;
-            closest = Some(node_index);
+            if self.ordinary_name_exists(node_index) {
+                closest = Some(node_index);
+            }
         }
-        (Some(node_index), Some(node_index))
+        (
+            self.ordinary_name_exists(node_index).then_some(node_index),
+            closest,
+        )
+    }
+
+    fn ordinary_name_exists(&self, node_index: u32) -> bool {
+        self.nodes[node_index as usize].depth & NODE_FLAG_ORDINARY_NAME_EXISTS != 0
     }
 
     fn blob<'a>(&self, arena: &'a [u8], range: BlobRange) -> &'a [u8] {
@@ -3668,6 +4561,24 @@ impl ZoneImage {
     fn rdata_blob(&self, range: RdataRange) -> &[u8] {
         self.blob(&self.rdata, range.blob_range())
     }
+
+    fn record_ttl_override(&self, record_index: u64) -> Option<u32> {
+        self.record_ttl_overrides
+            .binary_search_by_key(&record_index, |entry| entry.record_index)
+            .ok()
+            .map(|index| self.record_ttl_overrides[index].ttl)
+    }
+
+    fn record_fixed_fields(
+        &self,
+        record_index: u64,
+        mut fixed_fields: ZoneImageRecordFixedFields,
+    ) -> ZoneImageRecordFixedFields {
+        if let Some(ttl) = self.record_ttl_override(record_index) {
+            fixed_fields[4..8].copy_from_slice(&ttl.to_be_bytes());
+        }
+        fixed_fields
+    }
 }
 
 impl ZoneImageLookupPlan {
@@ -3678,10 +4589,12 @@ impl ZoneImageLookupPlan {
             answer_items: SmallVec::new(),
             authority_rrsets: SmallVec::new(),
             additional_rrsets: SmallVec::new(),
+            additional_rrsets_with_owner: SmallVec::new(),
             owner_overrides: SmallVec::new(),
             dynamic_answers: SmallVec::new(),
             selected_authorities: SmallVec::new(),
             selected_additionals: SmallVec::new(),
+            selected_additionals_with_owner: SmallVec::new(),
             answer_record_count: 0,
             authority_record_count: 0,
             additional_record_count: 0,
@@ -3691,6 +4604,8 @@ impl ZoneImageLookupPlan {
             authority_soa_index: NO_AUTHORITY_SOA_INDEX,
             flags: PLAN_FLAG_AUTHORITATIVE,
             termination: None,
+            continuation: None,
+            denial_context: None,
         }
     }
 
@@ -3728,7 +4643,7 @@ impl ZoneImageLookupPlan {
         }
     }
 
-    fn into_servfail(mut self, termination: LookupTermination) -> Self {
+    pub(crate) fn into_servfail(mut self, termination: LookupTermination) -> Self {
         self.rcode = Rcode::ServFail;
         self.set_flag(PLAN_FLAG_AUTHORITATIVE, true);
         self.termination = Some(termination);
@@ -3741,10 +4656,49 @@ impl ZoneImageLookupPlan {
         self.clear_flag(PLAN_FLAG_AUTHORITY_FIRST_RRSET_IS_SOA);
         self.clear_flag(PLAN_FLAG_DIRECT_ANSWER_CANDIDATE);
         self.additional_rrsets.clear();
+        self.additional_rrsets_with_owner.clear();
         self.additional_record_count = 0;
         self.body_wire_upper_bound = self.answer_wire_upper_bound;
         self.selected_authorities.clear();
         self.selected_additionals.clear();
+        self.selected_additionals_with_owner.clear();
+        self.continuation = None;
+        self.denial_context = None;
+        self
+    }
+
+    fn into_dnssec_proof_servfail(mut self) -> Self {
+        self = self.into_servfail(LookupTermination::MalformedDname);
+        self.termination = None;
+        self
+    }
+
+    fn with_indirection_continuation(mut self, target: &DomainName, remaining: usize) -> Self {
+        self.continuation = Some(ZoneImageIndirectionContinuation {
+            target: Box::new(target.clone()),
+            remaining,
+        });
+        self
+    }
+
+    pub(crate) fn indirection_continuation(&self) -> Option<(&DomainName, usize)> {
+        self.continuation
+            .as_ref()
+            .map(|continuation| (continuation.target.as_ref(), continuation.remaining))
+    }
+
+    fn with_denial_context(
+        mut self,
+        terminal_name: &DomainName,
+        mut kind: ZoneImageDenialKind,
+    ) -> Self {
+        if let ZoneImageDenialKind::WildcardNoData { wildcard_name } = &mut kind {
+            **wildcard_name = wildcard_name.to_ascii_lowercased();
+        }
+        self.denial_context = Some(ZoneImageDenialContext {
+            terminal_name: Box::new(terminal_name.to_ascii_lowercased()),
+            kind,
+        });
         self
     }
 
@@ -3864,12 +4818,13 @@ impl ZoneImageLookupPlan {
         rrset: ZoneImageRrsetId,
         owner_wire: OwnerOverrideWire,
         metrics: ZoneImageRrsetPlanMetrics,
-    ) {
+    ) -> u16 {
         self.ensure_answer_items();
         self.set_flag(PLAN_FLAG_WILDCARD_SYNTHESIZED, true);
         let owner_index = self.owner_overrides.len();
         self.owner_overrides.push(owner_wire);
         self.push_answer_rrset_with_owner_index(rrset, owner_index, metrics);
+        u16::try_from(owner_index).expect("wildcard owner index is DNS-answer-count bounded")
     }
 
     fn push_answer_rrset_with_owner_index(
@@ -3968,6 +4923,43 @@ impl ZoneImageLookupPlan {
         }
     }
 
+    fn push_selected_answer_record_with_owner(
+        &mut self,
+        record: ZoneImageSelectedRecord,
+        owner_index: u16,
+    ) {
+        self.clear_flag(PLAN_FLAG_DIRECT_ANSWER_CANDIDATE);
+        self.ensure_answer_items();
+        self.set_flag(PLAN_FLAG_ANSWER_HAS_RECORDS, true);
+        add_plan_record_count(&mut self.answer_record_count, 1);
+        let owner_wire_len = self.owner_overrides[usize::from(owner_index)].len();
+        let wire_len = owner_wire_len
+            .saturating_add(10)
+            .saturating_add(record.rdata.len());
+        add_plan_wire_upper_bound(&mut self.answer_wire_upper_bound, wire_len);
+        add_plan_wire_upper_bound(&mut self.body_wire_upper_bound, wire_len);
+        self.answer_items.push(PlanAnswer::SelectedRecordWithOwner {
+            record,
+            owner_index,
+        });
+    }
+
+    fn push_selected_additional_record_with_owner(
+        &mut self,
+        record: ZoneImageSelectedRecord,
+        owner_index: u16,
+    ) {
+        self.clear_flag(PLAN_FLAG_DIRECT_ANSWER_CANDIDATE);
+        add_plan_record_count(&mut self.additional_record_count, 1);
+        let wire_len = self.owner_overrides[usize::from(owner_index)]
+            .len()
+            .saturating_add(10)
+            .saturating_add(record.rdata.len());
+        add_plan_wire_upper_bound(&mut self.body_wire_upper_bound, wire_len);
+        self.selected_additionals_with_owner
+            .push((record, owner_index));
+    }
+
     fn push_authority_rrset(
         &mut self,
         rrset: ZoneImageRrsetId,
@@ -3996,6 +4988,17 @@ impl ZoneImageLookupPlan {
         add_plan_record_count(&mut self.additional_record_count, metrics.record_count);
         add_plan_wire_upper_bound(&mut self.body_wire_upper_bound, metrics.wire_upper_bound);
         self.additional_rrsets.push(rrset);
+    }
+
+    fn push_additional_rrset_with_owner(
+        &mut self,
+        rrset: ZoneImageRrsetId,
+        owner_index: u16,
+        metrics: ZoneImageRrsetPlanMetrics,
+    ) {
+        add_plan_record_count(&mut self.additional_record_count, metrics.record_count);
+        add_plan_wire_upper_bound(&mut self.body_wire_upper_bound, metrics.wire_upper_bound);
+        self.additional_rrsets_with_owner.push((rrset, owner_index));
     }
 
     fn referral_ns_rrset(&self) -> Option<ZoneImageRrsetId> {
@@ -4109,11 +5112,23 @@ fn add_plan_wire_upper_bound(bytes: &mut u32, wire_upper_bound: usize) {
 }
 
 fn plan_is_nodata_candidate(plan: &ZoneImageLookupPlan, answer_has_records: bool) -> bool {
-    plan.rcode == Rcode::NoError && plan.authoritative() && !answer_has_records
+    plan.rcode == Rcode::NoError
+        && plan.authoritative()
+        && match plan.denial_context.as_ref().map(|context| &context.kind) {
+            Some(ZoneImageDenialKind::NoData | ZoneImageDenialKind::WildcardNoData { .. }) => true,
+            Some(ZoneImageDenialKind::NameError) => false,
+            None => !answer_has_records,
+        }
 }
 
 fn plan_is_nxdomain_candidate(plan: &ZoneImageLookupPlan, answer_has_records: bool) -> bool {
-    plan.rcode == Rcode::NxDomain && plan.authoritative() && !answer_has_records
+    plan.rcode == Rcode::NxDomain
+        && plan.authoritative()
+        && match plan.denial_context.as_ref().map(|context| &context.kind) {
+            Some(ZoneImageDenialKind::NameError) => true,
+            Some(ZoneImageDenialKind::NoData | ZoneImageDenialKind::WildcardNoData { .. }) => false,
+            None => !answer_has_records,
+        }
 }
 
 fn plan_is_wildcard_synthesis_candidate(
@@ -4133,6 +5148,7 @@ struct ZoneImageBuilder {
     additional_address_rrset_flags: Vec<u64>,
     rrsig_rrset_flags: Vec<u64>,
     image_records: Vec<ImageRecord>,
+    record_ttl_overrides: Vec<ImageRecordTtlOverride>,
     rrset_index: HashMap<(String, u16, u16), ZoneImageRrsetId>,
     rrsig_covered: Vec<ImageRrsigCovered>,
     nsec_rrsets: Vec<ZoneImageRrsetId>,
@@ -4145,6 +5161,9 @@ struct ZoneImageBuilder {
     nsec3_param_sets: Vec<ImageNsec3ParamSet>,
     nsec3_ranges: Vec<ImageNsec3Range>,
     nsec3_range_groups: Vec<ImageNsec3RangeGroup>,
+    active_nsec3_param_set: Option<(u16, u16)>,
+    nsec3param_present: bool,
+    dnssec_denial_broken: bool,
     labels: Vec<u8>,
     names: Vec<u8>,
     rdata: Vec<u8>,
@@ -4160,6 +5179,7 @@ impl ZoneImageBuilder {
             additional_address_rrset_flags: Vec::new(),
             rrsig_rrset_flags: Vec::new(),
             image_records: Vec::new(),
+            record_ttl_overrides: Vec::new(),
             rrset_index: HashMap::new(),
             rrsig_covered: Vec::new(),
             nsec_rrsets: Vec::new(),
@@ -4172,6 +5192,9 @@ impl ZoneImageBuilder {
             nsec3_param_sets: Vec::new(),
             nsec3_ranges: Vec::new(),
             nsec3_range_groups: Vec::new(),
+            active_nsec3_param_set: None,
+            nsec3param_present: false,
+            dnssec_denial_broken: false,
             labels: Vec::new(),
             names: Vec::new(),
             rdata: Vec::new(),
@@ -4186,10 +5209,10 @@ impl ZoneImageBuilder {
         rr_type: u16,
         class: u16,
         ttl: u32,
-        rdatas: &[&[u8]],
+        records: &[(&[u8], u32)],
     ) -> Result<ZoneImageRrsetId, ZoneImageBuildError> {
         debug_assert!(
-            !rdatas.is_empty(),
+            !records.is_empty(),
             "ZoneImage rrsets are built from grouped snapshot records"
         );
         let rrset_index =
@@ -4200,7 +5223,8 @@ impl ZoneImageBuilder {
         let wire_start = checked_u64(self.wire.len(), "wire")?;
         let fixed_fields = zone_image_record_fixed_fields(rr_type, class, ttl);
 
-        for rdata in rdatas {
+        let mut rdatas = SmallVec::<[&[u8]; 1]>::new();
+        for (rdata, record_ttl) in records {
             let rdlength =
                 u16::try_from(rdata.len()).map_err(|_| ZoneImageBuildError::RdataTooLarge)?;
             let rdata_ref = push_blob(&mut self.rdata, rdata, "rdata")?;
@@ -4209,20 +5233,29 @@ impl ZoneImageBuilder {
                 len: rdlength,
                 rdata_encoding: zone_image_rdata_encoding(rr_type, rdata),
             };
+            let record_index = checked_u64(self.image_records.len(), "records")?;
             self.image_records.push(ImageRecord { rdata: rdata_ref });
+            if *record_ttl != ttl {
+                self.record_ttl_overrides.push(ImageRecordTtlOverride {
+                    record_index,
+                    ttl: *record_ttl,
+                });
+            }
+            let record_fixed_fields = zone_image_record_fixed_fields(rr_type, class, *record_ttl);
             self.wire.extend_from_slice(&owner_wire);
-            self.wire.extend_from_slice(&fixed_fields);
+            self.wire.extend_from_slice(&record_fixed_fields);
             self.wire.extend_from_slice(&rdata_ref.rdlength_bytes());
             self.wire.extend_from_slice(rdata);
+            rdatas.push(*rdata);
         }
 
         let wire_end = checked_u64(self.wire.len(), "wire")?;
-        let record_count = checked_u32(rdatas.len(), "records")?;
+        let record_count = checked_u32(records.len(), "records")?;
         let ownerless_wire_len =
             ownerless_wire_len(owner_wire.len(), record_count, wire_end - wire_start);
         let direct_copy_eligible = direct_copy_rdata_type(rr_type);
         let direct_answer_body_len =
-            push_direct_answer_body(&mut self.wire, direct_copy_eligible, fixed_fields, rdatas)?;
+            push_direct_answer_body(&mut self.wire, direct_copy_eligible, fixed_fields, &rdatas)?;
         let negative_ttl = if rr_type == RecordType::Soa as u16 {
             rdatas
                 .first()
@@ -4319,12 +5352,30 @@ impl ZoneImageBuilder {
         self.precompute_single_name_targets();
         self.precompute_nsec_ranges()?;
         self.precompute_nsec3_ranges()?;
+        self.select_dnssec_denial_chain();
         self.precompute_rrset_relation_spans()?;
         self.log_phase("indexes_precomputed");
 
         let mut nodes: Vec<NameNode> = Vec::with_capacity(self.build_nodes.len());
         let mut edges = Vec::new();
         let mut labels = self.labels;
+        let mut ordinary_name_exists = vec![false; self.build_nodes.len()];
+        for node_index in (0..self.build_nodes.len()).rev() {
+            let build_node = &self.build_nodes[node_index];
+            let owns_nsec3 = build_node.rrsets.iter().any(|rrset_id| {
+                self.image_rrsets[rrset_id.0 as usize].rr_type() == RecordType::Nsec3 as u16
+            });
+            let owns_ordinary_rrset = build_node.rrsets.iter().any(|rrset_id| {
+                let rr_type = self.image_rrsets[rrset_id.0 as usize].rr_type();
+                rr_type != RecordType::Nsec3 as u16
+                    && (rr_type != RecordType::Rrsig as u16 || !owns_nsec3)
+            });
+            ordinary_name_exists[node_index] = owns_ordinary_rrset
+                || build_node
+                    .children
+                    .values()
+                    .any(|child| ordinary_name_exists[*child as usize]);
+        }
 
         for (node_index, build_node) in self.build_nodes.iter().enumerate() {
             let inherited_delegation = if node_index == 0 {
@@ -4366,7 +5417,12 @@ impl ZoneImageBuilder {
                 first_rrset,
                 rrset_count: checked_u16(build_node.rrsets.len(), "rrsets")?,
                 parent: build_node.parent,
-                depth: build_node.depth,
+                depth: build_node.depth
+                    | if ordinary_name_exists[node_index] {
+                        NODE_FLAG_ORDINARY_NAME_EXISTS
+                    } else {
+                        0
+                    },
                 nearest_in_delegation,
                 nearest_in_dname,
                 child_hash: u32::MAX,
@@ -4414,6 +5470,7 @@ impl ZoneImageBuilder {
             + self.additional_address_rrset_flags.len() * mem::size_of::<u64>()
             + self.rrsig_rrset_flags.len() * mem::size_of::<u64>()
             + self.image_records.len() * mem::size_of::<ImageRecord>()
+            + self.record_ttl_overrides.len() * mem::size_of::<ImageRecordTtlOverride>()
             + self.rrset_relations.len() * mem::size_of::<ImageRrsetRelation>()
             + self.rrset_relation_spans.len() * mem::size_of::<ImageRrsetRelationSpan>()
             + self.single_name_targets.len() * mem::size_of::<ImageSingleNameTarget>()
@@ -4438,12 +5495,14 @@ impl ZoneImageBuilder {
             .get(&(origin_key, RecordType::Soa as u16, 1))
             .copied();
         let low_rrtype_bitmap = build_low_rrtype_bitmap(&self.image_rrsets);
-        let dnssec_denial_augmentation_possible =
-            !self.nsec_ranges.is_empty() || !self.nsec3_ranges.is_empty();
+        let dnssec_denial_augmentation_possible = self.active_nsec3_param_set.is_some()
+            || (self.active_nsec3_param_set.is_none()
+                && self.nsec_range_groups.iter().any(|group| group.indexed))
+            || self.dnssec_denial_broken;
         let mut dnssec_referral_relation_possible = false;
         let mut dnssec_rrsig_augmentation_possible = false;
         for relation in &self.rrset_relations {
-            match relation.kind {
+            match relation.kind() {
                 ImageRrsetRelationKind::DelegationDs | ImageRrsetRelationKind::DelegationNsec => {
                     dnssec_referral_relation_possible = true;
                 }
@@ -4455,8 +5514,9 @@ impl ZoneImageBuilder {
                 | ImageRrsetRelationKind::SingleNameTarget => {}
             }
         }
-        let dnssec_referral_augmentation_possible =
-            dnssec_referral_relation_possible || !self.nsec3_ranges.is_empty();
+        let dnssec_referral_augmentation_possible = dnssec_referral_relation_possible
+            || self.active_nsec3_param_set.is_some()
+            || self.dnssec_denial_broken;
         let dnssec_augmentation_possible = dnssec_denial_augmentation_possible
             || dnssec_referral_augmentation_possible
             || dnssec_rrsig_augmentation_possible;
@@ -4551,6 +5611,7 @@ impl ZoneImageBuilder {
             additional_address_rrset_flags: self.additional_address_rrset_flags.into_boxed_slice(),
             rrsig_rrset_flags: self.rrsig_rrset_flags.into_boxed_slice(),
             records: self.image_records.into_boxed_slice(),
+            record_ttl_overrides: self.record_ttl_overrides.into_boxed_slice(),
             rrset_relations: self.rrset_relations.into_boxed_slice(),
             rrset_relation_spans: self.rrset_relation_spans.into_boxed_slice(),
             single_name_targets: self.single_name_targets.into_boxed_slice(),
@@ -4559,6 +5620,8 @@ impl ZoneImageBuilder {
             nsec3_param_sets: self.nsec3_param_sets.into_boxed_slice(),
             nsec3_ranges: self.nsec3_ranges.into_boxed_slice(),
             nsec3_range_groups: self.nsec3_range_groups.into_boxed_slice(),
+            active_nsec3_param_set: self.active_nsec3_param_set,
+            dnssec_denial_broken: self.dnssec_denial_broken,
             apex_in_soa_rrset,
             dnssec_augmentation_possible,
             dnssec_denial_augmentation_possible,
@@ -4767,6 +5830,50 @@ impl ZoneImageBuilder {
         Ok(())
     }
 
+    fn select_dnssec_denial_chain(&mut self) {
+        let mut selected = None;
+        'rrsets: for rrset in &self.image_rrsets {
+            if rrset.rr_type() != RecordType::Nsec3Param as u16
+                || !wire_name_equals_domain_with_label_count_ignore_ascii_case(
+                    blob_from_arena(&self.names, rrset.owner_wire),
+                    usize::from(rrset.owner_label_count),
+                    &self.origin,
+                )
+            {
+                continue;
+            }
+            self.nsec3param_present = true;
+            for offset in 0..rrset.record_count {
+                let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
+                let Some(params) =
+                    nsec3param_params_from_rdata(rdata_from_arena(&self.rdata, record.rdata))
+                else {
+                    continue;
+                };
+                for group in &self.nsec3_range_groups {
+                    let param_set = &self.nsec3_param_sets[usize::from(group.param_set)];
+                    if group.class == rrset.class()
+                        && group.indexed
+                        && param_set.hash_algorithm == params.hash_algorithm
+                        && param_set.iterations == params.iterations
+                        && blob_from_arena(&self.rdata, param_set.salt) == params.salt
+                    {
+                        selected = Some((group.class, group.param_set));
+                        break 'rrsets;
+                    }
+                }
+            }
+        }
+        self.active_nsec3_param_set = selected;
+
+        let complete_nsec = self.nsec_range_groups.iter().any(|group| group.indexed);
+        self.dnssec_denial_broken = if self.nsec3param_present {
+            self.active_nsec3_param_set.is_none()
+        } else {
+            !self.nsec_rrsets.is_empty() && !complete_nsec
+        };
+    }
+
     fn intern_nsec3_param_set(
         &mut self,
         hash_algorithm: u8,
@@ -4858,13 +5965,14 @@ impl ZoneImageBuilder {
         let Some(target_index) = target_index else {
             return;
         };
-        relations.push(ImageRrsetRelation {
-            kind: ImageRrsetRelationKind::SingleNameTarget,
-            rrset_id: ZoneImageRrsetId(rrset_index as u32),
-            record_index: target_index as u64,
-            rdata_len: 0,
-            owner_wire_len: 0,
-        });
+        relations.push(ImageRrsetRelation::new(
+            ImageRrsetRelationKind::SingleNameTarget,
+            ZoneImageRrsetId(rrset_index as u32),
+            target_index as u64,
+            0,
+            0,
+            false,
+        ));
     }
 
     fn push_rrsig_relations_for_rrset(
@@ -4887,16 +5995,17 @@ impl ZoneImageBuilder {
             if rrsig_type_covered_rdata(rdata) != Some(covered_type) {
                 continue;
             }
-            relations.push(ImageRrsetRelation {
-                kind: ImageRrsetRelationKind::Rrsig,
-                rrset_id: rrsig_rrset_id,
+            relations.push(ImageRrsetRelation::new(
+                ImageRrsetRelationKind::Rrsig,
+                rrsig_rrset_id,
                 record_index,
-                rdata_len: record.rdata.len,
-                owner_wire_len: checked_u8(
+                record.rdata.len,
+                checked_u8(
                     blob_len(rrsig_rrset.owner_wire),
                     "selected RRSIG owner wire length",
                 )?,
-            });
+                false,
+            ));
         }
         Ok(())
     }
@@ -4912,25 +6021,86 @@ impl ZoneImageBuilder {
             return;
         }
 
-        let mut resolved = SmallVec::<[ZoneImageRrsetId; 4]>::new();
+        let mut resolved = SmallVec::<[(ZoneImageRrsetId, bool); 4]>::new();
+        let owner_wire = blob_from_arena(&self.names, rrset.owner_wire);
         for offset in 0..rrset.record_count {
             let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
             let rdata = rdata_from_arena(&self.rdata, record.rdata);
-            let Some(target_wire) = additional_address_target_wire_rdata(rr_type, rdata) else {
+            let Some(mut target_wire) = additional_address_target_wire_rdata(rr_type, rdata) else {
                 continue;
             };
+            let effective_owner = (rr_type == RecordType::Svcb as u16
+                || rr_type == RecordType::Https as u16)
+                && u16::from_be_bytes([rdata[0], rdata[1]]) != 0
+                && target_wire == [0];
+            if effective_owner {
+                target_wire = owner_wire;
+            }
             if !wire_name_is_equal_or_subdomain_of_domain(target_wire, &self.origin) {
                 continue;
+            }
+            if self.target_wire_is_occluded_by_delegation(target_wire, rrset.class()) {
+                continue;
+            }
+
+            if (rr_type == RecordType::Svcb as u16 || rr_type == RecordType::Https as u16)
+                && let Some(target_key) = canonical_key_from_uncompressed_wire(target_wire)
+                && let Some(target_rrset) =
+                    self.find_rrset_by_owner_key(target_key.as_str(), rr_type, rrset.class())
+                && target_rrset.0 as usize != rrset_index
+                && !resolved.contains(&(target_rrset, effective_owner))
+            {
+                resolved.push((target_rrset, effective_owner));
+                relations.push(ImageRrsetRelation::new(
+                    ImageRrsetRelationKind::AdditionalAddress,
+                    target_rrset,
+                    u64::MAX,
+                    0,
+                    0,
+                    effective_owner,
+                ));
             }
 
             self.push_address_relations_for_target_wire(
                 target_wire,
                 rrset.class(),
                 ImageRrsetRelationKind::AdditionalAddress,
+                effective_owner,
                 &mut resolved,
                 relations,
             );
         }
+    }
+
+    fn target_wire_is_occluded_by_delegation(&self, target_wire: &[u8], class: u16) -> bool {
+        let Ok(target) = DomainName::from_uncompressed_wire(target_wire) else {
+            return false;
+        };
+        let Some(relative_labels) = relative_label_slice(&target, &self.origin) else {
+            return false;
+        };
+        let mut node_index = 0u32;
+        for label in relative_labels.iter().rev() {
+            let label_key = lowercase_label_key(label);
+            let Some(child) = self.build_nodes[node_index as usize]
+                .children
+                .get(label_key.as_slice())
+                .copied()
+            else {
+                return false;
+            };
+            node_index = child;
+            if find_build_node_in_rrset(
+                &self.image_rrsets,
+                &self.build_nodes[node_index as usize],
+                RecordType::Ns as u16,
+            )
+            .is_some_and(|rrset| self.image_rrsets[rrset.0 as usize].class() == class)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn push_referral_glue_relations_for_rrset(
@@ -4952,15 +6122,14 @@ impl ZoneImageBuilder {
         ) {
             return;
         }
-        let mut resolved = SmallVec::<[ZoneImageRrsetId; 4]>::new();
+        let mut resolved = SmallVec::<[(ZoneImageRrsetId, bool); 4]>::new();
         for offset in 0..rrset.record_count {
             let record = self.image_records[(rrset.first_record + u64::from(offset)) as usize];
             let rdata = rdata_from_arena(&self.rdata, record.rdata);
             let Some(target_wire) = single_name_rdata_wire(rdata) else {
                 continue;
             };
-            if !wire_name_is_equal_or_subdomain_of_wire(target_wire, owner_wire, owner_label_count)
-            {
+            if !wire_name_is_equal_or_subdomain_of_domain(target_wire, &self.origin) {
                 continue;
             }
 
@@ -4968,6 +6137,7 @@ impl ZoneImageBuilder {
                 target_wire,
                 rrset.class(),
                 ImageRrsetRelationKind::ReferralGlue,
+                false,
                 &mut resolved,
                 relations,
             );
@@ -4998,23 +6168,25 @@ impl ZoneImageBuilder {
         if let Some(ds) =
             self.find_rrset_by_owner_key(owner_key.as_str(), RecordType::Ds as u16, rrset.class())
         {
-            relations.push(ImageRrsetRelation {
-                kind: ImageRrsetRelationKind::DelegationDs,
-                rrset_id: ds,
-                record_index: u64::MAX,
-                rdata_len: 0,
-                owner_wire_len: 0,
-            });
+            relations.push(ImageRrsetRelation::new(
+                ImageRrsetRelationKind::DelegationDs,
+                ds,
+                u64::MAX,
+                0,
+                0,
+                false,
+            ));
         } else if let Some(nsec) =
             self.find_rrset_by_owner_key(owner_key.as_str(), RecordType::Nsec as u16, rrset.class())
         {
-            relations.push(ImageRrsetRelation {
-                kind: ImageRrsetRelationKind::DelegationNsec,
-                rrset_id: nsec,
-                record_index: u64::MAX,
-                rdata_len: 0,
-                owner_wire_len: 0,
-            });
+            relations.push(ImageRrsetRelation::new(
+                ImageRrsetRelationKind::DelegationNsec,
+                nsec,
+                u64::MAX,
+                0,
+                0,
+                false,
+            ));
         }
     }
 
@@ -5034,7 +6206,8 @@ impl ZoneImageBuilder {
         target_wire: &[u8],
         class: u16,
         kind: ImageRrsetRelationKind,
-        resolved: &mut SmallVec<[ZoneImageRrsetId; 4]>,
+        effective_owner: bool,
+        resolved: &mut SmallVec<[(ZoneImageRrsetId, bool); 4]>,
         relations: &mut SmallVec<[ImageRrsetRelation; 8]>,
     ) {
         let Some(target_key) = canonical_key_from_uncompressed_wire(target_wire) else {
@@ -5043,16 +6216,17 @@ impl ZoneImageBuilder {
         for address_type in [RecordType::A as u16, RecordType::Aaaa as u16] {
             if let Some(rrset_id) =
                 self.find_rrset_by_owner_key(target_key.as_str(), address_type, class)
-                && !resolved.contains(&rrset_id)
+                && !resolved.contains(&(rrset_id, effective_owner))
             {
-                resolved.push(rrset_id);
-                relations.push(ImageRrsetRelation {
+                resolved.push((rrset_id, effective_owner));
+                relations.push(ImageRrsetRelation::new(
                     kind,
                     rrset_id,
-                    record_index: u64::MAX,
-                    rdata_len: 0,
-                    owner_wire_len: 0,
-                });
+                    u64::MAX,
+                    0,
+                    0,
+                    effective_owner,
+                ));
             }
         }
     }
@@ -5314,18 +6488,11 @@ fn canonical_key_from_uncompressed_wire(wire_name: &[u8]) -> Option<String> {
     if consumed != wire_name.len() {
         return None;
     }
-    if labels.is_empty() {
-        return Some(".".to_owned());
-    }
-
-    let mut key = String::with_capacity(wire_name.len().saturating_sub(1));
-    for (start, len) in labels {
-        for byte in &wire_name[start..start + len] {
-            key.push(byte.to_ascii_lowercase() as char);
-        }
-        key.push('.');
-    }
-    Some(key)
+    Some(canonical_name_key_from_labels(
+        labels
+            .iter()
+            .map(|(start, len)| &wire_name[*start..*start + *len]),
+    ))
 }
 
 fn blob_from_arena(arena: &[u8], range: BlobRange) -> &[u8] {
@@ -5406,9 +6573,7 @@ fn push_direct_answer_body(
 
 fn ownerless_wire_len(owner_wire_len: usize, record_count: u32, full_wire_len: u64) -> u32 {
     let owner_wire_len = u64::try_from(owner_wire_len).unwrap_or(u64::MAX);
-    let owner_bytes = owner_wire_len
-        .checked_mul(u64::from(record_count))
-        .unwrap_or(u64::MAX);
+    let owner_bytes = owner_wire_len.saturating_mul(u64::from(record_count));
     let ownerless = full_wire_len.saturating_sub(owner_bytes);
     u32::try_from(ownerless).unwrap_or(u32::MAX)
 }
@@ -5764,6 +6929,18 @@ fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params<'_>> {
     })
 }
 
+fn nsec3param_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params<'_>> {
+    if rdata.len() < 5 || rdata[1] != 0 {
+        return None;
+    }
+    let salt_len = usize::from(rdata[4]);
+    (rdata.len() == 5 + salt_len).then(|| Nsec3Params {
+        hash_algorithm: rdata[0],
+        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
+        salt: &rdata[5..],
+    })
+}
+
 fn nsec3_next_hash_bytes(rdata: &[u8]) -> Option<[u8; 20]> {
     let params = nsec3_params_from_rdata(rdata)?;
     let hash_len_offset = 5 + params.salt.len();
@@ -5775,6 +6952,42 @@ fn nsec3_next_hash_bytes(rdata: &[u8]) -> Option<[u8; 20]> {
     }
 
     fixed_sha1_hash_bytes(&rdata[hash_start..hash_end])
+}
+
+fn nsec3_type_bitmap_contains(rdata: &[u8], rr_type: u16) -> Option<bool> {
+    let params = nsec3_params_from_rdata(rdata)?;
+    let hash_len_offset = 5 + params.salt.len();
+    let hash_len = usize::from(*rdata.get(hash_len_offset)?);
+    let mut offset = hash_len_offset.checked_add(1)?.checked_add(hash_len)?;
+    if offset > rdata.len() {
+        return None;
+    }
+    let target_window = (rr_type >> 8) as u8;
+    let target_octet = usize::from((rr_type & 0xff) >> 3);
+    let target_mask = 1u8 << (7 - (rr_type & 7));
+    let mut previous_window = None;
+    while offset < rdata.len() {
+        let window = *rdata.get(offset)?;
+        let bitmap_len = usize::from(*rdata.get(offset + 1)?);
+        if bitmap_len == 0
+            || bitmap_len > 32
+            || previous_window.is_some_and(|previous| window <= previous)
+        {
+            return None;
+        }
+        offset += 2;
+        let bitmap = rdata.get(offset..offset.checked_add(bitmap_len)?)?;
+        if window == target_window {
+            return Some(
+                bitmap
+                    .get(target_octet)
+                    .is_some_and(|octet| octet & target_mask != 0),
+            );
+        }
+        previous_window = Some(window);
+        offset += bitmap_len;
+    }
+    Some(false)
 }
 
 #[cfg(test)]
@@ -5848,27 +7061,6 @@ fn nsec3_hash_domain(name: &DomainName, params: Nsec3Params<'_>) -> Option<Strin
     .map(|hash| base32hex_no_padding_lower(&hash))
 }
 
-fn nsec3_hash_wire_name(wire_name: &[u8], params: Nsec3Params<'_>) -> Option<[u8; 20]> {
-    if params.hash_algorithm != 1 {
-        return None;
-    }
-
-    let mut digest = Sha1::new();
-    update_sha1_with_canonical_wire_name(&mut digest, wire_name)?;
-    digest.update(params.salt);
-    let mut hash = digest.finalize();
-
-    for _ in 0..params.iterations {
-        let mut digest = Sha1::new();
-        let hash_bytes: &[u8] = hash.as_ref();
-        digest.update(hash_bytes);
-        digest.update(params.salt);
-        hash = digest.finalize();
-    }
-
-    Some(sha1_output_to_array(hash))
-}
-
 fn nsec3_hash_label_view(name: NameLabelView<'_>, params: Nsec3Params<'_>) -> Option<[u8; 20]> {
     if params.hash_algorithm != 1 {
         return None;
@@ -5888,31 +7080,6 @@ fn nsec3_hash_label_view(name: NameLabelView<'_>, params: Nsec3Params<'_>) -> Op
     }
 
     Some(sha1_output_to_array(hash))
-}
-
-fn update_sha1_with_canonical_wire_name(digest: &mut Sha1, wire_name: &[u8]) -> Option<()> {
-    let mut offset = 0usize;
-    loop {
-        let len = *wire_name.get(offset)?;
-        offset += 1;
-        if len & 0xc0 != 0 {
-            return None;
-        }
-        if len == 0 {
-            if offset == wire_name.len() {
-                digest.update([0]);
-                return Some(());
-            }
-            return None;
-        }
-        let label_end = offset.checked_add(len as usize)?;
-        let label = wire_name.get(offset..label_end)?;
-        digest.update([len]);
-        for byte in label {
-            digest.update([byte.to_ascii_lowercase()]);
-        }
-        offset = label_end;
-    }
 }
 
 fn update_sha1_with_canonical_label_view(digest: &mut Sha1, name: NameLabelView<'_>) {
@@ -6251,6 +7418,7 @@ fn wire_name_is_equal_or_subdomain_of_domain(name_wire: &[u8], origin: &DomainNa
         })
 }
 
+#[cfg(test)]
 fn wire_name_is_equal_or_subdomain_of_wire(
     name_wire: &[u8],
     zone_wire: &[u8],

@@ -257,6 +257,14 @@
             .collect()
     }
 
+    fn response_authority_owners(response: &[u8], expected_type: u16) -> Vec<DomainName> {
+        response_sections(response)
+            .1
+            .into_iter()
+            .filter_map(|(owner, rr_type)| (rr_type == expected_type).then_some(owner))
+            .collect()
+    }
+
     fn response_answer_ttls(response: &[u8], expected_type: u16) -> Vec<u32> {
         response_section_ttls(response, expected_type, Section::Answer)
     }
@@ -274,6 +282,14 @@
             .2
             .into_iter()
             .map(|(_, rr_type)| rr_type)
+            .collect()
+    }
+
+    fn response_additional_owners(response: &[u8], expected_type: u16) -> Vec<DomainName> {
+        response_sections(response)
+            .2
+            .into_iter()
+            .filter_map(|(owner, rr_type)| (rr_type == expected_type).then_some(owner))
             .collect()
     }
 
@@ -672,11 +688,29 @@
         rdata
     }
 
+    fn nsec3_rdata_with_next_hash(next_hash: [u8; 20]) -> Vec<u8> {
+        nsec3_rdata_with_next_hash_and_flags(next_hash, 0)
+    }
+
+    fn nsec3_rdata_with_next_hash_and_flags(next_hash: [u8; 20], flags: u8) -> Vec<u8> {
+        let mut rdata = vec![1, flags];
+        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.push(0);
+        rdata.push(next_hash.len() as u8);
+        rdata.extend_from_slice(&next_hash);
+        rdata.extend_from_slice(&[0, 1, 0x40]);
+        rdata
+    }
+
     fn nsec3_owner(name: &str, origin: &str) -> DomainName {
         DomainName::from_absolute_str(&format!("{}.{}", nsec3_hash_label(name), origin)).unwrap()
     }
 
     fn nsec3_hash_label(name: &str) -> String {
+        base32hex_lower(&nsec3_hash_bytes(name))
+    }
+
+    fn nsec3_hash_bytes(name: &str) -> [u8; 20] {
         let canonical = DomainName::from_absolute_str(name).unwrap().canonical_key();
         let wire = DomainName::from_absolute_str(&canonical).unwrap().to_wire();
         let mut digest = Sha1::new();
@@ -685,7 +719,120 @@
         let mut digest = Sha1::new();
         digest.update(first);
         let hash = digest.finalize();
-        base32hex_lower(&hash)
+        let mut bytes = [0u8; 20];
+        bytes.copy_from_slice(&hash);
+        bytes
+    }
+
+    fn nsec3_ring_rrsets<S: AsRef<str>>(names: &[S], origin: &str) -> Vec<Rrset> {
+        let mut hashes = names
+            .iter()
+            .map(|name| nsec3_hash_bytes(name.as_ref()))
+            .collect::<Vec<_>>();
+        hashes.sort_unstable();
+        hashes.dedup();
+        assert!(!hashes.is_empty());
+
+        let mut rrsets = Vec::with_capacity(hashes.len() * 2);
+        for (index, hash) in hashes.iter().enumerate() {
+            let next_hash = hashes[(index + 1) % hashes.len()];
+            let owner = DomainName::from_absolute_str(&format!(
+                "{}.{}",
+                base32hex_lower(hash),
+                origin
+            ))
+            .unwrap();
+            rrsets.push(Rrset::new(
+                owner.clone(),
+                RecordType::Nsec3 as u16,
+                1,
+                300,
+                vec![nsec3_rdata_with_next_hash(next_hash)],
+            ));
+            rrsets.push(Rrset::new(
+                owner,
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::Nsec3)],
+            ));
+        }
+        rrsets
+    }
+
+    fn nsec3_optout_ring_rrsets<S: AsRef<str>>(
+        names: &[S],
+        origin: &str,
+        omitted_name: &str,
+    ) -> Vec<Rrset> {
+        let omitted_hash = nsec3_hash_bytes(omitted_name);
+        let mut hashes = names
+            .iter()
+            .map(|name| nsec3_hash_bytes(name.as_ref()))
+            .collect::<Vec<_>>();
+        hashes.sort_unstable();
+        hashes.dedup();
+        assert!(!hashes.is_empty());
+
+        let mut rrsets = Vec::with_capacity(hashes.len() * 2);
+        for (index, hash) in hashes.iter().enumerate() {
+            let next_hash = hashes[(index + 1) % hashes.len()];
+            let owner = DomainName::from_absolute_str(&format!(
+                "{}.{}",
+                base32hex_lower(hash),
+                origin
+            ))
+            .unwrap();
+            let covers_omitted = if *hash < next_hash {
+                *hash < omitted_hash && omitted_hash < next_hash
+            } else if *hash > next_hash {
+                *hash < omitted_hash || omitted_hash < next_hash
+            } else {
+                omitted_hash != *hash
+            };
+            let flags = u8::from(covers_omitted);
+            rrsets.push(Rrset::new(
+                owner.clone(),
+                RecordType::Nsec3 as u16,
+                1,
+                300,
+                vec![nsec3_rdata_with_next_hash_and_flags(next_hash, flags)],
+            ));
+            rrsets.push(Rrset::new(
+                owner,
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::Nsec3)],
+            ));
+        }
+        rrsets
+    }
+
+    fn nsec3_covering_owner<S: AsRef<str>>(
+        name: &str,
+        ring_names: &[S],
+        origin: &str,
+    ) -> DomainName {
+        let target = nsec3_hash_bytes(name);
+        let mut hashes = ring_names
+            .iter()
+            .map(|name| nsec3_hash_bytes(name.as_ref()))
+            .collect::<Vec<_>>();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let insertion = hashes.partition_point(|hash| *hash < target);
+        let predecessor = if insertion == 0 {
+            hashes.last().unwrap()
+        } else {
+            &hashes[insertion - 1]
+        };
+        DomainName::from_absolute_str(&format!(
+            "{}.{}",
+            base32hex_lower(predecessor),
+            origin
+        ))
+        .unwrap()
     }
 
     fn base32hex_lower(bytes: &[u8]) -> String {
@@ -713,4 +860,3 @@
         rdata.push(0);
         rdata
     }
-

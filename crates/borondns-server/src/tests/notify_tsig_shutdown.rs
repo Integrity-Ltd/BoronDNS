@@ -48,6 +48,67 @@ fn signed_notify_is_verified_stripped_and_response_signed() {
 }
 
 #[test]
+fn udp_tsig_signing_honors_below_equal_and_above_ceiling_boundaries() {
+    let key = Arc::new(
+        TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap(),
+    );
+    let request = key
+        .sign_request(
+            &notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1),
+            current_unix_time(),
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap();
+    let response_tsig = || ResponseTsig {
+        key: Arc::clone(&key),
+        request_mac: request.mac.clone(),
+        fudge_seconds: DEFAULT_TSIG_FUDGE_SECS,
+    };
+    let base = notify_response(0x1234);
+    let signed_base = sign_tsig_response(base.clone(), Some(response_tsig())).unwrap();
+    let tsig_wire_len = signed_base.len() - base.len();
+
+    for signed_len in [511usize, 512] {
+        let response = notify_response_with_unknown_answer_len(signed_len - tsig_wire_len);
+        let signed = sign_udp_tsig_response(response.clone(), Some(response_tsig()), 512).unwrap();
+        assert_eq!(signed.len(), signed_len);
+        let verified = key
+            .verify_response(&signed, &request.mac, current_unix_time())
+            .unwrap();
+        assert_eq!(verified.message, response);
+        assert_eq!(Header::parse(&verified.message).unwrap().flags & 0x0200, 0);
+    }
+
+    let response = notify_response_with_unknown_answer_len(513 - tsig_wire_len);
+    let signed = sign_udp_tsig_response(response, Some(response_tsig()), 512).unwrap();
+    assert!(signed.len() <= 512);
+    let verified = key
+        .verify_response(&signed, &request.mac, current_unix_time())
+        .unwrap();
+    let header = Header::parse(&verified.message).unwrap();
+    assert_ne!(header.flags & 0x0200, 0);
+    assert_eq!(response_rcode(&verified.message, &header), Rcode::NoError as u16);
+    assert_eq!((header.qdcount, header.ancount, header.nscount, header.arcount), (1, 0, 0, 0));
+}
+
+fn notify_response_with_unknown_answer_len(target_len: usize) -> Vec<u8> {
+    let mut response = notify_response(0x1234);
+    response[6..8].copy_from_slice(&1u16.to_be_bytes());
+    let fixed_answer_len = 11usize;
+    let rdata_len = target_len
+        .checked_sub(response.len() + fixed_answer_len)
+        .expect("target response leaves room for an answer");
+    response.push(0);
+    response.extend_from_slice(&65_280u16.to_be_bytes());
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&0u32.to_be_bytes());
+    response.extend_from_slice(&(rdata_len as u16).to_be_bytes());
+    response.resize(response.len() + rdata_len, 0xa5);
+    assert_eq!(response.len(), target_len);
+    response
+}
+
+#[test]
 fn authorized_notify_with_bad_tsig_mac_gets_badsig_response() {
     let (authority, key) = tsig_notify_authority();
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
@@ -73,7 +134,7 @@ fn authorized_notify_with_bad_tsig_mac_gets_badsig_response() {
 }
 
 #[test]
-fn authorized_notify_with_too_short_tsig_mac_gets_badtrunc_response() {
+fn authorized_notify_with_too_short_tsig_mac_gets_formerr_without_tsig() {
     let (authority, key) = tsig_notify_authority();
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
     let signed_notify = key
@@ -83,21 +144,17 @@ fn authorized_notify_with_too_short_tsig_mac_gets_badtrunc_response() {
     let bad_notify = replace_final_tsig_mac(&signed_notify.message, too_short_mac);
 
     let prepared = prepare_notify_packet(&bad_notify, &authority, "192.0.2.53".parse().unwrap())
-        .expect("TSIG error response");
+        .expect("FORMERR response");
     let response = prepared
         .immediate_response
-        .expect("immediate TSIG error response");
+        .expect("immediate FORMERR response");
 
-    assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
-    let tsig = parse_tsig_response_fields(&response);
-    assert_eq!(tsig.mac_len, 0);
-    assert_eq!(tsig.original_id, 0x1234);
-    assert_eq!(tsig.error, TSIG_ERROR_BADTRUNC);
-    assert!(tsig.other_data.is_empty());
+    assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+    assert_eq!(u16::from_be_bytes([response[10], response[11]]), 0);
 }
 
 #[test]
-fn authorized_notify_with_hmac_md5_tsig_gets_badalg_response() {
+fn authorized_notify_with_hmac_md5_tsig_gets_unsigned_badkey_response() {
     let (authority, key) = tsig_notify_authority();
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
     let signed_notify = key
@@ -120,7 +177,8 @@ fn authorized_notify_with_hmac_md5_tsig_gets_badalg_response() {
     let tsig = parse_tsig_response_fields(&response);
     assert_eq!(tsig.mac_len, 0);
     assert_eq!(tsig.original_id, 0x1234);
-    assert_eq!(tsig.error, TSIG_ERROR_BADALG);
+    assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+    assert_eq!(tsig.algorithm, "hmac-md5.sig-alg.reg.int.");
     assert!(tsig.other_data.is_empty());
 }
 
@@ -145,6 +203,7 @@ fn authorized_notify_with_unknown_tsig_key_gets_badkey_response() {
     assert_eq!(tsig.mac_len, 0);
     assert_eq!(tsig.original_id, 0x1234);
     assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+    assert_eq!(tsig.algorithm, "hmac-sha256.");
     assert!(tsig.other_data.is_empty());
 }
 
@@ -618,6 +677,7 @@ fn authorized_notify_with_algorithm_mismatch_gets_badkey_response() {
     assert_eq!(tsig.mac_len, 0);
     assert_eq!(tsig.original_id, 0x1234);
     assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+    assert_eq!(tsig.algorithm, "hmac-sha1.");
     assert!(tsig.other_data.is_empty());
 }
 
@@ -625,9 +685,11 @@ fn authorized_notify_with_algorithm_mismatch_gets_badkey_response() {
 fn authorized_notify_outside_tsig_fudge_gets_badtime_response_with_server_time() {
     let (authority, key) = tsig_notify_authority();
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+    let request_fudge = 19;
     let stale_notify = key
-        .sign_request(&packet, 1, DEFAULT_TSIG_FUDGE_SECS)
+        .sign_request(&packet, 1, request_fudge)
         .expect("signed NOTIFY");
+    let request_mac = stale_notify.mac.clone();
 
     let prepared = prepare_notify_packet(
         &stale_notify.message,
@@ -644,7 +706,14 @@ fn authorized_notify_outside_tsig_fudge_gets_badtime_response_with_server_time()
     assert_eq!(tsig.mac_len, key.algorithm.mac_len());
     assert_eq!(tsig.original_id, 0x1234);
     assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
+    assert_eq!(tsig.time_signed, 1);
+    assert_eq!(tsig.fudge, request_fudge);
     assert_eq!(tsig.other_data.len(), 6);
+    assert_eq!(
+        key.verify_response(&response, &request_mac, current_unix_time())
+            .expect_err("authenticated BADTIME response"),
+        TsigError::ResponseError(TSIG_ERROR_BADTIME)
+    );
 }
 
 #[test]
@@ -1213,6 +1282,7 @@ fn dropped_notify_does_not_commit_dedup_state() {
 
     let admitted = refresh_rx.try_recv().expect("second NOTIFY must be admitted");
     assert_eq!(admitted.zone, zone);
+    assert_eq!(admitted.preferred_primary_ip, Some(source));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.notify_refresh_signalled, 1);
     assert_eq!(snapshot.notify_refresh_deduplicated, 0);

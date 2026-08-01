@@ -1271,6 +1271,82 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
 }
 
 #[tokio::test]
+async fn notify_refresh_worker_does_not_accept_serial_hint_as_confirmation() {
+    let (primary, peer_rx) = spawn_soa_primary_recording_peer(2).await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+    ))
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let zones = ZoneStore::new();
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        apex.clone(),
+        Some(2),
+        vec![Rrset::new(
+            apex.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    ));
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(RefreshRequest::new(
+        apex,
+        Some(2),
+        super::RefreshReason::Notify,
+    ))
+    .await
+    .unwrap();
+    drop(tx);
+
+    serve_refresh_requests(
+        rx,
+        zones,
+        CatalogRuntime {
+            manager: CatalogManager::from_config(&config),
+            transfer_plan,
+            refresh_registry: ZoneRefreshRegistry::without_jitter(
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            ),
+            notify_authority: NotifyAuthority::from_config_for_test(&config),
+            refresh_tx: mpsc::channel(1).0.downgrade(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+        },
+        IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+        RuntimeMetrics::new(),
+        RefreshWorkerSettings {
+            axfr_timeout: std::time::Duration::from_secs(5),
+            ixfr_timeout: std::time::Duration::from_secs(5),
+            tcp_connect_timeout: std::time::Duration::from_secs(5),
+            transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
+            max_resident_transfer_tasks: 16,
+            telemetry: ControlPlaneTelemetryClient::disabled(),
+            admission: RefreshAdmission::new(),
+        },
+    )
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_millis(250), peer_rx)
+        .await
+        .expect("RFC 1996 requires the worker to validate the NOTIFY hint")
+        .expect("SOA primary should observe a query");
+}
+
+#[tokio::test]
 async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
     let barrier = Arc::new(tokio::sync::Barrier::new(3));
     let alpha_primary = spawn_barrier_ixfr_mode2_primary("alpha.test.", barrier.clone()).await;
@@ -1658,7 +1734,202 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
 }
 
 #[tokio::test]
-async fn expired_zone_reactivates_when_serial_hint_confirms_retained_snapshot_current() {
+async fn notify_serial_hint_still_requires_primary_soa_poll() {
+    let (primary, peer_rx) = spawn_soa_primary_recording_peer(2).await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+    ))
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        apex.clone(),
+        Some(2),
+        vec![Rrset::new(
+            apex,
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    ));
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+    let metadata = refresh_zone_metadata_from_primaries(
+        &zones,
+        &plan,
+        Some(2),
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+            ixfr_timeout: std::time::Duration::from_secs(5),
+            axfr_timeout: std::time::Duration::from_secs(5),
+            tcp_connect_timeout: std::time::Duration::from_secs(5),
+            reason: "notify",
+        },
+    )
+    .await
+    .expect("primary SOA confirms retained zone current");
+    let peer = tokio::time::timeout(std::time::Duration::from_millis(250), peer_rx)
+        .await
+        .expect("RFC 1996 requires validating the NOTIFY hint with a primary query")
+        .expect("SOA primary should send peer address");
+
+    assert_eq!(metadata.serial, Some(2));
+    assert_eq!(peer.ip(), std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+}
+
+#[tokio::test]
+async fn notify_refresh_polls_the_notifying_primary_first() {
+    let (stale_primary, stale_rx) =
+        spawn_soa_primary_recording_peer_on("127.0.0.1:0", 10).await;
+    let (notifying_primary, notifying_rx) =
+        spawn_soa_primary_recording_peer_on("127.0.0.2:0", 10).await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{stale_primary}", "{notifying_primary}"]
+            "#
+    ))
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config_with_primary_start(&config, |_| Ok(0))
+        .expect("deterministic transfer plan");
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        apex.clone(),
+        Some(10),
+        vec![Rrset::new(
+            apex,
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(10)],
+        )],
+    ));
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+    let metadata = refresh_zone_metadata_from_primaries_preferring(
+        &zones,
+        &plan,
+        Some(10),
+        notifying_primary.ip(),
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+            ixfr_timeout: std::time::Duration::from_secs(5),
+            axfr_timeout: std::time::Duration::from_secs(5),
+            tcp_connect_timeout: std::time::Duration::from_secs(5),
+            reason: "notify",
+        },
+    )
+    .await
+    .expect("notifying primary confirms zone current");
+
+    tokio::time::timeout(std::time::Duration::from_millis(250), notifying_rx)
+        .await
+        .expect("notifying primary must receive the first SOA poll")
+        .expect("notifying primary reports peer");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), stale_rx)
+            .await
+            .is_err(),
+        "the earlier configured primary must not be polled after the notifying primary confirms current"
+    );
+    assert_eq!(metadata.serial, Some(10));
+}
+
+#[tokio::test]
+async fn notify_serial_hint_requires_soa_poll_over_xot_primary() {
+    let (primary, trust_anchor, observed_qtype) =
+        spawn_xot_soa_primary_recording_query(2).await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+    ))
+    .expect("valid XoT config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        apex.clone(),
+        Some(2),
+        vec![Rrset::new(
+            apex,
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    ));
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+    let metadata = refresh_zone_metadata_from_primaries(
+        &zones,
+        &plan,
+        Some(2),
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads XoT secret snapshot"),
+            ixfr_timeout: std::time::Duration::from_secs(1),
+            axfr_timeout: std::time::Duration::from_secs(1),
+            tcp_connect_timeout: std::time::Duration::from_secs(1),
+            reason: "notify",
+        },
+    )
+    .await;
+    let qtype = tokio::time::timeout(std::time::Duration::from_secs(1), observed_qtype)
+        .await
+        .expect("XoT primary should observe the validation query")
+        .expect("XoT primary should report the query type");
+
+    assert_eq!(qtype, RecordType::Soa as u16);
+    assert_eq!(metadata.expect("XoT SOA poll confirms current").serial, Some(2));
+}
+
+#[tokio::test]
+async fn expired_zone_is_not_reactivated_by_unvalidated_notify_serial_hint() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
@@ -1686,26 +1957,12 @@ async fn expired_zone_reactivates_when_serial_hint_confirms_retained_snapshot_cu
             vec![soa_rdata_with_serial(7)],
         )],
     ));
-    let retained = zones
-        .exact_snapshot_for_transfer(&apex)
-        .expect("active retained snapshot")
-        .snapshot_arc_for_transfer()
-        .clone();
     assert!(zones.expire_zone(&apex));
     assert_eq!(
         zones.exact_zone_control_metadata(&apex).unwrap().state,
         ZoneState::Expired
     );
-    assert!(!notify_serial_is_current(
-        &zones,
-        &RefreshRequest::new(
-            apex.clone(),
-            Some(7),
-            super::RefreshReason::Notify,
-        ),
-    ));
     assert!(zones.find_published_zone(&apex).is_some());
-
     let metrics = RuntimeMetrics::new();
     let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
     let metadata = refresh_zone_metadata_from_primaries(
@@ -1724,20 +1981,15 @@ async fn expired_zone_reactivates_when_serial_hint_confirms_retained_snapshot_cu
             reason: "notify",
         },
     )
-    .await
-    .expect("same-serial confirmation is a successful refresh");
+    .await;
 
-    assert_eq!(metadata.state, ZoneState::Active);
-    assert_eq!(metadata.serial, Some(7));
-    let reactivated = zones
+    assert!(metadata.is_none(), "the unreachable primary did not confirm freshness");
+    let expired = zones
         .exact_snapshot_for_transfer(&apex)
-        .expect("reactivated retained snapshot");
-    assert_eq!(reactivated.metadata().state, ZoneState::Active);
-    assert!(Arc::ptr_eq(
-        &retained,
-        reactivated.snapshot_arc_for_transfer()
-    ));
-    assert_eq!(zones.active_count(), 1);
+        .expect("expired retained snapshot remains available for refresh");
+    assert_eq!(expired.metadata().state, ZoneState::Expired);
+    assert_eq!(expired.metadata().serial, Some(7));
+    assert_eq!(zones.active_count(), 0);
 }
 
 #[tokio::test]
@@ -1818,7 +2070,9 @@ async fn malformed_catalog_axfr_is_rejected_before_publication_and_success() {
         outcome
             .failure_cause
             .as_deref()
-            .is_some_and(|cause| cause.contains("invalid catalog snapshot"))
+            .is_some_and(|cause| cause.contains("invalid catalog snapshot")),
+        "unexpected catalog transfer failure: {:?}",
+        outcome.failure_cause
     );
     let current = zones
         .exact_snapshot_for_transfer(&origin)

@@ -110,6 +110,112 @@
     }
 
     #[test]
+    fn domain_name_canonical_key_preserves_wire_label_boundaries() {
+        let (embedded_dot, consumed) =
+            DomainName::parse(b"\x03a.b\x07example\x04test\x00", 0).unwrap();
+        let split_labels = DomainName::from_absolute_str("a.b.example.test.").unwrap();
+
+        assert_eq!(consumed, 18);
+        assert_ne!(embedded_dot, split_labels);
+        assert_ne!(embedded_dot.canonical_key(), split_labels.canonical_key());
+    }
+
+    #[test]
+    fn domain_name_canonical_key_is_case_folded_and_octet_unambiguous() {
+        let root = DomainName::root();
+        let mixed_case = DomainName::from_absolute_str("WWW.Example.TEST.").unwrap();
+        let lowercase = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let (escaped_octets, _) =
+            DomainName::parse(b"\x05.\\\x00\x7f\xff\x00", 0).unwrap();
+        let (literal_escape_text, _) =
+            DomainName::parse(b"\x0d\\046\\092\\000x\x00", 0).unwrap();
+
+        assert_eq!(root.canonical_key(), ".");
+        assert_eq!(mixed_case.canonical_key(), lowercase.canonical_key());
+        assert_eq!(escaped_octets.canonical_key(), "\\046\\092\\000\\127\\255.");
+        assert_ne!(escaped_octets.canonical_key(), literal_escape_text.canonical_key());
+
+        let mut keys = std::collections::HashSet::new();
+        for byte in 0u8..=u8::MAX {
+            let wire = [1, byte, 0];
+            let (name, consumed) = DomainName::parse(&wire, 0).unwrap();
+            assert_eq!(consumed, wire.len());
+            keys.insert(name.canonical_key());
+        }
+        assert_eq!(keys.len(), 230, "only ASCII case pairs compare equal");
+    }
+
+    #[test]
+    fn domain_name_canonical_key_handles_maximum_length_name() {
+        let mut mixed_wire = Vec::new();
+        let mut lower_wire = Vec::new();
+        for (len, mixed, lower) in [
+            (63, b'A', b'a'),
+            (63, b'B', b'b'),
+            (63, b'C', b'c'),
+            (61, b'D', b'd'),
+        ] {
+            mixed_wire.push(len);
+            mixed_wire.extend(std::iter::repeat_n(mixed, usize::from(len)));
+            lower_wire.push(len);
+            lower_wire.extend(std::iter::repeat_n(lower, usize::from(len)));
+        }
+        mixed_wire.push(0);
+        lower_wire.push(0);
+
+        assert_eq!(mixed_wire.len(), 255);
+        let (mixed, mixed_consumed) = DomainName::parse(&mixed_wire, 0).unwrap();
+        let (lower, lower_consumed) = DomainName::parse(&lower_wire, 0).unwrap();
+        assert_eq!(mixed_consumed, 255);
+        assert_eq!(lower_consumed, 255);
+        assert_eq!(mixed.canonical_key(), lower.canonical_key());
+    }
+
+    #[test]
+    fn zone_snapshot_keeps_colliding_presentation_names_distinct() {
+        let (embedded_dot, _) =
+            DomainName::parse(b"\x03a.b\x07example\x04test\x00", 0).unwrap();
+        let split_labels = DomainName::from_absolute_str("a.b.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    embedded_dot.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1]],
+                ),
+                Rrset::new(
+                    split_labels.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 2]],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            snapshot
+                .offline_oracle()
+                .lookup(&embedded_dot, RecordType::A as u16, 1)
+                .answers[0]
+                .rdata,
+            vec![192, 0, 2, 1]
+        );
+        assert_eq!(
+            snapshot
+                .offline_oracle()
+                .lookup(&split_labels, RecordType::A as u16, 1)
+                .answers[0]
+                .rdata,
+            vec![192, 0, 2, 2]
+        );
+    }
+
+    #[test]
     fn domain_name_wire_len_matches_serialized_wire() {
         let name = DomainName::from_absolute_str("WWW.Example.TEST.").unwrap();
         let mut wire = Vec::with_capacity(name.wire_len());

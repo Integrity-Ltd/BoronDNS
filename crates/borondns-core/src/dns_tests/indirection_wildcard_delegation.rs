@@ -33,6 +33,98 @@
     }
 
     #[test]
+    fn cname_continuation_applies_covering_dname() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.d.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("d.example.test.").unwrap(),
+                    RecordType::Dname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 80].to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(
+                b"\x05alias\x07example\x04test\x00",
+                RecordType::A as u16,
+                1,
+            ),
+            &store,
+        );
+
+        assert_eq!(
+            response_answer_types(&response),
+            vec![
+                RecordType::Cname as u16,
+                RecordType::Dname as u16,
+                RecordType::Cname as u16,
+                RecordType::A as u16,
+            ]
+        );
+    }
+
+    #[test]
+    fn cname_continuation_applies_wildcard_synthesis() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 81].to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(
+                b"\x05alias\x07example\x04test\x00",
+                RecordType::A as u16,
+                1,
+            ),
+            &store,
+        );
+        let answers = response_answers(&response);
+
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Cname as u16, RecordType::A as u16]
+        );
+        assert_eq!(answers[1].0.to_string(), "target.example.test.");
+    }
+
+    #[test]
     fn concurrent_snapshot_replacement_answers_from_one_zone_version() {
         let store = ZoneStore::new();
         let old_snapshot = alias_snapshot(1, "old-target.example.test.", [192, 0, 2, 10]);
@@ -153,6 +245,125 @@
         assert_eq!(
             response_answer_types(&response),
             vec![RecordType::Cname as u16]
+        );
+    }
+
+    #[test]
+    fn do_cname_terminal_nodata_proves_the_terminal_name() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![b"\x07present".to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::Cname as u16]);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+    }
+
+    #[test]
+    fn do_cname_terminal_nxdomain_proves_the_terminal_name_and_wildcard_absence() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("missing.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("a.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::Cname as u16]);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16, RecordType::Nsec as u16, RecordType::Rrsig as u16]
         );
     }
 
@@ -324,6 +535,60 @@
             ]
         );
         assert_eq!(answers[1].0.to_string(), "www.alias.example.test.");
+    }
+
+    #[test]
+    fn exact_data_below_dname_is_occluded_by_the_dname() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Dname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.alias.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 99].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 40].to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(
+                b"\x03www\x05alias\x07example\x04test\x00",
+                RecordType::A as u16,
+                1,
+            ),
+            &store,
+        );
+
+        assert_eq!(
+            response_answer_types(&response),
+            vec![
+                RecordType::Dname as u16,
+                RecordType::Cname as u16,
+                RecordType::A as u16,
+            ]
+        );
+        assert_eq!(
+            response_answer_rdatas(&response, RecordType::A as u16),
+            vec![[192, 0, 2, 40].to_vec()],
+        );
     }
 
     #[test]
@@ -557,11 +822,18 @@
                     vec![[192, 0, 2, 20].to_vec()],
                 ),
                 Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+                Rrset::new(
                     DomainName::from_absolute_str("a.example.test.").unwrap(),
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("z.example.test.")],
+                    vec![nsec_rdata("a.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("a.example.test.").unwrap(),
@@ -578,12 +850,111 @@
         let response = store_response(&packet, &store);
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
-        assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::A as u16, RecordType::Rrsig as u16]
+        );
+        assert!(
+            response_answers(&response)
+                .iter()
+                .all(|(owner, _)| owner.to_string() == "foo.example.test."),
+            "the wildcard data and its RRSIG must both use the expanded owner"
+        );
         assert_eq!(
             response_authority_types(&response),
             vec![RecordType::Nsec as u16, RecordType::Rrsig as u16]
         );
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn do_nsec3_wildcard_answer_proves_the_next_closer_name() {
+        let mut ring_names = vec!["example.test.".to_owned(), "*.example.test.".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}.example.test."));
+            if nsec3_covering_owner("missing.example.test.", &ring_names, "example.test.")
+                != nsec3_covering_owner(
+                    "deep.missing.example.test.",
+                    &ring_names,
+                    "example.test.",
+                )
+            {
+                break;
+            }
+        }
+        let expected_cover =
+            nsec3_covering_owner("missing.example.test.", &ring_names, "example.test.");
+        let wrong_qname_cover = nsec3_covering_owner(
+            "deep.missing.example.test.",
+            &ring_names,
+            "example.test.",
+        );
+        assert_ne!(expected_cover, wrong_qname_cover, "fixture must distinguish the RFC next-closer proof from a broad QNAME proof");
+
+        let mut rrsets = vec![
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 20].to_vec()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::A)],
+            ),
+        ];
+        for name in &ring_names[2..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_ring_rrsets(&ring_names, "example.test."));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets,
+        ));
+        let mut packet = query(
+            b"\x04deep\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::A as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(
+            response_authority_owners(&response, RecordType::Nsec3 as u16),
+            vec![expected_cover]
+        );
     }
 
     #[test]
@@ -612,7 +983,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("z.example.test.")],
+                    vec![nsec_rdata("*.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("a.example.test.").unwrap(),
@@ -686,7 +1057,14 @@
                     RecordType::Cname as u16,
                     1,
                     300,
-                    vec![cname_rdata("missing.example.test.")],
+                    vec![cname_rdata("missing.block.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.block.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 31].to_vec()],
                 ),
             ],
         ));
@@ -701,6 +1079,28 @@
             response_answer_types(&response),
             vec![RecordType::Cname as u16]
         );
+    }
+
+    #[test]
+    fn wildcard_cname_reapplication_honors_chain_limit() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::Cname as u16,
+                1,
+                300,
+                vec![cname_rdata("missing.example.test.")],
+            )],
+        ));
+
+        let packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert!(u16::from_be_bytes([response[6], response[7]]) > 0);
     }
 
     #[test]
@@ -768,6 +1168,221 @@
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+    }
+
+    #[test]
+    fn empty_non_terminal_wildcard_source_gets_nodata() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.*.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 22].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+    }
+
+    #[test]
+    fn do_wildcard_nodata_proves_qname_absence_and_wildcard_type_absence() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![b"\x08wildcard".to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("a.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("*.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert!(response_answer_types(&response).is_empty());
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+    }
+
+    #[test]
+    fn do_wildcard_nodata_rejects_covering_nsec3_for_the_required_wildcard_match() {
+        let mut rrsets = vec![
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x08wildcard".to_vec()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+        ];
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets,
+        ));
+        let mut packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
+    }
+
+    #[test]
+    fn do_wildcard_nodata_includes_exact_nsec3_for_closest_encloser_and_wildcard() {
+        let ring_names = [
+            "example.test.",
+            "*.example.test.",
+            "anchor.example.test.",
+        ];
+        let mut rrsets = vec![
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x08wildcard".to_vec()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+        ];
+        rrsets.extend(nsec3_ring_rrsets(&ring_names, "example.test."));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets,
+        ));
+        let mut packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+        let nsec3_owners = response_authority_owners(&response, RecordType::Nsec3 as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert!(
+            nsec3_owners.contains(&nsec3_owner("example.test.", "example.test.")),
+            "closest encloser requires an exact NSEC3 match"
+        );
+        assert!(
+            nsec3_owners.contains(&nsec3_owner("*.example.test.", "example.test.")),
+            "wildcard NODATA requires an exact NSEC3 match for the wildcard owner"
+        );
     }
 
     #[test]
@@ -871,7 +1486,197 @@
     }
 
     #[test]
-    fn delegated_child_referral_omits_parent_side_ns_address_as_glue() {
+    fn nsec3_optout_unsigned_referral_includes_closest_encloser_proof() {
+        let mut ring_names = vec!["example.test.".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}.example.test."));
+            if nsec3_covering_owner(
+                "child.example.test.",
+                &ring_names,
+                "example.test.",
+            ) != nsec3_owner("example.test.", "example.test.")
+            {
+                break;
+            }
+        }
+        let expected_closest = nsec3_owner("example.test.", "example.test.");
+        let expected_cover = nsec3_covering_owner(
+            "child.example.test.",
+            &ring_names,
+            "example.test.",
+        );
+        assert_ne!(expected_closest, expected_cover);
+
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                child,
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.child.example.test.")],
+            ),
+        ];
+        for name in &ring_names[1..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_optout_ring_rrsets(
+            &ring_names,
+            "example.test.",
+            "child.example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+        let owners = response_authority_owners(&response, RecordType::Nsec3 as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x0400, 0);
+        assert!(owners.contains(&expected_closest));
+        assert!(owners.contains(&expected_cover));
+    }
+
+    #[test]
+    fn nsec3_unsigned_referral_rejects_cover_without_optout_flag() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                child,
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.child.example.test.")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+        ];
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert!(response_authority_types(&response).is_empty());
+    }
+
+    #[test]
+    fn ds_at_a_locally_served_child_apex_is_answered_from_the_parent_zone() {
+        let store = ZoneStore::new();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let mut ds = vec![0x12, 0x34, 8, 2];
+        ds.extend_from_slice(&[0x5a; 32]);
+
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    child.clone(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    child.clone(),
+                    RecordType::Ds as u16,
+                    1,
+                    300,
+                    vec![ds],
+                ),
+            ],
+        ));
+        store.insert_snapshot(ZoneSnapshot::active(
+            child,
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("child.example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        let packet = query(
+            b"\x05child\x07example\x04test\x00",
+            RecordType::Ds as u16,
+            1,
+        );
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::Ds as u16]);
+        assert_ne!(u16::from_be_bytes([response[2], response[3]]) & 0x0400, 0);
+    }
+
+    #[test]
+    fn delegated_child_referral_includes_available_parent_side_ns_address() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -915,7 +1720,7 @@
             response_authority_types(&response),
             vec![RecordType::Ns as u16]
         );
-        assert!(response_additional_types(&response).is_empty());
+        assert_eq!(response_additional_types(&response), vec![RecordType::A as u16]);
     }
 
     #[test]
@@ -968,6 +1773,184 @@
             response_additional_types(&response),
             vec![RecordType::A as u16]
         );
+    }
+
+    #[test]
+    fn cname_chain_into_delegation_includes_referral() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.child.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 99].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let response = store_response(&packet, &store);
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_ne!(flags & 0x0400, 0);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Cname as u16]
+        );
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Ns as u16]
+        );
+        assert!(response_additional_types(&response).is_empty());
+    }
+
+    #[test]
+    fn cname_chain_resumes_in_a_separately_served_child_zone() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+            ],
+        ));
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("child.example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.child.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 100].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let response = store_response(&packet, &store);
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_ne!(flags & 0x0400, 0);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Cname as u16, RecordType::A as u16]
+        );
+        assert!(response_authority_types(&response).is_empty());
+    }
+
+    #[test]
+    fn cross_zone_cname_to_referral_keeps_authoritative_answer_bit() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.grand.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+            ],
+        ));
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("child.example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("grand.child.example.test.").unwrap(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.grand.child.example.test.")],
+            )],
+        ));
+
+        let response = store_response(
+            &query(
+                b"\x05alias\x07example\x04test\x00",
+                RecordType::A as u16,
+                1,
+            ),
+            &store,
+        );
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_ne!(flags & 0x0400, 0);
+        assert_eq!(response_answer_types(&response), vec![RecordType::Cname as u16]);
+        assert_eq!(response_authority_types(&response), vec![RecordType::Ns as u16]);
     }
 
     #[test]
@@ -1025,4 +2008,3 @@
         );
         assert!(response_additional_types(&response).is_empty());
     }
-

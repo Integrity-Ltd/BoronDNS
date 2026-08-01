@@ -64,7 +64,7 @@ REQUIRED_EVIDENCE_SNIPPETS = {
     ],
     "RFC 8914": [
         "ede_not_ready_is_opt_in_for_loading_zones",
-        "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+        "nsec3_iterations_over_cap_fails_closed_and_emits_ede_when_enabled",
     ],
     "RFC 7314": [
         "Informative Only",

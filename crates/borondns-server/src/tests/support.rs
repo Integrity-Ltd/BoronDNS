@@ -57,6 +57,46 @@ async fn spawn_xot_axfr_primary_with_serial(serial: u32) -> (std::net::SocketAdd
     (addr, cert_path.display().to_string())
 }
 
+async fn spawn_xot_soa_primary_recording_query(
+    serial: u32,
+) -> (
+    std::net::SocketAddr,
+    String,
+    tokio::sync::oneshot::Receiver<u16>,
+) {
+    let (cert_path, key_path) = write_self_signed_xot_cert_files();
+    let certs =
+        load_pem_certs(cert_path.to_str().expect("utf-8 cert path")).expect("load generated cert");
+    let key = load_pem_private_key(
+        "127.0.0.1:0".parse().unwrap(),
+        key_path.to_str().expect("utf-8 key path"),
+    )
+    .expect("load generated key");
+    let mut config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .expect("server tls config");
+    config.alpn_protocols = vec![b"dot".to_vec()];
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (qtype_tx, qtype_rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = acceptor.accept(stream).await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        let _ = qtype_tx.send(query_qtype(&query));
+        stream
+            .write_all(&frame_tcp_message(&soa_response(header.id, serial)))
+            .await
+            .unwrap();
+    });
+
+    (addr, cert_path.display().to_string(), qtype_rx)
+}
+
 async fn spawn_xot_axfr_primary_recording_query(
     serial: u32,
 ) -> (std::net::SocketAddr, String, Arc<Mutex<Option<Vec<u8>>>>) {
@@ -547,6 +587,26 @@ async fn spawn_axfr_primary_recording_query(
     (addr, observed_query)
 }
 
+async fn spawn_unsigned_transfer_error_primary(
+    expected_qtype: RecordType,
+    rcode: u8,
+) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(header.arcount, 1, "test query must request TSIG authentication");
+        assert_eq!(query_qtype(&query), expected_qtype as u16);
+        stream
+            .write_all(&frame_tcp_message(&error_response(header.id, rcode)))
+            .await
+            .unwrap();
+    });
+    addr
+}
+
 async fn spawn_signed_catalog_axfr_primary_with_member(
     catalog_zone: &'static str,
     member_zone: &'static str,
@@ -592,7 +652,30 @@ async fn spawn_signed_invalid_catalog_axfr_primary(
 ) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket = UdpSocket::bind(addr).await.unwrap();
     tokio::spawn(async move {
+        let key = TsigKey::from_base64("catalog-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let mut buffer = vec![0u8; 1024];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let soa_query = &buffer[..len];
+        let soa_header = Header::parse(soa_query).unwrap();
+        let (_, qname_len) = DomainName::parse(soa_query, 12).unwrap();
+        assert_eq!(
+            u16::from_be_bytes([soa_query[12 + qname_len], soa_query[13 + qname_len]]),
+            RecordType::Soa as u16
+        );
+        let request_mac = extract_query_tsig_mac(soa_query);
+        let soa = soa_response_for_zone(soa_header.id, catalog_zone, serial);
+        let signed_soa = key
+            .sign_response(
+                &soa,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        socket.send_to(&signed_soa.message, peer).await.unwrap();
+
         let (mut stream, _) = listener.accept().await.unwrap();
         let query = read_primary_query(&mut stream).await;
         let header = Header::parse(&query).unwrap();
@@ -605,7 +688,6 @@ async fn spawn_signed_invalid_catalog_axfr_primary(
 
         let request_mac = extract_query_tsig_mac(&query);
         let response = catalog_axfr_response_with_version(catalog_zone, header.id, serial, b'3');
-        let key = TsigKey::from_base64("catalog-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
         let signed = key
             .sign_response(
                 &response,
@@ -648,7 +730,22 @@ async fn spawn_axfr_primary_recording_peer(
 async fn spawn_ixfr_mode2_primary_with_serial(serial: u32) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket = UdpSocket::bind(addr).await.unwrap();
     tokio::spawn(async move {
+        let mut buffer = vec![0u8; 512];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let soa_query = &buffer[..len];
+        let soa_header = Header::parse(soa_query).unwrap();
+        let (_, qname_len) = DomainName::parse(soa_query, 12).unwrap();
+        assert_eq!(
+            u16::from_be_bytes([soa_query[12 + qname_len], soa_query[13 + qname_len]]),
+            RecordType::Soa as u16
+        );
+        socket
+            .send_to(&soa_response(soa_header.id, serial), peer)
+            .await
+            .unwrap();
+
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut length_prefix = [0u8; 2];
         stream.read_exact(&mut length_prefix).await.unwrap();
@@ -670,13 +767,47 @@ async fn spawn_ixfr_mode2_primary_with_serial(serial: u32) -> std::net::SocketAd
     addr
 }
 
+async fn spawn_ixfr_mode2_transfer_primary_with_serial(serial: u32) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(header.qdcount, 1);
+        assert_eq!(header.nscount, 1);
+
+        let response = ixfr_mode2_response(header.id, serial);
+        stream
+            .write_all(&frame_tcp_message(&response))
+            .await
+            .unwrap();
+    });
+    addr
+}
+
 async fn spawn_barrier_ixfr_mode2_primary(
     zone: &'static str,
     barrier: Arc<tokio::sync::Barrier>,
 ) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket = UdpSocket::bind(addr).await.unwrap();
     tokio::spawn(async move {
+        let mut buffer = vec![0u8; 512];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let soa_query = &buffer[..len];
+        let soa_header = Header::parse(soa_query).unwrap();
+        let (_, qname_len) = DomainName::parse(soa_query, 12).unwrap();
+        assert_eq!(
+            u16::from_be_bytes([soa_query[12 + qname_len], soa_query[13 + qname_len]]),
+            RecordType::Soa as u16
+        );
+        socket
+            .send_to(&soa_response_for_zone(soa_header.id, zone, 2), peer)
+            .await
+            .unwrap();
+
         let (mut stream, _) = listener.accept().await.unwrap();
         let query = read_primary_query(&mut stream).await;
         let header = Header::parse(&query).unwrap();
@@ -727,10 +858,21 @@ async fn spawn_ixfr_mode1_primary() -> std::net::SocketAddr {
 async fn spawn_ixfr_notimp_then_axfr_primary() -> (std::net::SocketAddr, Arc<Mutex<Vec<u16>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket = UdpSocket::bind(addr).await.unwrap();
     let qtypes = Arc::new(Mutex::new(Vec::new()));
     let qtypes_for_task = qtypes.clone();
     tokio::spawn(async move {
         for serial in [2, 3] {
+            let mut buffer = vec![0u8; 512];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let soa_query = &buffer[..len];
+            let soa_header = Header::parse(soa_query).unwrap();
+            assert_eq!(query_qtype(soa_query), RecordType::Soa as u16);
+            socket
+                .send_to(&soa_response(soa_header.id, serial), peer)
+                .await
+                .unwrap();
+
             let (mut stream, _) = listener.accept().await.unwrap();
             let query = read_primary_query(&mut stream).await;
             let header = Header::parse(&query).unwrap();
@@ -796,7 +938,17 @@ async fn spawn_soa_primary_recording_peer(
     std::net::SocketAddr,
     tokio::sync::oneshot::Receiver<std::net::SocketAddr>,
 ) {
-    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    spawn_soa_primary_recording_peer_on("127.0.0.1:0", serial).await
+}
+
+async fn spawn_soa_primary_recording_peer_on(
+    bind_addr: &str,
+    serial: u32,
+) -> (
+    std::net::SocketAddr,
+    tokio::sync::oneshot::Receiver<std::net::SocketAddr>,
+) {
+    let socket = UdpSocket::bind(bind_addr).await.unwrap();
     let addr = socket.local_addr().unwrap();
     let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
@@ -932,6 +1084,42 @@ async fn spawn_signed_soa_primary_with_serial(serial: u32) -> std::net::SocketAd
     addr
 }
 
+async fn spawn_invalid_then_signed_soa_primary(
+    serial: u32,
+    invalid_truncated: bool,
+) -> std::net::SocketAddr {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let mut buffer = vec![0u8; 1024];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let query = &buffer[..len];
+        let header = Header::parse(query).unwrap();
+        let request_mac = extract_query_tsig_mac(query);
+
+        let mut invalid = soa_response(header.id, serial);
+        if invalid_truncated {
+            let flags = u16::from_be_bytes([invalid[2], invalid[3]]) | 0x0200;
+            invalid[2..4].copy_from_slice(&flags.to_be_bytes());
+        }
+        socket.send_to(&invalid, peer).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let response = soa_response(header.id, serial);
+        let signed = key
+            .sign_response(
+                &response,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        socket.send_to(&signed.message, peer).await.unwrap();
+    });
+    addr
+}
+
 async fn spawn_truncated_udp_tcp_soa_primary(serial: u32) -> std::net::SocketAddr {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let addr = socket.local_addr().unwrap();
@@ -945,10 +1133,19 @@ async fn spawn_truncated_udp_tcp_soa_primary(serial: u32) -> std::net::SocketAdd
         assert_eq!(header.qdcount, 1);
         assert_eq!(query_qtype(query), RecordType::Soa as u16);
 
+        let request_mac = extract_query_tsig_mac(query);
         let mut response = soa_response(header.id, serial);
         let flags = u16::from_be_bytes([response[2], response[3]]) | 0x0200;
         response[2..4].copy_from_slice(&flags.to_be_bytes());
-        socket.send_to(&response, peer).await.unwrap();
+        let signed = key
+            .sign_response(
+                &response,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        socket.send_to(&signed.message, peer).await.unwrap();
 
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut length_prefix = [0u8; 2];
@@ -1161,7 +1358,7 @@ fn replace_tsig_only_message_mac(mut message: Vec<u8>, replacement_mac: &[u8]) -
     message
 }
 
-async fn read_primary_query(stream: &mut TcpStream) -> Vec<u8> {
+async fn read_primary_query(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Vec<u8> {
     let mut length_prefix = [0u8; 2];
     stream.read_exact(&mut length_prefix).await.unwrap();
     let query_len = u16::from_be_bytes(length_prefix) as usize;
@@ -1293,7 +1490,14 @@ fn ixfr_mode1_response(qid: u16) -> Vec<u8> {
         RecordType::A as u16,
         vec![192, 0, 2, 2],
     );
-    let answers = vec![new_soa.clone(), old_soa, old_a, new_soa, new_a];
+    let answers = vec![
+        new_soa.clone(),
+        old_soa,
+        old_a,
+        new_soa.clone(),
+        new_a,
+        new_soa,
+    ];
     let mut out = Vec::new();
     out.extend_from_slice(&qid.to_be_bytes());
     out.extend_from_slice(&0x8000u16.to_be_bytes());
@@ -1320,12 +1524,12 @@ fn ixfr_mode1_response(qid: u16) -> Vec<u8> {
 }
 
 fn soa_response(qid: u16, serial: u32) -> Vec<u8> {
-    let apex = DomainName::from_absolute_str("example.test.").unwrap();
-    let soa = record(
-        "example.test.",
-        RecordType::Soa as u16,
-        soa_rdata_with_serial(serial),
-    );
+    soa_response_for_zone(qid, "example.test.", serial)
+}
+
+fn soa_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
+    let apex = DomainName::from_absolute_str(zone).unwrap();
+    let soa = record(zone, RecordType::Soa as u16, soa_rdata_with_serial(serial));
     let mut out = Vec::new();
     out.extend_from_slice(&qid.to_be_bytes());
     out.extend_from_slice(&0x8000u16.to_be_bytes());
@@ -1529,7 +1733,24 @@ fn replace_final_tsig_algorithm(message: &[u8], replacement_algorithm: &str) -> 
     out
 }
 
+fn replace_final_tsig_error(message: &[u8], replacement_error: u16) -> Vec<u8> {
+    let mut out = message.to_vec();
+    let mut offset = 12;
+    let (_, qname_len) = DomainName::parse(&out, offset).unwrap();
+    offset += qname_len + 4;
+    let (_, owner_len) = DomainName::parse(&out, offset).unwrap();
+    offset += owner_len + 10;
+    let (_, algorithm_len) = DomainName::parse(&out, offset).unwrap();
+    offset += algorithm_len + 6 + 2;
+    let mac_len = u16::from_be_bytes([out[offset], out[offset + 1]]) as usize;
+    offset += 2 + mac_len + 2;
+    out[offset..offset + 2].copy_from_slice(&replacement_error.to_be_bytes());
+    out
+}
+
 struct ParsedTsigResponseFields {
+    algorithm: String,
+    time_signed: u64,
     fudge: u16,
     mac_len: usize,
     original_id: u16,
@@ -1551,8 +1772,16 @@ fn parse_tsig_response_fields(response: &[u8]) -> ParsedTsigResponseFields {
     let rdlen = u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
     offset += 10;
     let rdata_end = offset + rdlen;
-    let (_, algorithm_len) = DomainName::parse(response, offset).unwrap();
-    offset += algorithm_len + 6;
+    let (algorithm, algorithm_len) = DomainName::parse(response, offset).unwrap();
+    offset += algorithm_len;
+    let time_signed = ((u16::from_be_bytes([response[offset], response[offset + 1]]) as u64) << 32)
+        | u32::from_be_bytes([
+            response[offset + 2],
+            response[offset + 3],
+            response[offset + 4],
+            response[offset + 5],
+        ]) as u64;
+    offset += 6;
     let fudge = u16::from_be_bytes([response[offset], response[offset + 1]]);
     offset += 2;
     let mac_len = u16::from_be_bytes([response[offset], response[offset + 1]]) as usize;
@@ -1565,6 +1794,8 @@ fn parse_tsig_response_fields(response: &[u8]) -> ParsedTsigResponseFields {
     offset += 2;
     assert_eq!(offset + other_len, rdata_end);
     ParsedTsigResponseFields {
+        algorithm: algorithm.to_string(),
+        time_signed,
         fudge,
         mac_len,
         original_id,
@@ -1971,7 +2202,7 @@ async fn recv_udp_with_timeout(
     socket: &UdpSocket,
     timeout_duration: std::time::Duration,
 ) -> Option<Vec<u8>> {
-    let mut response = vec![0u8; 512];
+    let mut response = vec![0u8; u16::MAX as usize];
     let len = tokio::time::timeout(timeout_duration, socket.recv(&mut response))
         .await
         .ok()?

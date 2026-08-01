@@ -1994,7 +1994,7 @@ async fn concurrent_catalog_member_migration_preserves_member_resources() {
 }
 
 #[tokio::test]
-async fn catalog_member_migration_preserves_destination_when_add_seen_first() {
+async fn catalog_member_migration_add_seen_before_removal_is_ignored_as_a_clash() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
@@ -2079,17 +2079,17 @@ async fn catalog_member_migration_preserves_destination_when_add_seen_first() {
         )
         .await;
 
-    assert!(transfer_plan.get(&member_origin).is_some());
-    assert!(zones.contains_exact_zone_for_control(&member_origin));
+    assert!(transfer_plan.get(&member_origin).is_none());
+    assert!(!zones.contains_exact_zone_for_control(&member_origin));
     assert!(
-        refresh_registry
+        !refresh_registry
             .snapshots_by_zone()
             .contains_key("member.example.")
     );
 }
 
 #[tokio::test]
-async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_order() {
+async fn overlapping_catalog_members_keep_first_applied_owner_until_removal() {
     for apply_a_first in [true, false] {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -2185,14 +2185,52 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
                 .await;
         }
 
+        let (
+            owner_catalog,
+            owner_primary,
+            owner_key,
+            owner_notify,
+            clash_notify,
+            owner_empty,
+            clash_snapshot,
+            clash_catalog,
+            clash_primary,
+            clash_key,
+        ) = if apply_a_first {
+            (
+                "a.catalog.example.",
+                SocketAddr::from((Ipv4Addr::new(198, 51, 100, 10), 5301)),
+                "member-a-key.",
+                "203.0.113.10",
+                "203.0.113.20",
+                catalog_snapshot_with_members(catalog_a.clone(), 8, &[]),
+                &snapshot_b,
+                "b.catalog.example.",
+                SocketAddr::from((Ipv4Addr::new(198, 51, 100, 20), 5302)),
+                "member-b-key.",
+            )
+        } else {
+            (
+                "b.catalog.example.",
+                SocketAddr::from((Ipv4Addr::new(198, 51, 100, 20), 5302)),
+                "member-b-key.",
+                "203.0.113.20",
+                "203.0.113.10",
+                catalog_snapshot_with_members(catalog_b.clone(), 8, &[]),
+                &snapshot_a,
+                "a.catalog.example.",
+                SocketAddr::from((Ipv4Addr::new(198, 51, 100, 10), 5301)),
+                "member-a-key.",
+            )
+        };
         assert_catalog_member_policy(
             &transfer_plan,
             &notify_authority,
             &member_origin,
-            SocketAddr::from((Ipv4Addr::new(198, 51, 100, 10), 5301)),
-            "member-a-key.",
-            "203.0.113.10",
-            "203.0.113.20",
+            owner_primary,
+            owner_key,
+            owner_notify,
+            clash_notify,
         );
         assert_eq!(
             catalog_manager
@@ -2200,14 +2238,30 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
                 .iter()
                 .map(|member| member.catalog_zone.to_string())
                 .collect::<Vec<_>>(),
-            vec!["a.catalog.example.", "b.catalog.example."]
+            vec![owner_catalog]
         );
 
-        let empty_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
         catalog_manager
             .apply_snapshot(
-                empty_a.catalog_zone_view(),
-                &zone_metadata_for(&empty_a),
+                owner_empty.catalog_zone_view(),
+                &zone_metadata_for(&owner_empty),
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &tx.downgrade(),
+            )
+            .await;
+
+        assert!(transfer_plan.get(&member_origin).is_none());
+        assert!(!zones.contains_exact_zone_for_control(&member_origin));
+        assert_eq!(catalog_manager.member_metrics(), Vec::new());
+
+        // A new update from the formerly clashing catalog is now a fresh add.
+        catalog_manager
+            .apply_snapshot(
+                clash_snapshot.catalog_zone_view(),
+                &zone_metadata_for(clash_snapshot),
                 &zones,
                 &transfer_plan,
                 &refresh_registry,
@@ -2220,10 +2274,10 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
             &transfer_plan,
             &notify_authority,
             &member_origin,
-            SocketAddr::from((Ipv4Addr::new(198, 51, 100, 20), 5302)),
-            "member-b-key.",
-            "203.0.113.20",
-            "203.0.113.10",
+            clash_primary,
+            clash_key,
+            clash_notify,
+            owner_notify,
         );
         assert!(zones.contains_exact_zone_for_control(&member_origin));
         assert_eq!(
@@ -2232,14 +2286,18 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
                 .iter()
                 .map(|member| member.catalog_zone.to_string())
                 .collect::<Vec<_>>(),
-            vec!["b.catalog.example."]
+            vec![clash_catalog]
         );
 
-        let empty_b = catalog_snapshot_with_members(catalog_b.clone(), 8, &[]);
+        let clash_empty = if apply_a_first {
+            catalog_snapshot_with_members(catalog_b.clone(), 8, &[])
+        } else {
+            catalog_snapshot_with_members(catalog_a.clone(), 8, &[])
+        };
         catalog_manager
             .apply_snapshot(
-                empty_b.catalog_zone_view(),
-                &zone_metadata_for(&empty_b),
+                clash_empty.catalog_zone_view(),
+                &zone_metadata_for(&clash_empty),
                 &zones,
                 &transfer_plan,
                 &refresh_registry,
@@ -2252,7 +2310,7 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
         assert!(!notify_authority.is_authorized(
             &member_origin,
             1,
-            "203.0.113.20".parse().unwrap()
+            clash_notify.parse().unwrap()
         ));
         assert!(!zones.contains_exact_zone_for_control(&member_origin));
         assert!(
@@ -2262,6 +2320,169 @@ async fn overlapping_catalog_members_have_canonical_policy_owner_in_any_apply_or
         );
         assert_eq!(catalog_manager.member_metrics(), Vec::new());
     }
+}
+
+#[tokio::test]
+async fn later_lexicographically_smaller_catalog_cannot_take_over_existing_member() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [[tsig_keys]]
+            name = "catalog-key."
+            algorithm = "hmac-sha256"
+            secret = "Y2F0YWxvZy1zZWNyZXQ="
+
+            [[catalog_zones]]
+            name = "a.catalog.example."
+            catalog_primaries = ["192.0.2.53:53"]
+            member_primaries = ["10.0.0.53:53"]
+            catalog_tsig_key = "catalog-key."
+            member_tsig_key = "catalog-key."
+
+            [[catalog_zones]]
+            name = "b.catalog.example."
+            catalog_primaries = ["192.0.2.54:53"]
+            member_primaries = ["10.0.0.54:53"]
+            catalog_tsig_key = "catalog-key."
+            member_tsig_key = "catalog-key."
+        "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member = DomainName::from_absolute_str("member.example.").unwrap();
+    let snapshot_a = catalog_snapshot_with_members(
+        catalog_a.clone(),
+        7,
+        std::slice::from_ref(&member),
+    );
+    let snapshot_b = catalog_snapshot_with_members(
+        catalog_b.clone(),
+        7,
+        std::slice::from_ref(&member),
+    );
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a);
+    zones.insert_loading_hidden(catalog_b);
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(8);
+
+    for snapshot in [&snapshot_b, &snapshot_a] {
+        catalog_manager
+            .apply_snapshot(
+                snapshot.catalog_zone_view(),
+                &zone_metadata_for(snapshot),
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &tx.downgrade(),
+            )
+            .await;
+    }
+
+    assert_eq!(
+        transfer_plan.get(&member).expect("member plan").primaries[0].addr,
+        "10.0.0.54:53".parse().unwrap(),
+        "RFC 9432 name clashes retain the first-applied catalog instance"
+    );
+}
+
+#[tokio::test]
+async fn catalog_member_node_rename_resets_zone_state_and_plan_generation() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [[tsig_keys]]
+            name = "catalog-key."
+            algorithm = "hmac-sha256"
+            secret = "Y2F0YWxvZy1zZWNyZXQ="
+
+            [[catalog_zones]]
+            name = "catalog.example."
+            catalog_primaries = ["192.0.2.53:53"]
+            member_primaries = ["10.0.0.53:53"]
+            catalog_tsig_key = "catalog-key."
+            member_tsig_key = "catalog-key."
+        "#,
+    )
+    .expect("valid catalog config");
+    let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial = catalog_snapshot_with_named_member(
+        catalog.clone(),
+        7,
+        "old-node",
+        member.clone(),
+    );
+    let renamed = catalog_snapshot_with_named_member(
+        catalog.clone(),
+        8,
+        "new-node",
+        member.clone(),
+    );
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog);
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(8);
+
+    catalog_manager
+        .apply_snapshot(
+            initial.catalog_zone_view(),
+            &zone_metadata_for(&initial),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    let old_generation = transfer_plan.get(&member).expect("member plan").generation();
+    zones.insert_snapshot(active_member_snapshot(member.clone(), 42));
+
+    catalog_manager
+        .apply_snapshot(
+            renamed.catalog_zone_view(),
+            &zone_metadata_for(&renamed),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    let metadata = zones
+        .zone_metadata()
+        .into_iter()
+        .find(|metadata| metadata.origin == member)
+        .expect("renamed member remains provisioned");
+    assert_eq!(metadata.state, ZoneState::Loading);
+    assert_ne!(
+        transfer_plan.get(&member).expect("replacement plan").generation(),
+        old_generation,
+        "member-node rename is a new zone lifecycle"
+    );
 }
 
 #[tokio::test]
@@ -2333,7 +2554,7 @@ async fn retained_catalog_member_keeps_transfer_plan_generation_when_unchanged()
 }
 
 #[tokio::test]
-async fn concurrent_catalog_member_migration_preserves_active_snapshot_when_remove_seen_first() {
+async fn catalog_member_migration_remove_then_add_resets_active_snapshot() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
@@ -2401,35 +2622,34 @@ async fn concurrent_catalog_member_migration_preserves_active_snapshot_when_remo
         .expect("publish active member");
     refresh_registry.record_success_from_metadata(&active_metadata);
 
-    let updated_a_metadata = zone_metadata_for(&updated_a);
-    let updated_b_metadata = zone_metadata_for(&updated_b);
-    let refresh_tx_a = tx.downgrade();
-    let refresh_tx_b = tx.downgrade();
-    let ((), ()) = tokio::join!(
-        catalog_manager.apply_snapshot(
+    catalog_manager
+        .apply_snapshot(
             updated_a.catalog_zone_view(),
-            &updated_a_metadata,
+            &zone_metadata_for(&updated_a),
             &zones,
             &transfer_plan,
             &refresh_registry,
             &notify_authority,
-            &refresh_tx_a,
-        ),
-        catalog_manager.apply_snapshot(
-            updated_b.catalog_zone_view(),
-            &updated_b_metadata,
-            &zones,
-            &transfer_plan,
-            &refresh_registry,
-            &notify_authority,
-            &refresh_tx_b,
+            &tx.downgrade(),
         )
-    );
+        .await;
+    catalog_manager
+        .apply_snapshot(
+            updated_b.catalog_zone_view(),
+            &zone_metadata_for(&updated_b),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
 
-    let restored = zones
+    let replacement = zones
         .exact_zone_control_metadata(&member_origin)
-        .expect("member snapshot restored");
-    assert_eq!(restored.serial, Some(42));
+        .expect("member is re-added as a fresh lifecycle");
+    assert_eq!(replacement.state, ZoneState::Loading);
+    assert_eq!(replacement.serial, None);
     assert!(
         refresh_registry
             .snapshots_by_zone()
@@ -2902,6 +3122,37 @@ fn catalog_snapshot_with_member_wires(
         ));
     }
     ZoneSnapshot::active(catalog_origin, Some(serial), rrsets)
+}
+
+fn catalog_snapshot_with_named_member(
+    catalog_origin: DomainName,
+    serial: u32,
+    member_node_label: &str,
+    member: DomainName,
+) -> ZoneSnapshot {
+    ZoneSnapshot::active(
+        catalog_origin.clone(),
+        Some(serial),
+        vec![
+            Rrset::new(
+                DomainName::from_absolute_str(&format!("version.{catalog_origin}")).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("2")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str(&format!(
+                    "{member_node_label}.zones.{catalog_origin}"
+                ))
+                .unwrap(),
+                RecordType::Ptr as u16,
+                1,
+                0,
+                vec![member.to_wire()],
+            ),
+        ],
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4111,7 +4362,7 @@ fn primary_start_index_uses_rejection_sampling_boundary() {
 }
 
 #[test]
-fn notify_authority_rejects_missing_required_tsig_with_badkey_response() {
+fn notify_authority_rejects_unsigned_request_without_signing_the_response() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
@@ -4139,15 +4390,11 @@ fn notify_authority_rejects_missing_required_tsig_with_badkey_response() {
     let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.53".parse().unwrap());
 
     let response = prepared
-        .expect("TSIG error response")
+        .expect("NOTAUTH response")
         .immediate_response
-        .expect("immediate TSIG error response");
+        .expect("immediate NOTAUTH response");
     assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
-    let tsig = parse_tsig_response_fields(&response);
-    assert_eq!(tsig.mac_len, 0);
-    assert_eq!(tsig.original_id, 0x1234);
-    assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
-    assert!(tsig.other_data.is_empty());
+    assert_eq!(u16::from_be_bytes([response[10], response[11]]), 0);
 }
 
 #[test]
@@ -4193,6 +4440,7 @@ fn ordinary_query_with_unknown_tsig_key_gets_badkey_response() {
         .expect("immediate BADKEY response");
     let header = Header::parse(&response).unwrap();
     assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+    assert_ne!(header.flags & 0x0100, 0, "BADKEY response must copy RD");
     let tsig = parse_tsig_response_fields(&response);
     assert_eq!(tsig.mac_len, 0);
     assert_eq!(tsig.original_id, 0x1234);
@@ -4223,12 +4471,17 @@ fn ordinary_query_with_bad_tsig_mac_gets_badsig_response() {
 
     let response = prepared.immediate_response.expect("TSIG error response");
     assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+    assert_ne!(
+        u16::from_be_bytes([response[2], response[3]]) & 0x0100,
+        0,
+        "BADSIG response must copy RD"
+    );
     let tsig = parse_tsig_response_fields(&response);
     assert_eq!(tsig.error, TSIG_ERROR_BADSIG);
 }
 
 #[test]
-fn ordinary_query_with_too_short_tsig_mac_gets_badtrunc_response() {
+fn ordinary_query_with_too_short_tsig_mac_gets_formerr_without_tsig() {
     let (authority, key) = tsig_notify_authority();
     let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
     let signed = key
@@ -4248,17 +4501,69 @@ fn ordinary_query_with_too_short_tsig_mac_gets_badtrunc_response() {
         &authority,
     );
 
-    let response = prepared.immediate_response.expect("TSIG error response");
+    let response = prepared.immediate_response.expect("FORMERR response");
     let header = Header::parse(&response).unwrap();
-    assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
-    let tsig = parse_tsig_response_fields(&response);
-    assert_eq!(tsig.mac_len, 0);
-    assert_eq!(tsig.error, TSIG_ERROR_BADTRUNC);
-    assert!(tsig.other_data.is_empty());
+    assert_eq!(response_rcode(&response, &header), Rcode::FormErr as u16);
+    assert_ne!(header.flags & 0x0100, 0, "FORMERR response must copy RD");
+    assert_eq!(header.arcount, 0, "FORMERR must not include a TSIG RR");
 }
 
 #[test]
-fn ordinary_query_with_hmac_md5_tsig_gets_badalg_response() {
+fn ordinary_query_with_overlong_tsig_mac_gets_formerr_without_tsig() {
+    let (authority, key) = tsig_notify_authority();
+    let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let signed = key
+        .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+        .unwrap();
+    let mut overlong_mac = signed.mac.clone();
+    overlong_mac.push(0);
+    let malformed = replace_final_tsig_mac(&signed.message, &overlong_mac);
+
+    let prepared = prepare_query_tsig_packet(
+        PreparedDnsMessage {
+            packet: malformed,
+            response_tsig: None,
+            immediate_response: None,
+            tsig_authenticated: false,
+            notify_policy_token: None,
+        },
+        &authority,
+    );
+
+    let response = prepared.immediate_response.expect("FORMERR response");
+    let header = Header::parse(&response).unwrap();
+    assert_eq!(response_rcode(&response, &header), Rcode::FormErr as u16);
+    assert_eq!(header.arcount, 0, "FORMERR must not include a TSIG RR");
+}
+
+#[test]
+fn ordinary_query_with_nonzero_request_tsig_error_gets_formerr_without_tsig() {
+    let (authority, key) = tsig_notify_authority();
+    let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let signed = key
+        .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+        .unwrap();
+    let malformed = replace_final_tsig_error(&signed.message, TSIG_ERROR_BADTIME);
+
+    let prepared = prepare_query_tsig_packet(
+        PreparedDnsMessage {
+            packet: malformed,
+            response_tsig: None,
+            immediate_response: None,
+            tsig_authenticated: false,
+            notify_policy_token: None,
+        },
+        &authority,
+    );
+
+    let response = prepared.immediate_response.expect("FORMERR response");
+    let header = Header::parse(&response).unwrap();
+    assert_eq!(response_rcode(&response, &header), Rcode::FormErr as u16);
+    assert_eq!(header.arcount, 0, "FORMERR must not include a TSIG RR");
+}
+
+#[test]
+fn ordinary_query_with_hmac_md5_tsig_gets_unsigned_badkey_response() {
     let (authority, key) = tsig_notify_authority();
     let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
     let signed = key
@@ -4282,17 +4587,18 @@ fn ordinary_query_with_hmac_md5_tsig_gets_badalg_response() {
     assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
     let tsig = parse_tsig_response_fields(&response);
     assert_eq!(tsig.mac_len, 0);
-    assert_eq!(tsig.error, TSIG_ERROR_BADALG);
+    assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+    assert_eq!(tsig.algorithm, "hmac-md5.sig-alg.reg.int.");
     assert!(tsig.other_data.is_empty());
 }
 
 #[test]
-fn ordinary_query_outside_tsig_fudge_gets_badtime_response_with_server_time() {
+fn ordinary_query_outside_tsig_fudge_gets_signed_badtime_echoing_request_time_and_fudge() {
     let (authority, key) = tsig_notify_authority();
     let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
-    let signed = key
-        .sign_request(&packet, 1, DEFAULT_TSIG_FUDGE_SECS)
-        .unwrap();
+    let request_fudge = 17;
+    let signed = key.sign_request(&packet, 1, request_fudge).unwrap();
+    let request_mac = signed.mac.clone();
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
@@ -4311,5 +4617,12 @@ fn ordinary_query_outside_tsig_fudge_gets_badtime_response_with_server_time() {
     let tsig = parse_tsig_response_fields(&response);
     assert_eq!(tsig.mac_len, key.algorithm.mac_len());
     assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
+    assert_eq!(tsig.time_signed, 1);
+    assert_eq!(tsig.fudge, request_fudge);
     assert_eq!(tsig.other_data.len(), 6);
+    assert_eq!(
+        key.verify_response(&response, &request_mac, current_unix_time())
+            .expect_err("authenticated BADTIME response"),
+        TsigError::ResponseError(TSIG_ERROR_BADTIME)
+    );
 }

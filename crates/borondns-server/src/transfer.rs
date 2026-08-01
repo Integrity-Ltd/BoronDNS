@@ -183,6 +183,51 @@ pub(crate) async fn poll_soa_from_primary_with_tsig_and_source(
     })?
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn poll_soa_from_target_with_tsig_and_source(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig: TransferTsig<'_>,
+    transfer_source: Option<SocketAddr>,
+    xot_client_config: Option<&XotClientConfig>,
+    timeout_duration: Duration,
+    connect_timeout: Duration,
+) -> Result<u32, TransferError> {
+    match primary.transport {
+        TransferTransportConfig::Tcp => {
+            poll_soa_from_primary_with_tsig_and_source(
+                primary.addr,
+                zone_apex,
+                qclass,
+                qid,
+                tsig,
+                transfer_source,
+                timeout_duration,
+            )
+            .await
+        }
+        TransferTransportConfig::Xot => tokio::time::timeout(timeout_duration, async {
+            poll_soa_from_primary_stream_inner(
+                primary,
+                zone_apex,
+                qclass,
+                qid,
+                tsig,
+                transfer_source,
+                xot_client_config,
+                connect_timeout,
+            )
+            .await
+        })
+        .await
+        .map_err(|_| TransferError::Timeout {
+            timeout_secs: timeout_duration.as_secs(),
+        })?,
+    }
+}
+
 async fn poll_soa_from_primary_inner(
     primary: SocketAddr,
     zone_apex: &DomainName,
@@ -225,16 +270,27 @@ async fn poll_soa_from_primary_inner(
                 source,
             })?;
 
-        match udp_response_tc_status(&buffer[..len], qid) {
+        let response = match maybe_verify_transfer_response(
+            &buffer[..len],
+            tsig.key,
+            query.request_mac.as_deref(),
+        ) {
+            Ok(response) => response,
+            Err(TransferError::Tsig(_)) if tsig.key.is_some() => continue,
+            Err(error) => return Err(error),
+        };
+
+        match udp_response_tc_status(&response, qid) {
             UdpTcStatus::ValidTruncatedResponse => {
                 let tcp_primary = TransferPrimaryConfig::tcp(primary);
-                return poll_soa_from_primary_tcp_inner(
+                return poll_soa_from_primary_stream_inner(
                     &tcp_primary,
                     zone_apex,
                     qclass,
                     qid,
                     tsig,
                     transfer_source,
+                    None,
                     connect_timeout,
                 )
                 .await;
@@ -243,23 +299,24 @@ async fn poll_soa_from_primary_inner(
             UdpTcStatus::NotTruncated => {}
         }
 
-        let response =
-            maybe_verify_transfer_response(&buffer[..len], tsig.key, query.request_mac.as_deref())?;
         return parse_soa_poll_response(primary, zone_apex, qclass, qid, &response);
     }
 }
 
-async fn poll_soa_from_primary_tcp_inner(
+#[allow(clippy::too_many_arguments)]
+async fn poll_soa_from_primary_stream_inner(
     primary: &TransferPrimaryConfig,
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
     tsig: TransferTsig<'_>,
     transfer_source: Option<SocketAddr>,
+    xot_client_config: Option<&XotClientConfig>,
     connect_timeout: Duration,
 ) -> Result<u32, TransferError> {
     let mut stream =
-        connect_transfer_stream(primary, transfer_source, connect_timeout, None).await?;
+        connect_transfer_stream(primary, transfer_source, connect_timeout, xot_client_config)
+            .await?;
     let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
@@ -1212,11 +1269,13 @@ async fn transfer_ixfr_from_primary_inner(
             }
         })?;
         let received_at_unix = tsig_time_signed();
-        let message_probe = axfr::ixfr_response_message_probe(qid, zone_apex, qclass, &message)
-            .map_err(TransferError::Ixfr)?;
-        let complete = completion_probe
-            .observe(message_probe)
-            .map_err(TransferError::Ixfr)?;
+        let complete = match axfr::ixfr_response_message_probe(qid, zone_apex, qclass, &message)
+            .and_then(|probe| completion_probe.observe(probe))
+        {
+            Ok(complete) => complete,
+            Err(_) if session.tsig.key.is_some() => true,
+            Err(error) => return Err(TransferError::Ixfr(error)),
+        };
         messages.push(ReceivedTransferMessage {
             wire: message,
             received_at_unix,
@@ -1271,7 +1330,15 @@ struct IxfrCompletionProbe {
     current_serial: Option<u32>,
     answer_count: usize,
     first_soa_rdata: Option<Vec<u8>>,
+    mode: Option<IxfrStreamMode>,
+    matching_first_soa_count: usize,
     complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IxfrStreamMode {
+    Incremental,
+    AxfrFallback,
 }
 
 impl IxfrCompletionProbe {
@@ -1280,6 +1347,8 @@ impl IxfrCompletionProbe {
             current_serial,
             answer_count: 0,
             first_soa_rdata: None,
+            mode: None,
+            matching_first_soa_count: 0,
             complete: false,
         }
     }
@@ -1297,11 +1366,23 @@ impl IxfrCompletionProbe {
                 continue;
             }
 
-            if answer.apex_soa_rdata.is_some()
-                && answer.apex_soa_rdata == self.first_soa_rdata
-                && self.answer_count > 2
-            {
-                complete = true;
+            if self.answer_count == 2 {
+                self.mode = Some(if answer.apex_soa_rdata.is_some() {
+                    IxfrStreamMode::Incremental
+                } else {
+                    IxfrStreamMode::AxfrFallback
+                });
+            }
+
+            if answer.apex_soa_rdata.is_some() && answer.apex_soa_rdata == self.first_soa_rdata {
+                self.matching_first_soa_count += 1;
+                complete = match self.mode {
+                    // RFC 1995 section 4 uses the current SOA both to open the final
+                    // add phase and, as a distinct RR, to terminate the response.
+                    Some(IxfrStreamMode::Incremental) => self.matching_first_soa_count >= 2,
+                    Some(IxfrStreamMode::AxfrFallback) => true,
+                    None => false,
+                };
             }
         }
         self.complete |= complete;
@@ -1716,18 +1797,24 @@ async fn transfer_axfr_from_primary_inner(
             qclass,
             &message,
             !saw_response_question,
-        )
-        .map_err(TransferError::Axfr)?;
-        saw_response_question |= probe.saw_response_question;
-        if probe.apex_soa_count > 0 {
-            complete |= saw_initial_soa || probe.apex_soa_count >= 2;
-            saw_initial_soa = true;
-        }
+        );
+        let probe_failed = match probe {
+            Ok(probe) => {
+                saw_response_question |= probe.saw_response_question;
+                if probe.apex_soa_count > 0 {
+                    complete |= saw_initial_soa || probe.apex_soa_count >= 2;
+                    saw_initial_soa = true;
+                }
+                false
+            }
+            Err(_) if session.tsig.key.is_some() => true,
+            Err(error) => return Err(TransferError::Axfr(error)),
+        };
         messages.push(ReceivedTransferMessage {
             wire: message,
             received_at_unix,
         });
-        if complete {
+        if complete || probe_failed {
             if !transfer_terminal_tsig_ready(&messages, session.tsig.key)? {
                 continue;
             }
@@ -1769,6 +1856,15 @@ mod tests {
         }
     }
 
+    fn ixfr_probe_without_apex_soa() -> axfr::IxfrMessageProbe {
+        axfr::IxfrMessageProbe {
+            answers: vec![axfr::IxfrProbeAnswer {
+                apex_soa_serial: None,
+                apex_soa_rdata: None,
+            }],
+        }
+    }
+
     #[test]
     fn ixfr_completion_probe_stays_complete_for_terminal_tsig_message() {
         let mut probe = IxfrCompletionProbe::new(Some(7));
@@ -1784,6 +1880,53 @@ mod tests {
                     answers: Vec::new(),
                 })
                 .expect("terminal TSIG-only message keeps completion state")
+        );
+    }
+
+    #[test]
+    fn ixfr_completion_probe_requires_distinct_terminal_soa_after_final_add_phase() {
+        let mut probe = IxfrCompletionProbe::new(Some(1));
+
+        assert!(
+            !probe
+                .observe(ixfr_probe_with_apex_soa(2, b"new-soa".to_vec()))
+                .expect("first SOA starts the incremental response")
+        );
+        assert!(
+            !probe
+                .observe(ixfr_probe_with_apex_soa(1, b"old-soa".to_vec()))
+                .expect("second SOA starts the delete phase")
+        );
+        assert!(
+            !probe
+                .observe(ixfr_probe_with_apex_soa(2, b"new-soa".to_vec()))
+                .expect("repeated current SOA starts the final add phase")
+        );
+        assert!(
+            probe
+                .observe(ixfr_probe_with_apex_soa(2, b"new-soa".to_vec()))
+                .expect("a distinct repeated current SOA terminates the IXFR")
+        );
+    }
+
+    #[test]
+    fn ixfr_completion_probe_accepts_first_repeated_soa_for_axfr_fallback() {
+        let mut probe = IxfrCompletionProbe::new(Some(1));
+
+        assert!(
+            !probe
+                .observe(ixfr_probe_with_apex_soa(2, b"new-soa".to_vec()))
+                .expect("first SOA starts the fallback response")
+        );
+        assert!(
+            !probe
+                .observe(ixfr_probe_without_apex_soa())
+                .expect("a non-SOA second answer identifies AXFR fallback")
+        );
+        assert!(
+            probe
+                .observe(ixfr_probe_with_apex_soa(2, b"new-soa".to_vec()))
+                .expect("the first repeated SOA terminates AXFR fallback")
         );
     }
 

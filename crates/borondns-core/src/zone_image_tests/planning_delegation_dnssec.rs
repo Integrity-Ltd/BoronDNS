@@ -759,13 +759,17 @@
         let secure_span = image
             .rrset_relation_span(image.rrsets[secure_ns.0 as usize].relation_span)
             .expect("secure child NS has a relation span");
-        assert_eq!(secure_relation.kind, ImageRrsetRelationKind::DelegationDs);
+        assert_eq!(secure_relation.kind(), ImageRrsetRelationKind::DelegationDs);
         assert_eq!(secure_relation.rrset_id, secure_ds);
         assert_eq!(secure_span.single_name_target_offset, NO_RELATION_OFFSET);
         assert_eq!(secure_span.rrsig_offset, NO_RELATION_OFFSET);
         assert_ne!(secure_span.referral_glue_offset, NO_RELATION_OFFSET);
         assert_ne!(secure_span.delegation_dnssec_offset, NO_RELATION_OFFSET);
-        assert_ne!(secure_span.additional_address_offset, NO_RELATION_OFFSET);
+        assert_eq!(
+            secure_span.additional_address_offset,
+            NO_RELATION_OFFSET,
+            "glue below the delegation is available only through the referral-glue relation"
+        );
         assert_eq!(
             image
                 .rrset_relations_of_kind(secure_ns, ImageRrsetRelationKind::ReferralGlue)
@@ -783,7 +787,7 @@
             .precomputed_referral_dnssec_rrset(unsigned_ns)
             .expect("unsigned child has precomputed NSEC proof relation");
         assert_eq!(
-            unsigned_relation.kind,
+            unsigned_relation.kind(),
             ImageRrsetRelationKind::DelegationNsec
         );
         assert_eq!(unsigned_relation.rrset_id, unsigned_nsec);
@@ -854,7 +858,7 @@
             image
                 .precomputed_referral_dnssec_rrset(secure_ns)
                 .expect("mixed-case NS owner finds DS by direct wire key")
-                .kind,
+                .kind(),
             ImageRrsetRelationKind::DelegationDs
         );
     }
@@ -917,13 +921,22 @@
             salt: &[],
         };
         let child_hash = nsec3_hash_domain(&child, params).expect("hash computes");
+        let child_hash_bytes = base32hex_sha1_no_padding_decode_lower(child_hash.as_bytes())
+            .expect("child hash decodes");
         let nsec3_owner =
             DomainName::from_absolute_str(&format!("{child_hash}.example.test.")).unwrap();
         let snapshot = ZoneSnapshot::active(
             origin.clone(),
             Some(64),
             vec![
-                Rrset::new(origin, RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(
+                    origin,
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![vec![1, 0, 0, 0, 0]],
+                ),
                 Rrset::new(
                     child.clone(),
                     RecordType::Ns as u16,
@@ -936,7 +949,12 @@
                     RecordType::Nsec3 as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_next_hash(1, 0, &[], &[0x80; 20])],
+                    vec![{
+                        let mut rdata =
+                            nsec3_rdata_with_next_hash(1, 0, &[], &child_hash_bytes);
+                        *rdata.last_mut().expect("type bitmap exists") = 0x20;
+                        rdata
+                    }],
                 ),
             ],
         );
@@ -947,6 +965,18 @@
         let child_nsec3 = image
             .find_rrset(&nsec3_owner, RecordType::Nsec3 as u16, 1)
             .expect("child NSEC3 exists");
+        let mut iterations_exceeded = false;
+        assert_eq!(
+            image.nsec3_exact_rrset_for_name(
+                &child,
+                1,
+                &mut iterations_exceeded,
+                100,
+                false,
+            ),
+            Some(child_nsec3),
+        );
+        assert!(image.selected_nsec3_rrset_has_types(child_nsec3, true, false));
         assert!(
             image.precomputed_referral_dnssec_rrset(child_ns).is_none(),
             "fallback path should be exercised when no DS/NSEC relation exists"
@@ -962,7 +992,14 @@
         assert_eq!(plan.referral_ns_rrset(), Some(child_ns));
         let augmented = image.augment_lookup_plan_with_dnssec(plan, &qname, 1, 100);
 
-        assert!(augmented.authority_rrsets().contains(&child_nsec3));
+        assert!(
+            augmented.authority_rrsets().contains(&child_nsec3),
+            "active={:?} broken={} rcode={:?} authority={:?}",
+            image.active_nsec3_param_set,
+            image.dnssec_denial_broken,
+            augmented.rcode(),
+            augmented.authority_rrsets(),
+        );
     }
 
     #[test]
@@ -985,7 +1022,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("example.test.")],
                 ),
             ],
         ))
@@ -1032,7 +1069,14 @@
             origin.clone(),
             Some(70),
             vec![
-                Rrset::new(origin, RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(
+                    origin,
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![vec![1, 0, 0, 0, 0]],
+                ),
                 Rrset::new(
                     qname.clone(),
                     RecordType::A as u16,
@@ -1045,7 +1089,13 @@
                     RecordType::Nsec3 as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_next_hash(1, 0, &[], &[0x80; 20])],
+                    vec![nsec3_rdata_with_next_hash(
+                        1,
+                        0,
+                        &[],
+                        &base32hex_sha1_no_padding_decode_lower(qname_hash.as_bytes())
+                            .expect("qname hash decodes"),
+                    )],
                 ),
             ],
         ))
@@ -1082,4 +1132,3 @@
             "NSEC3-only exact NODATA should skip exact NSEC probing and use the NSEC3 family"
         );
     }
-

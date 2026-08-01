@@ -146,8 +146,8 @@ logs and kernel packet-drop counters as the packet-loss source of truth in this
 profile.
 
 The current `borondns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
-driven by lookup-time NSEC3 proof-omission observation rather than serialized
-EDE options. Over-cap NSEC3 proof omissions remain counted with
+driven by the lookup-time NSEC3 cap observation rather than serialized EDE
+options. Over-cap fail-closed SERVFAIL responses remain counted with
 `edns.extended_dns_errors = "off"` even when EDE INFO-CODE 27 is absent from
 the response.
 

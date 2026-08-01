@@ -2867,6 +2867,73 @@ async fn udp_tsig_authenticated_query_bypasses_rrl_and_signs_response() {
 }
 
 #[tokio::test]
+async fn udp_tsig_does_not_apply_configured_padding_on_plaintext_transport() {
+    let zones = active_example_zone();
+    let metrics = RuntimeMetrics::new();
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = socket.local_addr().unwrap();
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "query-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "query-key."
+            "#,
+    )
+    .unwrap();
+    let key = TsigKey::from_base64("query-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+    let mut unsigned_query =
+        query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    append_opt(&mut unsigned_query, 512, 0, &edns_option(12, &[]));
+    let signed_query = key
+        .sign_request(
+            &unsigned_query,
+            current_unix_time(),
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap();
+    let mut settings = udp_settings_for_test(metrics.clone(), RrlConfig::default());
+    settings.notify_authority = NotifyAuthority::from_config_for_test(&config);
+    settings.edns_padding_block_size = 512;
+    let server = tokio::spawn(serve_udp(socket, zones, settings));
+
+    let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client
+        .send_to(&signed_query.message, server_addr)
+        .await
+        .unwrap();
+    let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+        .await
+        .expect("signed UDP response");
+    server.abort();
+
+    assert!(
+        response.len() <= 512,
+        "TSIG response length {} exceeds the negotiated ceiling",
+        response.len()
+    );
+    let verified = key
+        .verify_response(&response, &signed_query.mac, current_unix_time())
+        .expect("un-padded TSIG response verifies");
+    let header = Header::parse(&verified.message).unwrap();
+    assert_eq!(header.flags & 0x0200, 0);
+    assert_eq!(response_rcode(&verified.message, &header), Rcode::NoError as u16);
+    assert_eq!(header.qdcount, 1);
+    assert_eq!(header.ancount, 1);
+    assert_eq!(header.nscount, 0);
+    assert_eq!(header.arcount, 1);
+}
+
+#[tokio::test]
 async fn udp_dns_cookie_client_cookie_only_returns_cookie_option() {
     let zones = active_example_zone();
     let metrics = RuntimeMetrics::new();

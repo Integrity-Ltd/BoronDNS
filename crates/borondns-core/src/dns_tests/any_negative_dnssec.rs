@@ -127,7 +127,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("www.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("www.example.test.").unwrap(),
@@ -227,7 +227,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("www.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("www.example.test.").unwrap(),
@@ -258,6 +258,68 @@
             ]
         );
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn do_nodata_rejects_covering_nsec3_when_an_exact_match_is_required() {
+        let covering_owner = DomainName::from_absolute_str(
+            "00000000000000000000000000000000.example.test.",
+        )
+        .unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![nsec3param_rdata(1)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![b"\x07present".to_vec()],
+                ),
+                Rrset::new(
+                    covering_owner.clone(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_next_hash([0xff; 20])],
+                ),
+                Rrset::new(
+                    covering_owner,
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec3)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x06target\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
     }
 
     #[test]
@@ -368,7 +430,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("z.example.test.")],
+                    vec![nsec_rdata("example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("example.test.").unwrap(),
@@ -412,8 +474,316 @@
 
     #[test]
     fn do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs() {
-        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
-        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+        let mut rrsets = vec![
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+        ];
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets,
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16, RecordType::Nsec3 as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn nsec3_only_hashed_owner_is_answered_as_nxdomain() {
+        let hashed_owner = nsec3_owner("example.test.", "example.test.");
+        let mut rrsets = vec![
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+        ];
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets,
+        ));
+        let mut packet = query(&hashed_owner.to_wire(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert!(response_authority_types(&response).contains(&(RecordType::Nsec3 as u16)));
+    }
+
+    #[test]
+    fn nsec3_hashed_owner_with_other_data_remains_an_existing_name() {
+        let hashed_owner = nsec3_owner("example.test.", "example.test.");
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    hashed_owner.clone(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_next_hash(nsec3_hash_bytes("example.test."))],
+                ),
+                Rrset::new(
+                    hashed_owner.clone(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![b"\x04real".to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(&hashed_owner.to_wire(), RecordType::A as u16, 1),
+            &store,
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert!(response_answer_types(&response).is_empty());
+    }
+
+    #[test]
+    fn nsec3_hashed_owner_with_an_ordinary_descendant_is_an_empty_nonterminal() {
+        let hashed_owner = nsec3_owner("example.test.", "example.test.");
+        let mut child_wire = b"\x05child".to_vec();
+        child_wire.extend_from_slice(&hashed_owner.to_wire());
+        let (child, consumed) = DomainName::parse(&child_wire, 0).unwrap();
+        assert_eq!(consumed, child_wire.len());
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    hashed_owner.clone(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_next_hash(nsec3_hash_bytes("example.test."))],
+                ),
+                Rrset::new(child, RecordType::A as u16, 1, 300, vec![vec![192, 0, 2, 1]]),
+            ],
+        ));
+
+        let response = store_response(
+            &query(&hashed_owner.to_wire(), RecordType::A as u16, 1),
+            &store,
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert!(response_answer_types(&response).is_empty());
+    }
+
+    #[test]
+    fn incomplete_nsec_chain_fails_closed_for_dnssec_denial() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("missing-link.example.test.")],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert!(response_authority_types(&response).is_empty());
+    }
+
+    fn transition_denial_response(include_nsec3param: bool) -> Vec<u8> {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let anchor = DomainName::from_absolute_str("anchor.example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("anchor.example.test.")],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+            Rrset::new(
+                anchor.clone(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ),
+            Rrset::new(
+                anchor.clone(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("example.test.")],
+            ),
+            Rrset::new(
+                anchor,
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+        ];
+        if include_nsec3param {
+            rrsets.push(Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ));
+        }
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+        store_response(&packet, &store)
+    }
+
+    #[test]
+    fn nsec3_records_without_nsec3param_do_not_replace_nsec_denial() {
+        let response = transition_denial_response(false);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        let authority_types = response_authority_types(&response);
+        assert!(authority_types.contains(&(RecordType::Nsec as u16)));
+        assert!(!authority_types.contains(&(RecordType::Nsec3 as u16)));
+    }
+
+    #[test]
+    fn nsec3param_switches_transitioning_zone_to_nsec3_denial() {
+        let response = transition_denial_response(true);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        let authority_types = response_authority_types(&response);
+        assert!(authority_types.contains(&(RecordType::Nsec3 as u16)));
+        assert!(!authority_types.contains(&(RecordType::Nsec as u16)));
+    }
+
+    #[test]
+    fn do_nxdomain_rejects_nsec3_without_an_exact_closest_encloser_proof() {
+        let covering_owner = DomainName::from_absolute_str(
+            "00000000000000000000000000000000.example.test.",
+        )
+        .unwrap();
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -434,28 +804,14 @@
                     vec![nsec3param_rdata(1)],
                 ),
                 Rrset::new(
-                    missing_nsec3.clone(),
+                    covering_owner.clone(),
                     RecordType::Nsec3 as u16,
                     1,
                     300,
-                    vec![nsec3_rdata(1)],
+                    vec![nsec3_rdata_with_next_hash([0xff; 20])],
                 ),
                 Rrset::new(
-                    wildcard_nsec3.clone(),
-                    RecordType::Nsec3 as u16,
-                    1,
-                    300,
-                    vec![nsec3_rdata(1)],
-                ),
-                Rrset::new(
-                    missing_nsec3,
-                    RecordType::Rrsig as u16,
-                    1,
-                    300,
-                    vec![rrsig_rdata(RecordType::Nsec3)],
-                ),
-                Rrset::new(
-                    wildcard_nsec3,
+                    covering_owner,
                     RecordType::Rrsig as u16,
                     1,
                     300,
@@ -464,7 +820,7 @@
             ],
         ));
         let mut packet = query(
-            b"\x07missing\x07example\x04test\x00",
+            b"\x04deep\x07missing\x07example\x04test\x00",
             RecordType::A as u16,
             1,
         );
@@ -472,54 +828,48 @@
 
         let response = store_response(&packet, &store);
 
-        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
-        assert_eq!(
-            response_authority_types(&response),
-            vec![
-                RecordType::Soa as u16,
-                RecordType::Nsec3 as u16,
-                RecordType::Nsec3 as u16,
-                RecordType::Rrsig as u16,
-                RecordType::Rrsig as u16,
-            ]
-        );
-        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
     }
 
-    fn nsec3_iterations_over_cap_response(
-        extended_dns_errors: ExtendedDnsErrorsMode,
-    ) -> (Vec<u8>, bool) {
-        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
-        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
-        let store = ZoneStore::new();
-        store.insert_snapshot(ZoneSnapshot::active(
-            DomainName::from_absolute_str("example.test.").unwrap(),
-            Some(1),
-            vec![
+    fn nsec3_iteration_cap_snapshot() -> ZoneSnapshot {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut rrsets = vec![
                 Rrset::new(
-                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    apex.clone(),
                     RecordType::Soa as u16,
                     1,
                     3600,
                     vec![soa_rdata()],
                 ),
                 Rrset::new(
-                    missing_nsec3,
-                    RecordType::Nsec3 as u16,
+                    apex.clone(),
+                    RecordType::Nsec3Param as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
+                    vec![nsec3param_rdata(1)],
                 ),
                 Rrset::new(
-                    wildcard_nsec3,
-                    RecordType::Nsec3 as u16,
+                    DomainName::from_absolute_str("anchor.example.test.").unwrap(),
+                    RecordType::Txt as u16,
                     1,
                     300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
+                    vec![b"\x06anchor".to_vec()],
                 ),
-            ],
+            ];
+        rrsets.extend(nsec3_ring_rrsets(
+            &["example.test.", "anchor.example.test."],
+            "example.test.",
         ));
+        ZoneSnapshot::active(apex, Some(1), rrsets)
+    }
+
+    fn nsec3_iterations_over_cap_response(
+        extended_dns_errors: ExtendedDnsErrorsMode,
+    ) -> (Vec<u8>, bool) {
+        let store = ZoneStore::new();
+        store.insert_snapshot(nsec3_iteration_cap_snapshot());
         let mut packet = query(
             b"\x07missing\x07example\x04test\x00",
             RecordType::A as u16,
@@ -549,16 +899,13 @@
     }
 
     #[test]
-    fn nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled() {
+    fn nsec3_iterations_over_cap_fails_closed_and_emits_ede_when_enabled() {
         let (response, nsec3_iterations_exceeded) =
             nsec3_iterations_over_cap_response(ExtendedDnsErrorsMode::Minimal);
 
-        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
         assert!(nsec3_iterations_exceeded);
-        assert_eq!(
-            response_authority_types(&response),
-            vec![RecordType::Soa as u16]
-        );
+        assert!(response_authority_types(&response).is_empty());
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
         assert_eq!(
             response_ede_info_codes(&response),
@@ -568,36 +915,8 @@
 
     #[test]
     fn zone_image_serving_handles_dnssec_nsec3_ede_cap() {
-        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
-        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
         let store = ZoneStore::new();
-        store.insert_snapshot(ZoneSnapshot::active(
-            DomainName::from_absolute_str("example.test.").unwrap(),
-            Some(1),
-            vec![
-                Rrset::new(
-                    DomainName::from_absolute_str("example.test.").unwrap(),
-                    RecordType::Soa as u16,
-                    1,
-                    3600,
-                    vec![soa_rdata()],
-                ),
-                Rrset::new(
-                    missing_nsec3,
-                    RecordType::Nsec3 as u16,
-                    1,
-                    300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
-                ),
-                Rrset::new(
-                    wildcard_nsec3,
-                    RecordType::Nsec3 as u16,
-                    1,
-                    300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
-                ),
-            ],
-        ));
+        store.insert_snapshot(nsec3_iteration_cap_snapshot());
         let mut packet = query(
             b"\x07missing\x07example\x04test\x00",
             RecordType::A as u16,
@@ -628,11 +947,8 @@
 
         assert!(nsec3_iterations_exceeded.get());
         assert_eq!(zone_image_response, snapshot_response);
-        assert_eq!(zone_image_response[3] & 0x0f, Rcode::NxDomain as u8);
-        assert_eq!(
-            response_authority_types(&zone_image_response),
-            vec![RecordType::Soa as u16]
-        );
+        assert_eq!(zone_image_response[3] & 0x0f, Rcode::ServFail as u8);
+        assert!(response_authority_types(&zone_image_response).is_empty());
         assert_eq!(response_opt_ttl(&zone_image_response), Some(0x8000));
         assert_eq!(
             response_ede_info_codes(&zone_image_response),
@@ -641,37 +957,9 @@
     }
 
     #[test]
-    fn zone_image_truncation_reuses_ede_stripped_edns_sizing() {
-        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
-        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+    fn zone_image_nsec3_cap_servfail_fits_small_udp_ceiling_with_ede() {
         let store = ZoneStore::new();
-        store.insert_snapshot(ZoneSnapshot::active(
-            DomainName::from_absolute_str("example.test.").unwrap(),
-            Some(1),
-            vec![
-                Rrset::new(
-                    DomainName::from_absolute_str("example.test.").unwrap(),
-                    RecordType::Soa as u16,
-                    1,
-                    3600,
-                    vec![soa_rdata()],
-                ),
-                Rrset::new(
-                    missing_nsec3,
-                    RecordType::Nsec3 as u16,
-                    1,
-                    300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
-                ),
-                Rrset::new(
-                    wildcard_nsec3,
-                    RecordType::Nsec3 as u16,
-                    1,
-                    300,
-                    vec![nsec3_rdata_with_iterations(1, 1)],
-                ),
-            ],
-        ));
+        store.insert_snapshot(nsec3_iteration_cap_snapshot());
         let mut packet = query(
             b"\x07missing\x07example\x04test\x00",
             RecordType::A as u16,
@@ -693,11 +981,11 @@
         let snapshot_response = store_response_with_options(&packet, &store, options);
 
         assert_eq!(zone_image_response, snapshot_response);
-        assert!(zone_image_response[2] & 0x02 != 0, "TC bit must be set");
+        assert_eq!(zone_image_response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(zone_image_response[2] & 0x02, 0, "compact SERVFAIL should fit without truncation");
         assert_eq!(
             response_ede_info_codes(&zone_image_response),
-            Vec::<u16>::new(),
-            "EDE must remain stripped after truncation retry removes records"
+            vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
         );
         assert!(
             zone_image_response.len() <= 80,
@@ -710,12 +998,9 @@
         let (response, nsec3_iterations_exceeded) =
             nsec3_iterations_over_cap_response(ExtendedDnsErrorsMode::Off);
 
-        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
         assert!(nsec3_iterations_exceeded);
-        assert_eq!(
-            response_authority_types(&response),
-            vec![RecordType::Soa as u16]
-        );
+        assert!(response_authority_types(&response).is_empty());
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
         assert!(response_ede_info_codes(&response).is_empty());
     }
@@ -764,4 +1049,3 @@
             vec![RecordType::Soa as u16]
         );
     }
-

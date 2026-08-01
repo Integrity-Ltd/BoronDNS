@@ -53,6 +53,52 @@
     }
 
     #[test]
+    fn optional_additional_rrset_overflow_is_omitted_without_tc() {
+        let store = ZoneStore::new();
+        let addresses = (0..64)
+            .map(|last| vec![192, 0, 2, last])
+            .collect::<Vec<_>>();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Mx as u16,
+                    1,
+                    300,
+                    vec![mx_rdata(10, "mail.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("mail.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    addresses,
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(b"\x07example\x04test\x00", RecordType::Mx as u16, 1),
+            &store,
+        );
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response_answer_types(&response), vec![RecordType::Mx as u16]);
+        assert!(response_additional_types(&response).is_empty());
+        assert_eq!(flags & 0x0200, 0, "optional Additional omission must not set TC");
+        assert!(response.len() <= 512);
+    }
+
+    #[test]
     fn mx_answer_omits_out_of_zone_exchange_additionals() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -91,6 +137,53 @@
             response_answer_types(&response),
             vec![RecordType::Mx as u16]
         );
+        assert!(response_additional_types(&response).is_empty());
+    }
+
+    #[test]
+    fn mx_answer_omits_occluded_address_data_below_delegation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Mx as u16,
+                    1,
+                    300,
+                    vec![mx_rdata(10, "mail.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("mail.child.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 25].to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(b"\x07example\x04test\x00", RecordType::Mx as u16, 1),
+            &store,
+        );
+
+        assert_eq!(response_answer_types(&response), vec![RecordType::Mx as u16]);
         assert!(response_additional_types(&response).is_empty());
     }
 
@@ -327,6 +420,182 @@
     }
 
     #[test]
+    fn svcb_and_https_answers_include_target_service_rrset_and_dnssec_records() {
+        for rr_type in [RecordType::Svcb, RecordType::Https] {
+            let owner = DomainName::from_absolute_str("service.example.test.").unwrap();
+            let target = DomainName::from_absolute_str("target.example.test.").unwrap();
+            let store = ZoneStore::new();
+            store.insert_snapshot(ZoneSnapshot::active(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                Some(1),
+                vec![
+                    Rrset::new(
+                        owner.clone(),
+                        rr_type as u16,
+                        1,
+                        300,
+                        vec![svcb_rdata(0, "target.example.test.", &[])],
+                    ),
+                    Rrset::new(
+                        target.clone(),
+                        rr_type as u16,
+                        1,
+                        300,
+                        vec![svcb_rdata(1, ".", &[])],
+                    ),
+                    Rrset::new(
+                        target.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![[192, 0, 2, 32].to_vec()],
+                    ),
+                    Rrset::new(
+                        target.clone(),
+                        RecordType::Rrsig as u16,
+                        1,
+                        300,
+                        vec![rrsig_rdata(rr_type), rrsig_rdata(RecordType::A)],
+                    ),
+                ],
+            ));
+            let mut packet = query(
+                b"\x07service\x07example\x04test\x00",
+                rr_type as u16,
+                1,
+            );
+            append_opt(&mut packet, 4096, 0x8000, &[]);
+
+            let response = store_response(&packet, &store);
+            let additional_types = response_additional_types(&response);
+
+            assert!(additional_types.contains(&(rr_type as u16)));
+            assert!(additional_types.contains(&(RecordType::A as u16)));
+            assert_eq!(
+                response_additional_owners(&response, rr_type as u16),
+                vec![target.clone()]
+            );
+            assert_eq!(
+                response_additional_owners(&response, RecordType::Rrsig as u16),
+                vec![target.clone(), target.clone()]
+            );
+        }
+    }
+
+    #[test]
+    fn svcb_and_https_service_mode_root_target_use_exact_effective_owner_for_additionals() {
+        for rr_type in [RecordType::Svcb, RecordType::Https] {
+            let store = ZoneStore::new();
+            let owner = DomainName::from_absolute_str("svc.example.test.").unwrap();
+            store.insert_snapshot(ZoneSnapshot::active(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                Some(1),
+                vec![
+                    Rrset::new(
+                        DomainName::from_absolute_str("example.test.").unwrap(),
+                        RecordType::Soa as u16,
+                        1,
+                        3600,
+                        vec![soa_rdata()],
+                    ),
+                    Rrset::new(
+                        owner.clone(),
+                        rr_type as u16,
+                        1,
+                        300,
+                        vec![svcb_rdata(1, ".", &[])],
+                    ),
+                    Rrset::new(
+                        owner.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![[192, 0, 2, 30].to_vec()],
+                    ),
+                    Rrset::new(
+                        owner.clone(),
+                        RecordType::Aaaa as u16,
+                        1,
+                        300,
+                        vec![vec![0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30]],
+                    ),
+                ],
+            ));
+
+            let response = store_response(
+                &query(b"\x03svc\x07example\x04test\x00", rr_type as u16, 1),
+                &store,
+            );
+
+            assert_eq!(
+                response_additional_types(&response),
+                vec![RecordType::A as u16, RecordType::Aaaa as u16]
+            );
+            assert_eq!(
+                response_additional_owners(&response, RecordType::A as u16),
+                vec![owner.clone()]
+            );
+        }
+    }
+
+    #[test]
+    fn svcb_and_https_service_mode_root_target_use_wildcard_effective_owner_for_additionals() {
+        for rr_type in [RecordType::Svcb, RecordType::Https] {
+            let store = ZoneStore::new();
+            let wildcard = DomainName::from_absolute_str("*.example.test.").unwrap();
+            let effective_owner = DomainName::from_absolute_str("foo.example.test.").unwrap();
+            store.insert_snapshot(ZoneSnapshot::active(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                Some(1),
+                vec![
+                    Rrset::new(
+                        DomainName::from_absolute_str("example.test.").unwrap(),
+                        RecordType::Soa as u16,
+                        1,
+                        3600,
+                        vec![soa_rdata()],
+                    ),
+                    Rrset::new(
+                        wildcard.clone(),
+                        rr_type as u16,
+                        1,
+                        300,
+                        vec![svcb_rdata(1, ".", &[])],
+                    ),
+                    Rrset::new(
+                        wildcard.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![[192, 0, 2, 31].to_vec()],
+                    ),
+                    Rrset::new(
+                        wildcard,
+                        RecordType::Aaaa as u16,
+                        1,
+                        300,
+                        vec![vec![0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31]],
+                    ),
+                ],
+            ));
+
+            let response = store_response(
+                &query(b"\x03foo\x07example\x04test\x00", rr_type as u16, 1),
+                &store,
+            );
+
+            assert_eq!(
+                response_additional_types(&response),
+                vec![RecordType::A as u16, RecordType::Aaaa as u16]
+            );
+            assert_eq!(
+                response_additional_owners(&response, RecordType::A as u16),
+                vec![effective_owner]
+            );
+        }
+    }
+
+    #[test]
     fn https_answer_includes_alias_mode_target_addresses_as_additionals() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -515,6 +784,43 @@
     }
 
     #[test]
+    fn root_referral_includes_available_sibling_glue() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str(".").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("com.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    172800,
+                    vec![cname_rdata("a.gtld-servers.net.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.gtld-servers.net.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    172800,
+                    vec![[192, 5, 6, 30].to_vec()],
+                ),
+            ],
+        ));
+
+        let response = store_response(
+            &query(b"\x03www\x03com\x00", RecordType::A as u16, 1),
+            &store,
+        );
+
+        assert_eq!(response_authority_types(&response), vec![RecordType::Ns as u16]);
+        assert_eq!(response_additional_types(&response), vec![RecordType::A as u16]);
+        assert_eq!(
+            response_additional_owners(&response, RecordType::A as u16),
+            vec![DomainName::from_absolute_str("a.gtld-servers.net.").unwrap()]
+        );
+    }
+
+    #[test]
     fn do_referral_includes_ds_and_covering_rrsigs() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -602,7 +908,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("next.example.test.")],
+                    vec![nsec_rdata("child.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("child.example.test.").unwrap(),
@@ -741,4 +1047,3 @@
             vec![RecordType::Ns as u16]
         );
     }
-

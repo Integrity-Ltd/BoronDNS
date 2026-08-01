@@ -19,7 +19,7 @@ use borondns_core::{
         RecordType, Transport, ZoneImageProvider,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
         chaos_query_observation, default_zone_image_provider, dns_cookie_request_status,
-        request_has_valid_dns_server_cookie,
+        request_has_valid_dns_server_cookie, request_udp_payload_ceiling,
     },
     zone::ZoneStore,
 };
@@ -37,7 +37,7 @@ use crate::{
     RefreshRequest, ResponseCacheCandidateCategory, ResponseCacheIneligibleReason, RrlDecision,
     RrlLimiter, RuntimeError, RuntimeMetrics, dns_cookie_context,
     prepare_notify_packet_with_metrics, prepare_query_tsig_packet, response_opt_record,
-    response_question_end, response_record_type, sign_tsig_response, signal_notify_refresh,
+    response_question_end, response_record_type, sign_udp_tsig_response, signal_notify_refresh,
     std_udp_mmsg, std_udp_socket,
 };
 
@@ -1482,6 +1482,8 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         return None;
     };
     let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
+    let tsig_udp_ceiling = request_udp_payload_ceiling(&prepared.packet, settings.max_udp_payload)
+        .unwrap_or_else(|| usize::from(settings.max_udp_payload.min(512)));
     let parse_duration = parse_started.map(|started| started.elapsed());
     if let Some(response) = prepared.immediate_response {
         return Some(UdpOutbound {
@@ -1604,19 +1606,20 @@ fn handle_udp_datagram_with_optional_prepared_hook(
                 peer_ip,
                 "udp",
             );
-            let response = match sign_tsig_response(response, prepared.response_tsig) {
-                Ok(response) => response,
-                Err(error) => {
-                    warn!(
-                        peer_ip = %peer.ip(),
-                        peer_port = peer.port(),
-                        transport = "udp",
-                        %error,
-                        "failed to sign TSIG response"
-                    );
-                    return None;
-                }
-            };
+            let response =
+                match sign_udp_tsig_response(response, prepared.response_tsig, tsig_udp_ceiling) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        warn!(
+                            peer_ip = %peer.ip(),
+                            peer_port = peer.port(),
+                            transport = "udp",
+                            %error,
+                            "failed to sign TSIG response"
+                        );
+                        return None;
+                    }
+                };
             let rrl_decision = if prepared.tsig_authenticated || cookie_validated {
                 RrlDecision::Send(response)
             } else {
@@ -1949,8 +1952,8 @@ fn query_latency_category(
     match (observation.transport, cname_chain) {
         (Transport::Udp, false) => QueryLatencyCategory::UdpDirect,
         (Transport::Udp, true) => QueryLatencyCategory::UdpCnameChain,
-        (Transport::Tcp, false) => QueryLatencyCategory::TcpDirect,
-        (Transport::Tcp, true) => QueryLatencyCategory::TcpCnameChain,
+        (Transport::Tcp | Transport::Tls, false) => QueryLatencyCategory::TcpDirect,
+        (Transport::Tcp | Transport::Tls, true) => QueryLatencyCategory::TcpCnameChain,
     }
 }
 

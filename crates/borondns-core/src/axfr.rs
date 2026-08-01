@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 use thiserror::Error;
 use tracing::warn;
@@ -99,11 +102,17 @@ pub enum AxfrError {
     #[error("AXFR response contained a CNAME owner with non-DNSSEC data")]
     CnameCoexistsWithOtherData,
 
+    #[error("AXFR response contained a CNAME RRset with multiple distinct records")]
+    MultipleCnameRecords,
+
     #[error("AXFR response contained a DNAME owner with CNAME data")]
     DnameCoexistsWithCname,
 
     #[error("AXFR response contained a DNAME RRset with multiple records")]
     MultipleDnameRecords,
+
+    #[error("AXFR response contained DNAME and NS at the same non-apex owner")]
+    DnameCoexistsWithNs,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -446,7 +455,7 @@ fn parse_axfr_response_with_question(
                         initial_soa = Some(record.clone());
                         zone_records.push(record);
                     }
-                    Some(initial) if record == *initial => {
+                    Some(initial) if resource_records_semantically_equal(&record, initial) => {
                         complete = true;
                     }
                     Some(_) => return Err(AxfrError::MismatchedTerminatingSoa),
@@ -542,6 +551,7 @@ pub fn parse_ixfr_response(
     }
 
     let mut answers = Vec::new();
+    let mut saw_response_question = false;
     for message in messages {
         let header = Header::parse(message).map_err(|_| IxfrError::MalformedMessage)?;
         if header.id != qid {
@@ -564,7 +574,11 @@ pub fn parse_ixfr_response(
             zone_apex,
             RecordType::Ixfr as u16,
             qclass,
+            !saw_response_question,
         )?;
+        if header.qdcount == 1 {
+            saw_response_question = true;
+        }
         for _ in 0..header.ancount {
             let (mut record, consumed) =
                 parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
@@ -649,6 +663,7 @@ pub fn ixfr_response_message_probe(
         zone_apex,
         RecordType::Ixfr as u16,
         qclass,
+        false,
     )?;
     let mut answers = Vec::with_capacity(header.ancount as usize);
     let apex_key = zone_apex.canonical_key();
@@ -695,14 +710,20 @@ fn apply_ixfr_incremental(
     }
     let mut records = IndexedRecordSet::new(records);
     let mut index = 1usize;
+    let mut terminal_soa_seen = false;
 
     while index < answers.len() {
         let old_soa = &answers[index];
-        if old_soa == outer_soa && expected_old_soa == *outer_soa {
+        if resource_records_semantically_equal(old_soa, outer_soa)
+            && resource_records_semantically_equal(&expected_old_soa, outer_soa)
+        {
             index += 1;
+            terminal_soa_seen = true;
             break;
         }
-        if old_soa.rr_type != RecordType::Soa as u16 || old_soa != &expected_old_soa {
+        if old_soa.rr_type != RecordType::Soa as u16
+            || !resource_records_semantically_equal(old_soa, &expected_old_soa)
+        {
             return Err(IxfrError::BrokenSoaChain);
         }
         records.remove(old_soa)?;
@@ -730,13 +751,18 @@ fn apply_ixfr_incremental(
             index += 1;
         }
     }
+    if !terminal_soa_seen {
+        return Err(IxfrError::IncompleteResponse);
+    }
     if index != answers.len() {
         return Err(IxfrError::BrokenSoaChain);
     }
 
     let final_applied_serial =
         soa_serial(&expected_old_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
-    if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
+    if !resource_records_semantically_equal(&expected_old_soa, outer_soa)
+        || final_applied_serial != final_serial
+    {
         return Err(IxfrError::BrokenSoaChain);
     }
     let records = records.into_records();
@@ -761,13 +787,112 @@ struct RecordKey {
 impl RecordKey {
     fn from_record(record: &ResourceRecord) -> Self {
         Self {
-            owner: record.owner.clone(),
+            owner: record.owner.to_ascii_lowercased(),
             rr_type: record.rr_type,
             class: record.class,
             ttl: record.ttl,
-            rdata: record.rdata.clone(),
+            rdata: canonical_rdata_identity(record.rr_type, &record.rdata),
         }
     }
+}
+
+fn resource_records_semantically_equal(left: &ResourceRecord, right: &ResourceRecord) -> bool {
+    RecordKey::from_record(left) == RecordKey::from_record(right)
+}
+
+fn canonical_rdata_identity(rr_type: u16, rdata: &[u8]) -> Vec<u8> {
+    canonical_domain_name_rdata_identity(rr_type, rdata).unwrap_or_else(|| rdata.to_vec())
+}
+
+fn canonical_domain_name_rdata_identity(rr_type: u16, rdata: &[u8]) -> Option<Vec<u8>> {
+    let mut canonical = Vec::with_capacity(rdata.len());
+    match rr_type {
+        // Single domain-name RDATA fields.
+        2 | 3 | 4 | 5 | 7 | 8 | 9 | 12 | 39 => {
+            let end = append_canonical_rdata_name(rdata, 0, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // MINFO, RP, and TALINK carry two domain names.
+        14 | 17 | 58 => {
+            let second = append_canonical_rdata_name(rdata, 0, &mut canonical)?;
+            let end = append_canonical_rdata_name(rdata, second, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // SOA carries MNAME and RNAME followed by five u32 fields.
+        6 => {
+            let rname = append_canonical_rdata_name(rdata, 0, &mut canonical)?;
+            let timers = append_canonical_rdata_name(rdata, rname, &mut canonical)?;
+            (timers.checked_add(20)? == rdata.len()).then(|| {
+                canonical.extend_from_slice(&rdata[timers..]);
+                canonical
+            })
+        }
+        // Preference/subtype followed by one domain name.
+        15 | 18 | 21 | 36 | 107 => {
+            canonical.extend_from_slice(rdata.get(..2)?);
+            let end = append_canonical_rdata_name(rdata, 2, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // PX carries a preference and two domain names.
+        26 => {
+            canonical.extend_from_slice(rdata.get(..2)?);
+            let second = append_canonical_rdata_name(rdata, 2, &mut canonical)?;
+            let end = append_canonical_rdata_name(rdata, second, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // SIG/RRSIG signer name followed by no additional fields.
+        24 | 46 => {
+            canonical.extend_from_slice(rdata.get(..18)?);
+            let end = append_canonical_rdata_name(rdata, 18, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // NXT/NSEC next-domain name followed by a type bitmap.
+        30 | 47 => {
+            let bitmap = append_canonical_rdata_name(rdata, 0, &mut canonical)?;
+            canonical.extend_from_slice(&rdata[bitmap..]);
+            Some(canonical)
+        }
+        // SRV fixed fields followed by Target.
+        33 => {
+            canonical.extend_from_slice(rdata.get(..6)?);
+            let end = append_canonical_rdata_name(rdata, 6, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // NAPTR fixed fields and three character-strings precede Replacement.
+        35 => {
+            let mut replacement = 4usize;
+            for _ in 0..3 {
+                let len = usize::from(*rdata.get(replacement)?);
+                replacement = replacement.checked_add(1 + len)?;
+                if replacement > rdata.len() {
+                    return None;
+                }
+            }
+            canonical.extend_from_slice(rdata.get(..replacement)?);
+            let end = append_canonical_rdata_name(rdata, replacement, &mut canonical)?;
+            (end == rdata.len()).then_some(canonical)
+        }
+        // SVCB/HTTPS priority + TargetName + byte-exact SvcParams.
+        64 | 65 => {
+            canonical.extend_from_slice(rdata.get(..2)?);
+            let params = append_canonical_rdata_name(rdata, 2, &mut canonical)?;
+            canonical.extend_from_slice(&rdata[params..]);
+            Some(canonical)
+        }
+        _ => None,
+    }
+}
+
+fn append_canonical_rdata_name(rdata: &[u8], offset: usize, output: &mut Vec<u8>) -> Option<usize> {
+    let (name, consumed) = DomainName::parse(rdata, offset).ok()?;
+    output.extend(name.to_ascii_lowercased().to_wire());
+    offset.checked_add(consumed)
+}
+
+fn canonical_rdata_hash(rr_type: u16, rdata: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    canonical_rdata_identity(rr_type, rdata).hash(&mut hasher);
+    hasher.finish()
 }
 
 struct IndexedRecordSet {
@@ -925,7 +1050,11 @@ fn validate_ixfr_response_question(
     zone_apex: &DomainName,
     qtype: u16,
     qclass: u16,
+    require_question: bool,
 ) -> Result<usize, IxfrError> {
+    if qdcount == 0 && !require_question {
+        return Ok(DNS_HEADER_LEN);
+    }
     validate_response_question(message, qdcount, zone_apex, qtype, qclass).map_err(|error| {
         match error {
             ResponseQuestionError::MalformedMessage => IxfrError::MalformedMessage,
@@ -997,12 +1126,17 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
 
     let rr_type = u16::from_be_bytes([message[offset], message[offset + 1]]);
     let class = u16::from_be_bytes([message[offset + 2], message[offset + 3]]);
-    let ttl = u32::from_be_bytes([
+    let wire_ttl = u32::from_be_bytes([
         message[offset + 4],
         message[offset + 5],
         message[offset + 6],
         message[offset + 7],
     ]);
+    let ttl = if wire_ttl & 0x8000_0000 != 0 {
+        0
+    } else {
+        wire_ttl
+    };
     let rdlength = u16::from_be_bytes([message[offset + 8], message[offset + 9]]) as usize;
     offset += 10;
     if offset + rdlength > message.len() {
@@ -1069,7 +1203,12 @@ fn normalize_transfer_rdata(
     match rr_type {
         rr_type
             if rr_type == RecordType::Ns as u16
+                || rr_type == 3 // MD
+                || rr_type == 4 // MF
                 || rr_type == RecordType::Cname as u16
+                || rr_type == 7 // MB
+                || rr_type == 8 // MG
+                || rr_type == 9 // MR
                 || rr_type == RecordType::Ptr as u16 =>
         {
             let (name, consumed) = parse_rdata_name(message, rdata_offset, rdata_end)?;
@@ -1085,8 +1224,25 @@ fn normalize_transfer_rdata(
         rr_type if rr_type == RecordType::Mx as u16 => {
             normalize_mx_rdata(message, rdata_offset, rdata_end)
         }
+        14 => normalize_two_name_rdata(message, rdata_offset, rdata_end), // MINFO
         _ => Ok(raw_rdata.to_vec()),
     }
+}
+
+fn normalize_two_name_rdata(
+    message: &[u8],
+    rdata_offset: usize,
+    rdata_end: usize,
+) -> Result<Vec<u8>, DnsParseError> {
+    let (first, consumed_first) = parse_rdata_name(message, rdata_offset, rdata_end)?;
+    let second_offset = rdata_offset + consumed_first;
+    let (second, consumed_second) = parse_rdata_name(message, second_offset, rdata_end)?;
+    if second_offset + consumed_second != rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+    let mut normalized = first.to_wire();
+    normalized.extend(second.to_wire());
+    Ok(normalized)
 }
 
 fn normalize_soa_rdata(
@@ -1445,8 +1601,8 @@ fn validate_svcb_like_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     let priority = u16::from_be_bytes([rdata[0], rdata[1]]);
     let target_len = validate_uncompressed_domain_name_with_trailing(rdata, 2)?;
     let mut offset = 2 + target_len;
-    if priority == 0 && offset != rdata.len() {
-        return Err(AxfrError::InvalidRdata);
+    if priority == 0 {
+        return Ok(());
     }
 
     let mut last_key = None;
@@ -1491,7 +1647,7 @@ fn validate_zone_record_set(
 ) -> Result<(), AxfrError> {
     validate_exact_apex_soa(zone_apex, records)?;
     validate_apex_ns(zone_apex, records)?;
-    validate_cname_and_dname_coexistence(records)?;
+    validate_cname_and_dname_coexistence(zone_apex, records)?;
     Ok(())
 }
 
@@ -1522,27 +1678,54 @@ fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Resul
     }
 }
 
-fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<(), AxfrError> {
+fn validate_cname_and_dname_coexistence(
+    zone_apex: &DomainName,
+    records: &[ResourceRecord],
+) -> Result<(), AxfrError> {
     #[derive(Default)]
     struct OwnerRecordKinds {
         has_cname: bool,
         has_dname: bool,
+        has_ns: bool,
         has_cname_incompatible_data: bool,
+        cname_target: Option<String>,
+        dname_target: Option<String>,
     }
 
     let mut owner_kinds = HashMap::<DomainName, OwnerRecordKinds>::new();
-    let mut dname_rrsets = HashSet::<(DomainName, u16)>::new();
     for record in records {
         let owner_key = record.owner.to_ascii_lowercased();
         let kinds = owner_kinds.entry(owner_key.clone()).or_default();
 
         if record.rr_type == RecordType::Dname as u16 {
-            if !dname_rrsets.insert((owner_key, record.class)) {
+            let target = DomainName::from_uncompressed_wire(&record.rdata)
+                .map_err(|_| AxfrError::InvalidRdata)?
+                .canonical_key();
+            if kinds
+                .dname_target
+                .as_ref()
+                .is_some_and(|existing| existing != &target)
+            {
                 return Err(AxfrError::MultipleDnameRecords);
             }
+            kinds.dname_target = Some(target);
             kinds.has_dname = true;
         } else if record.rr_type == RecordType::Cname as u16 {
+            let target = DomainName::from_uncompressed_wire(&record.rdata)
+                .map_err(|_| AxfrError::InvalidRdata)?
+                .canonical_key();
+            if kinds
+                .cname_target
+                .as_ref()
+                .is_some_and(|existing| existing != &target)
+            {
+                return Err(AxfrError::MultipleCnameRecords);
+            }
+            kinds.cname_target = Some(target);
             kinds.has_cname = true;
+        } else if record.rr_type == RecordType::Ns as u16 {
+            kinds.has_ns = true;
+            kinds.has_cname_incompatible_data = true;
         } else if !is_dnssec_cname_exception_type(record.rr_type) {
             kinds.has_cname_incompatible_data = true;
         }
@@ -1551,6 +1734,13 @@ fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<()
     for kinds in owner_kinds.values() {
         if kinds.has_dname && kinds.has_cname {
             return Err(AxfrError::DnameCoexistsWithCname);
+        }
+    }
+
+    let zone_apex = zone_apex.to_ascii_lowercased();
+    for (owner, kinds) in &owner_kinds {
+        if kinds.has_dname && kinds.has_ns && owner != &zone_apex {
+            return Err(AxfrError::DnameCoexistsWithNs);
         }
     }
 
@@ -1590,28 +1780,48 @@ fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
                 );
             }
             existing.ttl = existing.ttl.min(record.ttl);
-            existing.rdatas.push(record.rdata);
+            let rdata_hash = canonical_rdata_hash(record.rr_type, &record.rdata);
+            let duplicate = existing
+                .seen_rdata_hashes
+                .get(&rdata_hash)
+                .is_some_and(|indexes| {
+                    indexes.iter().any(|index| {
+                        canonical_rdata_identity(record.rr_type, &existing.rdatas[*index])
+                            == canonical_rdata_identity(record.rr_type, &record.rdata)
+                    })
+                });
+            if !duplicate {
+                let rdata_index = existing.rdatas.len();
+                existing.rdatas.push(record.rdata);
+                existing
+                    .seen_rdata_hashes
+                    .entry(rdata_hash)
+                    .or_default()
+                    .push(rdata_index);
+            }
         } else {
             rrset_indexes.insert(key, rrsets.len());
+            let rdata_hash = canonical_rdata_hash(record.rr_type, &record.rdata);
             rrsets.push(RrsetAccumulator {
                 owner: record.owner,
                 rr_type: record.rr_type,
                 class: record.class,
                 ttl: record.ttl,
                 rdatas: vec![record.rdata],
+                seen_rdata_hashes: HashMap::from([(rdata_hash, vec![0])]),
             });
         }
     }
 
     rrsets
         .into_iter()
-        .map(|rrset| {
+        .map(|accumulator| {
             Rrset::new(
-                rrset.owner,
-                rrset.rr_type,
-                rrset.class,
-                rrset.ttl,
-                rrset.rdatas,
+                accumulator.owner,
+                accumulator.rr_type,
+                accumulator.class,
+                accumulator.ttl,
+                accumulator.rdatas,
             )
         })
         .collect()
@@ -1623,6 +1833,7 @@ struct RrsetAccumulator {
     class: u16,
     ttl: u32,
     rdatas: Vec<Vec<u8>>,
+    seen_rdata_hashes: HashMap<u64, Vec<usize>>,
 }
 
 impl From<DnsParseError> for AxfrError {
@@ -2223,6 +2434,109 @@ mod tests {
     }
 
     #[test]
+    fn parses_axfr_and_normalizes_compressed_legacy_mail_rdata_names() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut records = vec![soa.clone(), apex_ns()];
+        for (rr_type, label) in [(3, "md"), (4, "mf"), (7, "mb"), (8, "mg"), (9, "mr")] {
+            records.push(record(
+                &format!("type{rr_type}.example.test."),
+                rr_type,
+                compressed_apex_suffix_name_rdata(label),
+            ));
+        }
+        let mut minfo = compressed_apex_suffix_name_rdata("responsible");
+        minfo.extend(compressed_apex_suffix_name_rdata("errors"));
+        records.push(record("minfo.example.test.", 14, minfo));
+        records.push(soa);
+
+        let snapshot = parse_axfr_response(0x1234, &apex, 1, &[axfr_message(0x1234, records)])
+            .expect("AXFR with compressed legacy mail RDATA names");
+
+        for (rr_type, label) in [(3, "md"), (4, "mf"), (7, "mb"), (8, "mg"), (9, "mr")] {
+            assert_eq!(
+                first_rdata(&snapshot, &format!("type{rr_type}.example.test."), rr_type),
+                name_rdata(&format!("{label}.example.test."))
+            );
+        }
+        let mut expected_minfo = name_rdata("responsible.example.test.");
+        expected_minfo.extend(name_rdata("errors.example.test."));
+        assert_eq!(
+            first_rdata(&snapshot, "minfo.example.test.", 14),
+            expected_minfo
+        );
+    }
+
+    #[test]
+    fn axfr_ignores_duplicate_resource_records() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let address = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), address.clone(), address, soa],
+            )],
+        )
+        .expect("AXFR clients ignore duplicate RRs per RFC 5936");
+
+        assert_eq!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn axfr_treats_ttl_with_high_bit_set_as_zero() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut address = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        address.ttl = 0x8000_002a;
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), address, soa],
+            )],
+        )
+        .expect("high-bit transfer TTL is accepted as zero per RFC 2181");
+
+        assert_eq!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers[0]
+                .ttl,
+            0
+        );
+    }
+
+    #[test]
     fn parses_axfr_unknown_types_as_opaque_rdata() {
         const UNKNOWN_TYPE: u16 = 65_280;
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
@@ -2341,6 +2655,61 @@ mod tests {
         assert!(
             lookup.answers.iter().all(|record| record.ttl == 120),
             "all RRset members should use the adopted lowest TTL"
+        );
+    }
+
+    #[test]
+    fn preserves_rrsig_ttl_by_type_covered_at_one_owner() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let owner = "www.example.test.";
+        let mut a = record(owner, RecordType::A as u16, vec![192, 0, 2, 1]);
+        a.ttl = 300;
+        let mut aaaa = record(
+            owner,
+            RecordType::Aaaa as u16,
+            vec![0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        );
+        aaaa.ttl = 600;
+        let mut a_sig = record(
+            owner,
+            RecordType::Rrsig as u16,
+            rrsig_rdata_with_algorithm(RecordType::A, 8, name_rdata("example.test.")),
+        );
+        a_sig.ttl = 300;
+        let mut aaaa_sig = record(
+            owner,
+            RecordType::Rrsig as u16,
+            rrsig_rdata_with_algorithm(RecordType::Aaaa, 8, name_rdata("example.test.")),
+        );
+        aaaa_sig.ttl = 600;
+
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), a, aaaa, a_sig, aaaa_sig, soa],
+            )],
+        )
+        .expect("RRSIG TTLs may differ by Type Covered");
+
+        let mut observed = snapshot
+            .transfer_records()
+            .into_iter()
+            .filter(|record| record.rr_type == RecordType::Rrsig as u16)
+            .map(|record| {
+                (
+                    u16::from_be_bytes([record.rdata[0], record.rdata[1]]),
+                    record.ttl,
+                )
+            })
+            .collect::<Vec<_>>();
+        observed.sort_unstable();
+        assert_eq!(
+            observed,
+            vec![(RecordType::A as u16, 300), (RecordType::Aaaa as u16, 600),]
         );
     }
 
@@ -2470,6 +2839,38 @@ mod tests {
         };
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
+    fn parses_multi_message_ixfr_axfr_fallback_with_omitted_later_question() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let first = ixfr_message(0x1234, vec![new_soa.clone(), apex_ns()]);
+        let second = transfer_response_message_without_question(
+            0x1234,
+            vec![
+                record(
+                    "www.example.test.",
+                    RecordType::A as u16,
+                    vec![192, 0, 2, 10],
+                ),
+                new_soa,
+            ],
+        );
+
+        let response = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[first, second])
+            .expect("IXFR AXFR fallback permits QDCOUNT=0 after the first message");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected AXFR fallback update");
+        };
+        assert_eq!(snapshot.serial, Some(2));
     }
 
     #[test]
@@ -2742,6 +3143,7 @@ mod tests {
                     old_a,
                     new_soa.clone(),
                     new_a.clone(),
+                    new_soa,
                 ],
             )],
         )
@@ -2773,6 +3175,42 @@ mod tests {
                 .answers,
             vec![new_a]
         );
+    }
+
+    #[test]
+    fn rejects_ixfr_mode1_incremental_diff_without_terminal_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), old_a.clone()]);
+
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, old_a, new_soa, new_a],
+            )],
+        )
+        .expect_err("RFC 1995 requires a closing copy of the current SOA");
+
+        assert_eq!(error, IxfrError::IncompleteResponse);
     }
 
     #[test]
@@ -2819,6 +3257,7 @@ mod tests {
                     old_a_mixed,
                     new_soa.clone(),
                     new_a_mixed,
+                    new_soa,
                 ],
             )],
         )
@@ -2879,7 +3318,13 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), old_soa, old_a_lower_ixfr, new_soa],
+                vec![
+                    new_soa.clone(),
+                    old_soa,
+                    old_a_lower_ixfr,
+                    new_soa.clone(),
+                    new_soa,
+                ],
             )],
         )
         .expect("mode 1 delete against mixed-case current owner");
@@ -2898,6 +3343,103 @@ mod tests {
                 .answers
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn parses_ixfr_delete_with_case_variant_domain_name_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("Target.Example.Test."),
+        );
+        let delete_cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), current_cname]);
+
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    delete_cname,
+                    new_soa.clone(),
+                    new_soa,
+                ],
+            )],
+        )
+        .expect("domain names in RDATA compare case-insensitively");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parses_ixfr_soa_chain_with_case_variant_mname_and_rname() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut case_variant_soa_rdata = name_rdata("NS.EXAMPLE.TEST.");
+        case_variant_soa_rdata.extend(name_rdata("HOSTMASTER.EXAMPLE.TEST."));
+        case_variant_soa_rdata.extend_from_slice(
+            &soa_rdata()[name_rdata("ns.example.test.").len()
+                + name_rdata("hostmaster.example.test.").len()..],
+        );
+        let old_soa_case_variant = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            case_variant_soa_rdata,
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa, apex_ns()]);
+
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![
+                    new_soa.clone(),
+                    old_soa_case_variant,
+                    new_soa.clone(),
+                    new_soa,
+                ],
+            )],
+        )
+        .expect("SOA chain identity compares MNAME and RNAME case-insensitively");
+
+        assert!(matches!(response, IxfrResponse::Updated(_)));
     }
 
     #[test]
@@ -2930,7 +3472,13 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), old_soa, old_embedded_dot_a_ixfr, new_soa],
+                vec![
+                    new_soa.clone(),
+                    old_soa,
+                    old_embedded_dot_a_ixfr,
+                    new_soa.clone(),
+                    new_soa,
+                ],
             )],
         )
         .expect("mode 1 delete of owner with embedded dot label");
@@ -3030,7 +3578,14 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), current_soa, old_a, new_soa, new_a],
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    old_a,
+                    new_soa.clone(),
+                    new_a,
+                    new_soa,
+                ],
             )],
         )
         .expect_err("IXFR final zone missing apex NS");
@@ -3056,7 +3611,7 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), current_soa, new_soa],
+                vec![new_soa.clone(), current_soa, new_soa.clone(), new_soa],
             )],
         )
         .expect_err("IXFR final zone with non-apex SOA");
@@ -3086,7 +3641,7 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), current_soa, new_soa],
+                vec![new_soa.clone(), current_soa, new_soa.clone(), new_soa],
             )],
         )
         .expect_err("IXFR final zone with multiple apex SOAs");
@@ -3121,7 +3676,14 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), current_soa, new_soa, cname, a],
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    new_soa.clone(),
+                    cname,
+                    a,
+                    new_soa,
+                ],
             )],
         )
         .expect_err("IXFR final zone with CNAME and other data");
@@ -3240,7 +3802,7 @@ mod tests {
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![final_soa, current_soa, intermediate_soa],
+                vec![final_soa.clone(), current_soa, intermediate_soa, final_soa],
             )],
         )
         .expect_err("final SOA chain mismatch");
@@ -3800,6 +4362,62 @@ mod tests {
     }
 
     #[test]
+    fn rejects_axfr_multiple_cname_records_for_owner() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let first = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let second = record(
+            "ALIAS.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("other.example.test."),
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), first, second, soa],
+            )],
+        )
+        .expect_err("multiple CNAME records");
+
+        assert_eq!(error, AxfrError::MultipleCnameRecords);
+    }
+
+    #[test]
+    fn rejects_axfr_non_apex_dname_with_ns() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let dname = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("target.example.test."),
+        );
+        let ns = record(
+            "REDIRECT.example.test.",
+            RecordType::Ns as u16,
+            name_rdata("ns.redirect.example.test."),
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dname, ns, soa],
+            )],
+        )
+        .expect_err("non-apex DNAME with NS");
+
+        assert_eq!(error, AxfrError::DnameCoexistsWithNs);
+    }
+
+    #[test]
     fn accepts_axfr_dname_owners_that_collide_as_canonical_strings() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -4212,10 +4830,6 @@ mod tests {
                 "truncated SVCB param",
             ),
             (
-                svcb_rdata(0, name_rdata("alias.example.test."), &[0, 1, 0, 0]),
-                "AliasMode SVCB with params",
-            ),
-            (
                 svcb_rdata(
                     1,
                     name_rdata("svc.example.test."),
@@ -4242,6 +4856,38 @@ mod tests {
 
             assert_eq!(error, AxfrError::InvalidRdata, "{context}");
         }
+    }
+
+    #[test]
+    fn accepts_and_preserves_alias_mode_svcb_and_https_params() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let params = [0, 1, 0, 3, 2, b'h', b'2'];
+        let svcb = record(
+            "svc.example.test.",
+            RecordType::Svcb as u16,
+            svcb_rdata(0, name_rdata("alias.example.test."), &params),
+        );
+        let https = record(
+            "www.example.test.",
+            RecordType::Https as u16,
+            svcb_rdata(0, name_rdata("alias.example.test."), &params),
+        );
+
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), svcb.clone(), https.clone(), soa],
+            )],
+        )
+        .expect("AliasMode parameters are ignored by recipients, not rejected");
+
+        let records = snapshot.transfer_records();
+        assert!(records.contains(&svcb));
+        assert!(records.contains(&https));
     }
 
     #[test]

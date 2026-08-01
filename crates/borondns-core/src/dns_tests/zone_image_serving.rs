@@ -921,6 +921,56 @@
     }
 
     #[test]
+    fn zone_image_serving_preserves_rrsig_ttl_by_type_covered() {
+        let owner = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    owner.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    owner.clone(),
+                    RecordType::Aaaa as u16,
+                    1,
+                    600,
+                    vec![[0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1].to_vec()],
+                ),
+                Rrset::new(
+                    owner,
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![
+                        rrsig_rdata(RecordType::A),
+                        rrsig_rdata(RecordType::Aaaa),
+                    ],
+                ),
+            ],
+        ));
+
+        for (rr_type, expected_ttl) in [
+            (RecordType::A as u16, 300),
+            (RecordType::Aaaa as u16, 600),
+        ] {
+            let mut packet = query(b"\x03www\x07example\x04test\x00", rr_type, 1);
+            append_opt(&mut packet, 4096, 0x8000, &[]);
+            let response = store_response_with_zone_image(&packet, &store);
+            assert_eq!(
+                response_answer_ttls(&response, RecordType::Rrsig as u16),
+                vec![expected_ttl],
+                "RRSIG TTL must follow the RRset selected by Type Covered"
+            );
+        }
+    }
+
+    #[test]
     fn zone_image_serving_matches_dnssec_proof_selection_corpus() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -953,7 +1003,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("z.example.test.")],
+                    vec![nsec_rdata("www.example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("a.example.test.").unwrap(),
@@ -974,7 +1024,7 @@
                     RecordType::Nsec as u16,
                     1,
                     300,
-                    vec![nsec_rdata("zzz.example.test.")],
+                    vec![nsec_rdata("example.test.")],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("www.example.test.").unwrap(),
@@ -1435,8 +1485,9 @@
             &edns_option(EDNS_PADDING_OPTION, &[0, 0, 0, 0]),
         );
         let padding_options = AnswerOptions {
+            transport: Transport::Tls,
             edns_padding_block_size: 32,
-            ..AnswerOptions::default()
+            ..AnswerOptions::tcp()
         };
         let padding_response = store_response_with_zone_image_provider(
             &padding_packet,

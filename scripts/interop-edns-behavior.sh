@@ -491,9 +491,13 @@ def main():
         options=option(EDNS_PADDING),
     )))
     require(padding["rcode"] == 0, padding)
-    require(EDNS_PADDING in padding["opt_options"], padding)
-    require(padding["bytes"] % 32 == 0, padding)
-    record(rows, "configured_padding_aligns", padding, "block_size=32")
+    require(EDNS_PADDING not in padding["opt_options"], padding)
+    record(
+        rows,
+        "plaintext_padding_request_unpadded",
+        padding,
+        "response_padding=0; transport=udp",
+    )
 
     nsid_empty = response_summary(udp_exchange(query_packet(
         0x4114,
@@ -556,7 +560,7 @@ BDS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copi
 BDS-FR-EDNS-010\tretained-runtime\tbadvers_version_1\tedns-summary.tsv\tBADVERS uses the response OPT extended-RCODE field for RCODE 16.
 BDS-FR-EDNS-011\tretained-runtime\tudp_keepalive_ignored; tcp_keepalive_advertised\tedns-summary.tsv\tThe keepalive option is ignored over UDP and recognized over TCP.
 BDS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; borondns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.
-BDS-FR-EDNS-013\tretained-runtime\tconfigured_padding_aligns\tedns-summary.tsv; borondns.toml\tWith edns_padding_block_size=32 and a padding request, the response contains a padding option and the DNS message length is 32-byte aligned.
+BDS-FR-EDNS-013\tretained-runtime-plus-support\tplaintext_padding_request_unpadded\tedns-summary.tsv; borondns.toml; crates/borondns-core/src/dns.rs EDNS padding tests\tA plaintext UDP padding request is recognized without emitting response padding; nonzero configuration is rejected while no encrypted client-query listener exists, and the isolated TLS response composer is unit-tested for block alignment.
 BDS-FR-EDNS-014\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv\tAn unknown EDNS option is ignored and not echoed while the query still succeeds.
 BDS-FR-EDNS-015\tretained-runtime\tnon_edns_512_no_opt\tedns-summary.tsv\tA non-EDNS large UDP answer is truncated to at most 512 octets and contains no response OPT.
 BDS-FR-EDNS-016\tretained-runtime\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml\tConfigured NSID is returned for both empty and non-empty NSID request data.
@@ -587,7 +591,7 @@ enabled = false
 max_udp_payload = 700
 max_concurrent_transfers = 1
 tcp_idle_timeout_secs = 5
-edns_padding_block_size = 32
+edns_padding_block_size = 0
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
 graceful_shutdown_secs = 2

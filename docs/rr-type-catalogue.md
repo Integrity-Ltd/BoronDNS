@@ -43,11 +43,20 @@ The current type-aware set is:
 | NSEC3 | 50 | Validates NSEC3 salt/hash layout plus type bit maps and serves transferred denial proofs subject to the configured iteration cap. |
 | NSEC3PARAM | 51 | Validates the NSEC3 parameter layout and drives the configured NSEC3 iteration-cap decision. |
 | TLSA | 52 | Validates the fixed certificate-usage/selector/matching-type prefix and serves the association data opaquely. BoronDNS does not perform DANE validation. |
-| SVCB | 64 | Validates uncompressed TargetName, AliasMode parameter absence, and sorted SvcParam keys; drives A/AAAA additional-section lookups. |
-| HTTPS | 65 | Same wire-format validation and additional-section behavior as SVCB. |
+| SVCB | 64 | Validates uncompressed TargetName, AliasMode parameter absence, and sorted SvcParam keys; drives A/AAAA and target SVCB additional-section lookups, with covering RRSIGs for DO queries. |
+| HTTPS | 65 | Same wire-format validation and additional-section behavior as SVCB, including target HTTPS RRsets and their covering RRSIGs. |
 | URI | 256 | Validates priority, weight, and non-empty raw URI target octets. The target is not a DNS character-string. |
 
 ## Out-Of-Catalogue Behavior
+
+Transfer parsing additionally understands the RFC 1035 compression layout of
+the obsolete MD (3), MF (4), MB (7), MG (8), MR (9), and MINFO (14) RDATA so a
+legacy primary cannot leave compression pointers in stored RDATA. These types
+remain outside the actively validated serving catalogue. AXFR/IXFR identity is
+case-insensitive for embedded domain names in every supported name-bearing
+RDATA layout, and semantically duplicate resource records are collapsed before
+RRset construction. Received TTL values with bit 31 set are treated as zero per
+RFC 2181 section 8.
 
 Types not listed in SRS section 4.14 are handled under `BDS-FR-URR-001` through
 `BDS-FR-URR-009`, not as missing implementation. Current examples intentionally

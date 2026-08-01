@@ -36,13 +36,14 @@
             direct_answer_body_len: 0,
             wire: range,
         };
-        let relation = ImageRrsetRelation {
-            kind: ImageRrsetRelationKind::Rrsig,
-            rrset_id: ZoneImageRrsetId(0),
-            record_index: above_u32,
-            rdata_len: 0,
-            owner_wire_len: 0,
-        };
+        let relation = ImageRrsetRelation::new(
+            ImageRrsetRelationKind::Rrsig,
+            ZoneImageRrsetId(0),
+            above_u32,
+            0,
+            0,
+            false,
+        );
         let span = ImageRrsetRelationSpan::new(above_u32, 0, &[])
             .expect("u64 relation ordinal is representable");
 
@@ -962,4 +963,18 @@
         );
         assert_eq!(wildcard_minimal.additional_rrsets().len(), 1);
         assert_eq!(wildcard_minimal.owner_overrides.len(), 1);
+    }
+    #[test]
+    fn uncompressed_wire_canonical_key_preserves_label_boundaries() {
+        let embedded_dot = b"\x03a.b\x07example\x04test\x00";
+        let split_labels = b"\x01a\x01b\x07example\x04test\x00";
+
+        assert_ne!(
+            canonical_key_from_uncompressed_wire(embedded_dot),
+            canonical_key_from_uncompressed_wire(split_labels)
+        );
+        assert_eq!(
+            canonical_key_from_uncompressed_wire(b"\x03WWW\x07Example\x04TEST\x00"),
+            canonical_key_from_uncompressed_wire(b"\x03www\x07example\x04test\x00")
+        );
     }

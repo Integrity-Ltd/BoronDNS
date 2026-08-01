@@ -36,6 +36,7 @@
 | v0.9 | 25 May 2026 | DT | **Protocol-correctness requirements update.** Incorporates functional clarifications from the Alpha review without making implementation audit claims part of the normative SRS. **Functional additions:** BDS-FR-DNSSEC-014 (NSEC3 iteration count cap per RFC 9276 / BCP 236); BDS-FR-QRY-025 (DNAME synthesis name-length overflow handling per RFC 6672 §5.3.1); BDS-FR-AXFR-025 (fail-closed transfer publication validation); and BDS-FR-AXFR-026 (DNAME multiplicity validation per RFC 6672 §2.4). **Configuration interface additions:** BDS-IF-CONF-014 (environment-variable override re-validation), BDS-IF-CONF-015 (NSEC3 max iterations parameter), and BDS-IF-CONF-016 (reserved no-relaxation transfer-owner policy). **Interoperability matrix extension:** BDS-VER-003 extended to require XoT interop coverage against BIND 9 in addition to the already-required Knot DNS XoT coverage. Implementation evidence remains tracked in verification and release-evidence documents, not in normative SRS requirements. **No invariant changes**: §3 (BDS-INV-001 through BDS-INV-009) is unchanged. **No NEG changes**: §4.18 is unchanged. |
 | v0.9.1 | 26 May 2026 | DT | **CHAOS class self-identification addition.** Normalises legacy non-BoronDNS naming to the project-canonical `BoronDNS`/`BDS-` namespace and retains the v0.9 corrections for catalog-zone configuration (`[[zones]]` and `[[catalog_zones]]`), DNS-interface NOTIFY handling, and the bounded EDE profile. Introduces §4.21 (CHAOS Class Query Handling) and allocates functional area code **CHAS**. New requirements BDS-FR-CHAS-001 through BDS-FR-CHAS-006 specify opt-in `version.bind.` / `version.server.` and `hostname.bind.` / `id.server.` CH/TXT responses, REFUSED defaults, REFUSED handling for unsupported CHAOS names and non-TXT CHAOS queries, IN-class orthogonality, and low-noise counters/logging. Adds BDS-IF-CONF-018 for the `[chaos]` configuration subtree while preserving BDS-IF-CONF-017 for the bounded Extended DNS Errors profile. Aligns BDS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model; external secret stores project secrets into files rather than BoronDNS reading secret values from environment variables. No invariant changes. No NEG changes. |
 | v0.9.1 alignment note | 13 Jun 2026 | DT | Source-alignment cleanup for the v0.2.0 preparation branch. The document version and requirement identifiers stay unchanged, but §4.20, §5.3, and §6.2 now describe the implemented reloadable filesystem `secret_store`, split catalog/member transfer configuration, opt-in catalog member transfer extensions, and the private-address-only legacy unsigned member AXFR policy. |
+| v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
 
 ---
 
@@ -471,9 +472,9 @@ Third-party dependencies (Rust crates depended on by the server per BDS-NFR-SEC-
 
 *Implications.* Wire-format parsers across all protocols supported by the server are implemented in safe Rust at the first-party level. Any `unsafe` block in first-party code is reviewable as a finite, documented exception. The set of `unsafe` blocks in first-party code is enumerable by static tooling and forms part of the security review during each release. Dependency-level `unsafe` is reviewed separately as part of crate adoption decisions.
 
-**Panic discipline.** Safe Rust prevents memory-safety bugs but does not prevent runtime panics. The query-serving path (network input → response output) MUST be designed and tested to be panic-free on any input: malformed queries MUST be handled with explicit error responses per §4.1 (FORMERR, NOTIMP, REFUSED as appropriate), never with `unwrap()`, `expect()`, panicking integer-overflow constructs, or other panic-inducing constructs reachable from untrusted input. Panics in supervised non-query background tasks (e.g., a task processing a transfer session) MUST be isolated to the affected task by the runtime's task boundary and surfaced through retained supervised-task error handling and warning logs; they MUST NOT propagate to whole-process termination. The fuzz testing of BDS-NFR-SEC-002 is the principal verification mechanism for panic-freedom on untrusted input.
+**Panic discipline.** Safe Rust prevents memory-safety bugs but does not prevent runtime panics. Every path reachable from untrusted network input, configuration, secret-store candidates, or transferred zone data MUST be designed and tested to return an explicit error rather than panic. The release profile is compiled with `panic = "abort"`: an uncaught panic in any task is therefore a process-fatal implementation failure, not a task-local recovery mechanism. The service manager is responsible for restarting the failed process. Supervision MUST surface ordinary task-return errors and join failures before graceful shutdown where execution remains possible, but the SRS does not promise recovery from an uncaught panic inside the same process. Fuzz testing under BDS-NFR-SEC-002 and the release-profile panic-mode audit are the principal verification mechanisms.
 
-*Verification.* First-party source-level unsafe usage shall be enumerated by the continuous safe-Rust audit scripts and confined to documented, reviewed exceptions. Transitive dependency unsafe usage shall be enumerated with `cargo geiger` or an equivalent scanner during release review, with scanner caveats retained alongside the evidence. Each `unsafe` block in first-party code shall be reviewed during code review and approved against its documented justification per BDS-NFR-MAINT-003. Fuzz testing (`cargo-fuzz` per BDS-NFR-SEC-002) against the wire-format parsers shall serve as ongoing evidence that the safe-Rust parsers handle malformed input correctly without panic. Code review and runtime tests confirm supervised task completion-error handling for listener, refresh, health, and TCP query tasks.
+*Verification.* First-party source-level unsafe usage shall be enumerated by the continuous safe-Rust audit scripts and confined to documented, reviewed exceptions. Transitive dependency unsafe usage shall be enumerated with `cargo geiger` or an equivalent scanner during release review, with scanner caveats retained alongside the evidence. Each `unsafe` block in first-party code shall be reviewed during code review and approved against its documented justification per BDS-NFR-MAINT-003. Fuzz testing (`cargo-fuzz` per BDS-NFR-SEC-002) against the wire-format parsers shall serve as ongoing evidence that the safe-Rust parsers handle malformed input correctly without panic. The release gate MUST confirm the packaged release profile uses abort-on-panic semantics and MUST exercise the supervisor's restart/readiness behavior separately from ordinary task-error handling.
 
 *Status.* Reviewed v0.6 (architectural invariants audit closure).
 
@@ -573,6 +574,8 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §4.1.2 defines QDCOUNT as the number of question-section entries and states that the question section usually contains one entry; BoronDNS defines semantics only for exactly one question.
 *Verification.* Conformance tests.
 
+For OPCODE = QUERY, ANCOUNT and NSCOUNT MUST both be zero; a non-empty Answer or Authority section is rejected with FORMERR before either section is scanned. This restriction does not apply to NOTIFY: RFC 1996 permits an Answer-section hint and requires receivers to tolerate future-compatible Authority or Additional content.
+
 **BDS-FR-CORE-029.** In any error response (FORMERR, NOTIMP, REFUSED, SERVFAIL), the server SHOULD echo the question section as received if it was successfully parsed, with QDCOUNT = 1 in the response header. Where the question section could not be parsed (parse failure before the question section was successfully extracted — for example, oversized labels per BDS-FR-CORE-007, compression-loop in QNAME per BDS-FR-CORE-008, or QDCOUNT > 1), the server MUST emit the response with QDCOUNT = 0 and no records in the question section.
 *Source.* RFC 1035 §4.1.1; defensive composition for malformed inputs where the question content cannot be safely reproduced.
 *Note.* This is the explicit project policy for the case left implicit by RFC 1035 §4.1.1, which defines the header counts but does not require echoing a question that could not be parsed. Setting QDCOUNT = 0 avoids returning a malformed echoed question to the client. Earlier draft snapshots used a suffixed CORE label for this requirement; that label is historical only and must not be used for new traceability.
@@ -582,9 +585,9 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §2.3.4, §3.1, §4.1.2.
 *Verification.* Conformance tests including oversize labels and oversize names.
 
-**BDS-FR-CORE-008.** The server MUST resolve DNS name compression pointers per RFC 1035 §4.1.4 when parsing QNAMEs and MUST respond with RCODE = 1 (FORMERR) when a message contains a compression loop or an out-of-bounds pointer target.
-*Source.* RFC 1035 §4.1.4.
-*Verification.* Conformance tests including pointer loops, self-referential pointers, and out-of-bounds pointer targets. Continuous fuzz testing.
+**BDS-FR-CORE-008.** The server MUST resolve DNS name compression pointers per RFC 1035 §4.1.4 when parsing DNS names. Each pointer target MUST precede the pointer that references it; forward, self-referential, out-of-bounds, over-budget, or expanded-name-overflow encodings MUST receive RCODE = 1 (FORMERR). Pointer traversal MUST use constant-time per-hop work and a fixed hop budget rather than a linear visited-pointer search.
+*Source.* RFC 1035 §4.1.4; RFC 9267 §§2–3.
+*Verification.* Conformance tests including backward nested pointers, forward pointers, pointer loops, self-referential pointers, out-of-bounds targets, hop-budget exhaustion, and expanded names over 255 octets. Continuous fuzz testing.
 
 **BDS-FR-CORE-009.** The server MUST compare domain names case-insensitively with respect to ASCII letters A–Z and a–z, treating all other octet values literally and bit-for-bit.
 *Source.* RFC 1035 §2.3.3; RFC 4343 §3.
@@ -608,7 +611,7 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §4.1.1.
 *Verification.* Wire-format inspection.
 
-**BDS-FR-CORE-014.** In responses, the server MUST set the AA bit to 1 when the answer is authoritative for the queried name (a direct match, NODATA, NXDOMAIN, or wildcard synthesis within a served zone) or when returning an opt-in NOERROR response for a recognised CHAOS-class self-identification query per BDS-FR-CHAS-001 and BDS-FR-CHAS-002. The server MUST set the AA bit to 0 for referral responses to delegated child zones. For all other response categories — REFUSED (per BDS-FR-CORE-018, BDS-FR-CORE-019, BDS-FR-CHAS-001, BDS-FR-CHAS-002, BDS-FR-CHAS-003, and BDS-FR-CHAS-004), FORMERR (per BDS-FR-CORE-006, BDS-FR-CORE-007, BDS-FR-CORE-008), NOTIMP (per BDS-FR-CORE-005, BDS-FR-QRY-008), SERVFAIL (per BDS-FR-QRY-021, BDS-FR-QRY-022), NOTAUTH (per BDS-FR-TSIG-013), and any other response not falling into the authoritative-positive, authoritative-negative, or recognised CHAOS self-identification categories above — the AA bit MUST be set to 0.
+**BDS-FR-CORE-014.** In responses, the server MUST set the AA bit to 1 when the answer is authoritative for the queried name (a direct match, NODATA, NXDOMAIN, wildcard synthesis, or an authoritative CNAME/DNAME chain prefix within a served zone) or when returning an opt-in NOERROR response for a recognised CHAOS-class self-identification query per BDS-FR-CHAS-001 and BDS-FR-CHAS-002. When an authoritative alias chain subsequently reaches a delegation, the referral material terminates the chain but MUST NOT clear AA for the already-authoritative answer prefix. A referral response with no authoritative answer prefix MUST set AA to 0. For all other response categories — REFUSED (per BDS-FR-CORE-018, BDS-FR-CORE-019, BDS-FR-CHAS-001, BDS-FR-CHAS-002, BDS-FR-CHAS-003, and BDS-FR-CHAS-004), FORMERR (per BDS-FR-CORE-006, BDS-FR-CORE-007, BDS-FR-CORE-008), NOTIMP (per BDS-FR-CORE-005, BDS-FR-QRY-008), SERVFAIL (per BDS-FR-QRY-021, BDS-FR-QRY-022), NOTAUTH (per BDS-FR-TSIG-013), and any other response not falling into the authoritative-positive, authoritative-negative, or recognised CHAOS self-identification categories above — the AA bit MUST be set to 0.
 *Source.* RFC 1034 §4.3.1; RFC 1035 §4.1.1; defensive interpretation for error categories not explicitly addressed by RFC 1035.
 *Verification.* Wire-format inspection across answer categories including referrals, REFUSED, FORMERR, NOTIMP, SERVFAIL, and NOTAUTH responses.
 
@@ -670,7 +673,7 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Note.* RRSIG records are handled by DNSSEC-specific rules: each RRSIG covers an RRset identified by its Type Covered field, and multiple RRSIG records at the same owner name may cover different RRsets. They are therefore matched to the covered RRsets per BDS-FR-DNSSEC-003 rather than treated as one ordinary owner/class/type RRset. The 16-bit DNS message section counts and TCP message length do not impose a 65,535-member zone-storage limit. An RRset too large for an ordinary UDP response is reported with TC = 1; if the complete response cannot be represented in one DNS-over-TCP message, the server returns SERVFAIL rather than emitting a partial positive answer.
 *Verification.* Lookup tests confirming RRset integrity in responses, including responses near the UDP message size boundary (see §4.11 for EDNS interactions); publication and AXFR tests above 65,535 members in one RRset; UDP truncation and TCP failure tests for an RRset beyond one-message capacity; plus DNSSEC tests confirming RRSIG selection by Type Covered.
 
-**BDS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency.
+**BDS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency. On transfer ingestion, a received TTL whose most significant bit is 1 MUST be treated as zero in its entirety per RFC 2181 §8 before RRset TTL normalization.
 *Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.
 *Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows the RFC 4035 §2.2 exception: RRSIG records do not form ordinary RRsets, and their TTL values at a common owner name do not follow normal RRset TTL rules. RFC 4034 §3.1.4 supplies the covered-RRset Original TTL field used by validators.
 *Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection; DNSSEC transfer/serving tests with RRSIG records covering RRsets with different TTLs at the same owner name.
@@ -780,18 +783,18 @@ This procedure produces a stable, predictable selection for a given zone state, 
 
 ### Additional section composition
 
-**BDS-FR-QRY-017.** Where an NS RRset is included in the authority or answer section of a response, and any NS target name falls within a zone served by this server, the server MUST include the target's A and AAAA RRsets in the additional section, subject to the message-size constraints of §4.11.
-*Source.* RFC 1034 §6.2; RFC 1035 §6.2.4, §6.3.
-*Verification.* Lookup tests requiring glue, including referrals to delegations within and outside served zones.
+**BDS-FR-QRY-017.** Where a delegation NS RRset is included in a referral, the server MUST include every available A and AAAA RRset whose NS target is in-domain beneath that delegation. It SHOULD also include available sibling glue whose NS target lies elsewhere within the served parent zone, including sibling glue in root referrals. Where an NS RRset is included in an authoritative answer, available in-zone target A and AAAA RRsets MUST be included. All such inclusion remains subject to the message-size constraints of §4.11.
+*Source.* RFC 1034 §6.2; RFC 1035 §6.2.4, §6.3; RFC 9471 §3 and §4.
+*Verification.* Lookup tests requiring in-domain and sibling glue, including root-zone referrals and delegations within and outside served zones.
 
 **BDS-FR-QRY-018.** Where an MX, SRV, or NAPTR record is included in the answer section of a response and the target name (EXCHANGE for MX, TARGET for SRV, REPLACEMENT for NAPTR) falls within a served zone, the server MUST include the target's A and AAAA RRsets in the additional section, subject to message-size constraints.
 *Source.* RFC 1034 §3.3.9; RFC 2782; RFC 3403.
 *Note.* For NAPTR, the REPLACEMENT field is only meaningful for further DNS resolution where the FLAGS indicate continuation; the additional-section inclusion is unconditional on the target being in a served zone and a valid name.
 *Verification.* Lookup tests.
 
-**BDS-FR-QRY-019.** Where SVCB or HTTPS records are included in the answer section and contain a TargetName falling within a served zone, the server MUST include the TargetName's A and AAAA RRsets in the additional section in accordance with RFC 9460 §5, subject to message-size constraints.
-*Source.* RFC 9460 §5.
-*Verification.* Lookup tests with SVCB and HTTPS records in both AliasMode and ServiceMode.
+**BDS-FR-QRY-019.** Where SVCB or HTTPS ServiceMode records are included in the answer section and contain a TargetName falling within a served zone, the server MUST include the effective TargetName's A and AAAA RRsets and SHOULD include the corresponding target SVCB or HTTPS RRset in the additional section in accordance with RFC 9460 §4.1, §4.3, and §5, subject to message-size constraints. For a DO=1 query, every included target RRset MUST be accompanied by its covering RRSIG where available. A ServiceMode TargetName of `.` denotes the record's effective owner name, including the synthesized QNAME for a wildcard answer. AliasMode SvcParams are preserved but ignored by processing as required by RFC 9460 §2.4.2.
+*Source.* RFC 9460 §4.1, §4.3, and §5; RFC 4035 §3.1.1.
+*Verification.* Lookup tests with SVCB and HTTPS records in both AliasMode and ServiceMode, including target service RRsets and DO=1 covering RRSIGs.
 
 **BDS-FR-QRY-020.** The server MUST NOT include in any section of a response a record sourced from outside the in-memory zone store of served zones. The absence of any non-authoritative cache (BDS-INV-001, BDS-INV-002) is the structural mechanism by which this requirement holds; this requirement records the behavioural consequence.
 *Source.* BDS-INV-001; RFC 1034 §6.2.
@@ -990,7 +993,7 @@ The area code **AXFR** is allocated.
 
 ### Response message handling
 
-**BDS-FR-AXFR-004.** The server MUST process the AXFR response as a sequence of one or more DNS messages received in order on the TCP connection. Message boundaries within the response stream have no semantic significance for record content; records are processed as concatenated across messages.
+**BDS-FR-AXFR-004.** The server MUST process the AXFR response as a sequence of one or more DNS messages received in order on the TCP connection. Message boundaries within the response stream have no semantic significance for record content; records are processed as concatenated across messages. Repeated occurrences of the same resource record MUST NOT create duplicate members in the published RRset and MUST NOT by themselves cause transfer rejection.
 *Source.* RFC 5936 §2.2, §3.1; RFC 7766 §8.
 *Verification.* AXFR tests with primaries that vary the number of messages per response (single message, many small messages, near-maximum-sized messages).
 
@@ -1011,9 +1014,9 @@ The area code **AXFR** is allocated.
 *Source.* RFC 5936 §2.2.
 *Verification.* AXFR tests with various zone sizes; terminating SOA detection.
 
-**BDS-FR-AXFR-009.** The terminating SOA record MUST be bit-for-bit identical to the initial SOA record in owner name, class, type, TTL, and RDATA. Any difference MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
-*Source.* RFC 5936 §2.2; defensive interpretation against partial-update propagation.
-*Verification.* AXFR tests with deliberately mismatched first and last SOAs.
+**BDS-FR-AXFR-009.** The terminating SOA record MUST be semantically identical to the initial SOA record in owner name, class, type, TTL, and RDATA. Owner name, MNAME, and RNAME comparison MUST be case-insensitive per RFC 4343; all non-name fields MUST compare exactly. Any semantic difference MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+*Source.* RFC 5936 §2.2; RFC 4343; defensive interpretation against partial-update propagation.
+*Verification.* AXFR tests with deliberately mismatched first and last SOAs and with case-only variants in owner, MNAME, and RNAME.
 
 **BDS-FR-AXFR-010.** No SOA record other than the initial SOA and the terminating SOA MUST appear in the AXFR response stream. Receipt of any additional SOA record MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
 *Source.* RFC 5936 §2.2, §3.1.
@@ -1124,9 +1127,9 @@ The area code **IXFR** is allocated.
 *Note.* Inbound IXFR queries are not in scope (BDS-NEG-005 prohibits outbound transfer serving); this requirement applies only to outbound IXFR queries originated by this server toward configured primaries.
 *Verification.* Connection-layer inspection during IXFR initiation; verify TCP-only behaviour. Code review confirming no UDP IXFR code path exists.
 
-**BDS-FR-IXFR-002.** TCP IXFR sessions MUST be conducted under the same connection-handling requirements as AXFR sessions specified in BDS-FR-AXFR-003 and the same multi-message reassembly requirements specified in BDS-FR-AXFR-004 and BDS-FR-AXFR-005.
-*Source.* RFC 1995; RFC 5936; RFC 7766.
-*Verification.* TCP-layer behavioural tests parallel to those used for AXFR.
+**BDS-FR-IXFR-002.** TCP IXFR sessions MUST be conducted under the same connection-handling requirements as AXFR sessions specified in BDS-FR-AXFR-003 and the same multi-message reassembly requirements specified in BDS-FR-AXFR-004 and BDS-FR-AXFR-005. For an AXFR-format fallback split across multiple messages, the first response message MUST contain the echoed IXFR Question; each subsequent message MAY use QDCOUNT 0 or 1, and a repeated Question MUST match the originating IXFR query.
+*Source.* RFC 1995; RFC 5936 §2.2.2; RFC 7766.
+*Verification.* TCP-layer behavioural tests parallel to those used for AXFR, including a multi-message IXFR fallback with QDCOUNT 0 after the first response.
 
 **BDS-FR-IXFR-003.** An IXFR query message MUST be constructed with QNAME equal to the zone apex name, QTYPE = 251 (IXFR), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, a QID selected per BDS-FR-SPOOF-001, and the SOA record currently held in the in-memory zone store for the zone placed in the authority section of the query message.
 *Source.* RFC 1995 §3.
@@ -1136,7 +1139,7 @@ The area code **IXFR** is allocated.
 ### Response mode detection
 
 **BDS-FR-IXFR-004.** Upon receipt of the IXFR response, the server MUST determine the response mode by inspection of the answer section per RFC 1995 §4, distinguishing three modes:
-- **Mode 1 (incremental):** the answer section's first record is an SOA, the second record is also an SOA, and the response contains at least one difference sequence terminating in a copy of the first SOA;
+- **Mode 1 (incremental):** the answer section's first record is an SOA, the second record is also an SOA, and the response contains at least one difference sequence followed by a distinct terminal copy of the first SOA;
 - **Mode 2 (full-zone fallback):** the answer section's first record is an SOA, the second record is a non-SOA resource record, and the response is structured as an AXFR-style full zone delivery;
 - **Mode 3 (no update available):** the answer section contains exactly one SOA record, whose serial equals the serial of the SOA sent in the IXFR query.
 
@@ -1160,9 +1163,9 @@ The server MUST apply the deletions and additions of each difference sequence in
 *Source.* RFC 1995 §4.
 *Verification.* IXFR tests with deliberately mismatched starting serials.
 
-**BDS-FR-IXFR-007.** Where a Mode 1 IXFR response contains multiple difference sequences, the "new SOA" of each sequence MUST equal the "old SOA" of the next. The "new SOA" of the final difference sequence MUST equal the response's outer terminating SOA (which in turn equals the response's first SOA). Failure of either chaining condition MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+**BDS-FR-IXFR-007.** Where a Mode 1 IXFR response contains multiple difference sequences, the "new SOA" of each sequence MUST equal the "old SOA" of the next. The "new SOA" of the final difference sequence MUST equal the response's outer SOA, and a distinct final copy of that outer SOA MUST then terminate the IXFR response. A stream that ends after the final add phase without this terminal SOA is incomplete. Failure of either chaining or termination condition MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
 *Source.* RFC 1995 §4.
-*Verification.* IXFR tests with broken chaining.
+*Verification.* IXFR tests with broken chaining and with the terminal outer SOA omitted.
 
 **BDS-FR-IXFR-008.** Within each difference sequence, the server MUST verify that every resource record listed for deletion is currently present in the working zone state at the time the deletion is applied. A deletion of an absent record MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
 *Source.* RFC 1995 §4 (consistency requirement, defensive interpretation).
@@ -1359,9 +1362,9 @@ The area code **TSIG** is allocated.
 *Rationale.* These algorithms are part of the HMAC-SHA family and add negligible implementation complexity once SHA-256 is supported; their inclusion future-proofs the server against operators choosing stronger algorithms.
 *Verification.* Cryptographic test vectors per RFC 4231.
 
-**BDS-FR-TSIG-004.** The server MUST NOT implement the HMAC-MD5 algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). Where a received message bears a TSIG record carrying this algorithm name, the server MUST respond per BDS-FR-TSIG-015 with a BADALG TSIG error (error code 21).
+**BDS-FR-TSIG-004.** The server MUST NOT implement the HMAC-MD5 algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). An otherwise well-formed request naming HMAC-MD5 or another unsupported TSIG algorithm MUST receive the unsigned BADKEY response specified by BDS-FR-TSIG-013, echoing the received algorithm name. BoronDNS MUST NOT emit BADALG for request verification; RFC 8945 §5.2 uses BADKEY when the key or algorithm is unknown.
 *Source.* RFC 8945 §6 ("hmac-md5 MUST NOT be used by new implementations").
-*Verification.* Reception tests with HMAC-MD5-signed messages; verify BADALG response.
+*Verification.* Reception tests with HMAC-MD5 and unknown algorithm names; verify unsigned BADKEY and exact algorithm-name echo.
 
 ### Key configuration and storage
 
@@ -1379,15 +1382,15 @@ The area code **TSIG** is allocated.
 *Source.* RFC 8945 §5.2.
 *Verification.* Conformance tests with TSIG records in non-final positions and with duplicate TSIG records.
 
-**BDS-FR-TSIG-008.** Upon detection of a TSIG record in a received message, the server MUST perform verification in the following order. The first check to fail terminates verification and produces the corresponding error response per BDS-FR-TSIG-015:
+**BDS-FR-TSIG-008.** Upon detection of a TSIG record in a received message, the server MUST perform verification in the following order. The first check to fail terminates verification and produces the corresponding response per BDS-FR-TSIG-013:
 - (a) Locate the matching key by the TSIG record's owner name; absence of a matching key produces BADKEY (error code 17).
 - (b) Verify that the algorithm name in the TSIG RDATA matches the algorithm configured for the key; mismatch produces BADKEY (per RFC 8945 §5.2.2).
-- (c) Verify that the absolute difference between the server's current time and the time-signed field of the TSIG RDATA does not exceed the fudge value; exceedance produces BADTIME (error code 18).
-- (d) Compute the expected MAC over the message — with the TSIG record removed and the header ID field temporarily restored to the original-ID field of the TSIG RDATA — using the configured secret and algorithm.
-- (e) Compare the computed MAC with the received MAC; mismatch produces BADSIG (error code 16).
+- (c) Validate the protocol MAC-length bounds, then compute and compare the expected MAC over the message — with the TSIG record removed and the header ID field temporarily restored to the original-ID field of the TSIG RDATA — using the configured secret and algorithm. A mismatch produces BADSIG (error code 16).
+- (d) Only after successful MAC authentication, verify that the absolute difference between the server's current time and the Time Signed field does not exceed Fudge; exceedance produces BADTIME (error code 18).
+- (e) Validate request-only fields: Error MUST be zero, while Other Data is treated as opaque authenticated input.
 
-A message is considered authenticated only when all five checks pass.
-*Source.* RFC 8945 §5.4.
+A message is considered authenticated only when all checks pass. Signed TSIG error responses received from a peer MUST likewise be authenticated before their Error field is acted upon.
+*Source.* RFC 8945 §§5.2–5.4.
 *Verification.* Tests injecting failures at each check stage.
 
 **BDS-FR-TSIG-009.** MAC comparison during TSIG verification MUST be performed using a constant-time comparison function that does not leak timing information about the position of any byte mismatch.
@@ -1419,18 +1422,22 @@ A message is considered authenticated only when all five checks pass.
 
 ### Error responses
 
-**BDS-FR-TSIG-013.** When the server detects a TSIG verification failure on an inbound message and the source is one to which a response is appropriate (i.e., an authorised primary or notifier per §4.6, §4.7, or §4.8 — not an unauthorised source under BDS-FR-NOTIFY-004, which is silently discarded), the server MUST respond per RFC 8945 §5.2.2 with:
+**BDS-FR-TSIG-013.** When the server detects a TSIG verification failure on an inbound message and the source is one to which a response is appropriate (i.e., not an unauthorised source under BDS-FR-NOTIFY-004, which is silently discarded), the server MUST respond per RFC 8945 §5.2.2 with:
 - RCODE = 9 (NOTAUTH);
-- a TSIG record in the response's additional section carrying the appropriate error code in its error field;
-- for BADTIME errors, the server's current time included in the "other data" field of the TSIG record (to allow the remote side to detect and resolve the clock skew);
-- for BADKEY, BADSIG, BADALG, and BADTRUNC errors, the TSIG record's MAC field MAY be zero-length, since the key in question cannot be relied upon as a basis for a verifiable response.
+- BADKEY for an unknown key or unsupported/mismatched algorithm, returned as an unsigned zero-MAC TSIG that echoes the received key and algorithm names;
+- BADSIG for an authentication failure, returned as an unsigned zero-MAC TSIG;
+- BADTIME only after successful authentication, returned with a valid response MAC, the request's Time Signed and Fudge echoed in the response TSIG variables, and the server's current time encoded as the six-octet Other Data value;
+- BADTRUNC, if a configured local minimum rejects an otherwise protocol-valid truncated MAC, returned with a valid response MAC;
+- plain unsigned NOTAUTH without a TSIG RR when a TSIG-required request contained no TSIG and therefore supplied no authenticated TSIG identity.
+
+Structurally malformed TSIG input, including a nonzero request Error or a MAC length outside the protocol bounds, MUST receive FORMERR without a TSIG RR rather than a TSIG extended error.
 
 *Source.* RFC 8945 §5.2.2, §5.4.
 *Verification.* Conformance tests across all TSIG error conditions.
 
 ### MAC truncation
 
-**BDS-FR-TSIG-014.** The server MUST accept TSIG records on inbound messages with MAC sizes within the per-algorithm range specified by RFC 8945 §5.2.2.1 and RFC 4635 §3.1. MACs smaller than the minimum permitted truncation length for the algorithm MUST cause a BADTRUNC TSIG error (error code 22) per BDS-FR-TSIG-013.
+**BDS-FR-TSIG-014.** The server MUST accept TSIG records on inbound messages with MAC sizes within the per-algorithm range specified by RFC 8945 §5.2.2.1 and RFC 4635 §3.1. A MAC longer than the algorithm output or shorter than the RFC protocol minimum is malformed and MUST cause FORMERR. BADTRUNC (error code 22) is reserved for an otherwise protocol-valid truncation that is below a separately configured local acceptance minimum.
 *Source.* RFC 8945 §5.2.2.1; RFC 4635 §3.1.
 *Verification.* Conformance tests with truncated MACs at the minimum permitted size and below.
 
@@ -1440,17 +1447,17 @@ A message is considered authenticated only when all five checks pass.
 
 ### Oversized UDP responses
 
-**BDS-FR-TSIG-016.** Where a TSIG-signed response message would exceed the available UDP message size (the smaller of the inbound EDNS0-advertised buffer size and the server's own configured maximum), the server MUST set the TC bit in the response, omit the TSIG record, and respond with the truncated header — signalling to the remote side to retry the operation over TCP.
+**BDS-FR-TSIG-016.** Where a TSIG-signed response message would exceed the available UDP message size (the smaller of the inbound EDNS0-advertised buffer size and the server's own configured maximum), the server MUST construct a bounded truncated response, set TC = 1, retain the Question, remove complete DNS records as needed, and sign that truncated response. The emitted message, including its TSIG RR, MUST NOT exceed the negotiated ceiling. If even the minimal signed response cannot fit, the server MUST fail closed rather than emit an oversized or unsigned response.
 *Source.* RFC 8945 §5.2.1.
 *Note.* In practice this case is rare for the message types the server signs (NOTIFY responses are small); the requirement is for correctness under boundary conditions.
-*Verification.* Tests with artificially low EDNS0 buffer sizes forcing truncation of signed responses.
+*Verification.* Tests below, exactly at, and above the negotiated boundary, including EDNS Padding that causes only the signed form to exceed the ceiling.
 
 ### Logging
 
 **BDS-FR-TSIG-017.** The server MUST log TSIG events as follows:
 - successful inbound verification: debug level, with at minimum key name and source IP;
 - successful outbound signing: debug level, with at minimum key name and destination IP;
-- any TSIG error (BADKEY, BADSIG, BADTIME, BADALG, BADTRUNC), inbound or outbound: warning level, with at minimum key name, error type, peer IP, message direction, and timestamp.
+- any TSIG error (BADKEY, BADSIG, BADTIME, BADTRUNC, or a received peer error code), inbound or outbound: warning level, with at minimum key name where known, error type, peer IP, message direction, and timestamp.
 
 MAC values, shared secret material, and any other key-derived material MUST NOT appear in any log entry at any level.
 *Source.* Operational requirement; security requirement for key material confidentiality.
@@ -1609,10 +1616,10 @@ The area code **EDNS** is allocated.
 
 ### Padding option (RFC 7830)
 
-**BDS-FR-EDNS-013.** The server MUST recognise the Padding option (option code 12) per RFC 7830 in inbound queries. The server MAY include a Padding option in its response when configured to do so; the padding policy is operator-configurable with a default of no padding applied.
-*Source.* RFC 7830; RFC 8467 (informative).
-*Note.* RFC 7830 specifies padding as discretionary on the responder side. For an authoritative server operating over standard UDP and TCP (without DoT or DoH), padding offers limited privacy benefit beyond what the standard transports provide; padding is more relevant in DoT/DoH paths. Default-off accordingly. If the team subsequently brings DoT or DoH into scope, the default may warrant revisiting.
-*Verification.* Conformance tests with padding configured on and off.
+**BDS-FR-EDNS-013.** The server MUST recognise the Padding option (option code 12) per RFC 7830 in inbound queries. The server MUST NOT include DNS message padding in a response sent over an unencrypted transport. The server MAY include a Padding option only on an authenticated encrypted client-query transport and only when configured to do so. Because this release exposes no encrypted client-query listener, `[limits].edns_padding_block_size` MUST remain 0 and startup MUST reject a nonzero value.
+*Source.* RFC 7830 §3 and §4; RFC 8467 (informative).
+*Note.* XoT encrypts outbound zone transfers, not inbound client queries, so it does not make ordinary UDP/TCP response padding permissible. The response composer nevertheless keeps a transport-gated implementation so an encrypted client-query listener can enable the feature without weakening the plaintext prohibition.
+*Verification.* Plaintext UDP/TCP conformance tests proving a Padding request is recognised but no response padding is emitted; configuration validation proving nonzero padding is rejected while no encrypted query listener exists; isolated encrypted-transport response-composer tests proving configured block alignment.
 
 ### Unknown options
 
@@ -1642,9 +1649,9 @@ The area code **EDNS** is allocated.
 
 **BDS-FR-EDNS-018.** The server MUST support an operator-configurable minimal Extended DNS Errors profile per RFC 8914. The default profile MUST be `off`. When the profile is `minimal`, and the inbound query contained an OPT RR, the response OPT RR MAY include an Extended DNS Error option (option code 15) with no EXTRA-TEXT for the following server-local diagnostic conditions:
 - `Not Ready` (INFO-CODE 14) when the matching zone exists but is not yet ACTIVE, including LOADING and EXPIRED zone-state-machine states;
-- `Unsupported NSEC3 Iterations` (INFO-CODE 27) when NSEC3 denial-of-existence proof records are omitted because the zone's NSEC3 iteration count exceeds the configured `dnssec.nsec3_max_iterations` cap per BDS-FR-DNSSEC-014.
+- `Unsupported NSEC3 Iterations` (INFO-CODE 27) when correct DNSSEC denial-of-existence proof construction is refused because the zone's NSEC3 iteration count exceeds the configured `dnssec.nsec3_max_iterations` cap per BDS-FR-DNSSEC-014.
 
-The EDE option MUST NOT change the base DNS RCODE selected by the underlying response condition. The server MUST NOT emit EDE in responses to non-EDNS queries. If a UDP response must be truncated to fit the applicable payload ceiling, the server MAY omit the EDE option before omitting DNS resource records. RFC 9276 specifies INFO-CODE 27 for validating-resolver handling of unsupported NSEC3 iteration counts; BoronDNS uses that allocated code only as an opt-in authoritative diagnostic for its local proof-omission policy.
+The EDE option MUST NOT change the base DNS RCODE selected by the underlying response condition: NSEC3-cap refusal is SERVFAIL whether EDE is enabled or disabled. The server MUST NOT emit EDE in responses to non-EDNS queries. If a UDP response must be truncated to fit the applicable payload ceiling, the server MAY omit the EDE option before omitting DNS resource records.
 *Source.* RFC 8914 §2, §3, §4; RFC 9276 §3.2, §6.
 *Verification.* Wire-format tests for profile off/on, LOADING-zone SERVFAIL with INFO-CODE 14, NSEC3-over-cap negative response with INFO-CODE 27, non-EDNS omission, and truncation behaviour. *Added in v0.9.*
 
@@ -1811,15 +1818,15 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 ### NSEC3 iteration cap
 
 **BDS-FR-DNSSEC-014.** Where a query against an NSEC3-signed zone requires the server to traverse NSEC3 chain records to compose a negative-existence proof (per BDS-FR-DNSSEC-004 or BDS-FR-DNSSEC-005), and the zone's NSEC3PARAM RDATA specifies an iteration count exceeding a configurable cap (per BDS-IF-CONF-015, default 100 as an BoronDNS compatibility default informed by RFC 9276 Appendix A measurements), the server MUST treat the affected response composition as follows:
-- The negative response itself MUST still be returned per BDS-FR-CORE-022 (NODATA) or BDS-FR-CORE-023 (NXDOMAIN); the request is not refused;
-- The NSEC3 records (and their RRSIGs) that would constitute the denial-of-existence proof MAY be omitted from the response — the response then carries the negative answer without DNSSEC authentication for the negative proof;
-- Where the minimal EDE profile is enabled per BDS-FR-EDNS-018 and the inbound query contained an OPT RR, the response SHOULD include EDE INFO-CODE 27 (`Unsupported NSEC3 Iterations`) without EXTRA-TEXT to make the downgrade observable to diagnostic clients;
+- The server MUST fail closed with RCODE = 2 (SERVFAIL), AA = 0, and no partial NODATA or NXDOMAIN proof response;
+- The answer, authority, and ordinary additional sections MUST be empty; an OPT RR MAY remain for negotiated EDNS metadata;
+- Where the minimal EDE profile is enabled per BDS-FR-EDNS-018 and the inbound query contained an OPT RR, the response SHOULD include EDE INFO-CODE 27 (`Unsupported NSEC3 Iterations`) without EXTRA-TEXT;
 - The server MUST increment the DNSSEC NSEC3-cap metric defined by BDS-NFR-OBS-009 for each affected response. The current Engineering MVP profile deliberately uses a global counter without a `zone` label to avoid high-cardinality metrics under large catalog-zone deployments.
 
 This requirement is a CPU-amplification defence against adversarial or misconfigured zones whose NSEC3PARAM specifies very high iteration counts. RFC 9276 §2.3 explains the poor cost/benefit tradeoff of additional NSEC3 iterations, and RFC 9276 §3.1 recommends an iteration count of 0 for NSEC3 zone publishers. Appendix A records deployment measurements in which treating zones above 100 iterations as insecure was interoperable near RFC publication time; BoronDNS uses 100 as a compatibility default, not as an RFC compliance ceiling. The cap value is configurable to allow operators to accept legacy zones if they are willing to absorb the CPU cost.
 *Source.* RFC 9276 §2.3, §3.1, Appendix A (BCP 236); RFC 5155 §10.3.
-*Note.* The relaxation is bounded to the negative-proof case; positive responses against NSEC3-signed zones do not require chain traversal and are not affected by the cap. Where the operator has expressly configured `nsec3_max_iterations = 0` (or any value below the zone's actual iteration count), the affected zone is served without NSEC3-authenticated negative proofs but otherwise correctly; the cap does not deny service. Engineering MVP evidence records the proof-omission signal before optional EDE emission, so the metric remains observable when `edns.extended_dns_errors = "off"` and EDE INFO-CODE 27 is absent from the response.
-*Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify response composition behaviour, optional EDE emission when enabled, and metric increment. *Added in v0.9.*
+*Note.* Positive responses against NSEC3-signed zones do not require denial-chain traversal and are not affected by the cap. A configured value of 0 therefore permits zero-iteration NSEC3 proofs and makes negative queries requiring higher-iteration proofs fail closed; it does not disable ordinary positive service for the zone. The metric remains observable when `edns.extended_dns_errors = "off"` and EDE INFO-CODE 27 is absent.
+*Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify fail-closed SERVFAIL composition, optional EDE emission when enabled, positive-answer continuity, and metric increment. *Added in v0.9; fail-closed semantics corrected before public beta.*
 
 ## 4.14 RR Type Parsing and Serving
 
@@ -1878,13 +1885,13 @@ The following requirements specify zone-level constraints that derive from RR-ty
 *Source.* RFC 1982 §3.2; RFC 1035 §3.3.13.
 *Verification.* Unit tests across the serial-arithmetic boundary cases (wrap-around, equal, near-2³¹ differences).
 
-**BDS-FR-RR-005.** At any owner name carrying a CNAME RRset, no other RRset of any other type MUST be present, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC support of that name. Transferred zones violating this constraint MUST cause the transfer to be aborted.
+**BDS-FR-RR-005.** At any owner name carrying a CNAME RRset, that RRset MUST contain exactly one distinct canonical target, and no other RRset of any other type MUST be present, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC support of that name. Case-only or repeated encodings of the same target are duplicates, not multiple targets. Transferred zones violating this constraint MUST cause the transfer to be aborted.
 *Source.* RFC 1034 §3.6.2; RFC 2181 §10.1; RFC 4035 (DNSSEC exception).
 *Verification.* Zone-transfer tests with CNAME-and-other-data coexistence at non-DNSSEC names.
 
-**BDS-FR-RR-006.** At any owner name carrying a DNAME RRset, no CNAME RRset MUST be present at that same owner name, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC. Transferred zones violating this constraint MUST cause the transfer to be aborted.
-*Source.* RFC 6672 §2.4.
-*Verification.* Zone-transfer tests with DNAME and CNAME at the same name.
+**BDS-FR-RR-006.** At any owner name carrying a DNAME RRset, no CNAME RRset MUST be present at that same owner name, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC. A DNAME owner below the zone apex MUST NOT also carry an NS RRset because that would place the DNAME at a zone cut. Transferred zones violating either constraint MUST cause the transfer to be aborted.
+*Source.* RFC 6672 §2.3 and §2.4.
+*Verification.* Zone-transfer tests with DNAME and CNAME at the same name and with non-apex DNAME plus NS.
 
 ### RDATA wire-format validation
 
@@ -1905,8 +1912,8 @@ The following observations are not separate requirements but identify points of 
 - **TXT (16).** RDATA is one or more character-string components; the server preserves component boundaries on transfer and serving.
 - **NAPTR (35).** The REPLACEMENT field is a domain name; the REGEXP field is a character string permitted to contain otherwise restricted characters; the server preserves byte content faithfully.
 - **TLSA (52).** Owner names typically have the `_port._proto.name` structure; this is owner-name content, not a parsing constraint on the RR type.
-- **SVCB (64) and HTTPS (65).** SvcParams parsing — the ordered list of `SvcParamKey` / `SvcParamValue` pairs in RDATA — follows RFC 9460 §2.2. The server is required to parse the structure for additional-section inclusion of TargetName under BDS-FR-QRY-019, and to detect AliasMode (SvcPriority = 0) versus ServiceMode (SvcPriority > 0).
-- **RRSIG (46).** The Signer's Name field is in canonical form per RFC 4034 §6.2 (uncompressed, lowercased on the wire for canonical comparison). The "Type Covered" field at RDATA offset 0–1 is the discriminator used in DNSSEC response composition per §4.13.
+- **SVCB (64) and HTTPS (65).** SvcParams parsing — the ordered list of `SvcParamKey` / `SvcParamValue` pairs in RDATA — follows RFC 9460 §2.2. AliasMode parameters are accepted and preserved but ignored. In ServiceMode, TargetName `.` resolves to the record's effective owner for additional-data processing, including wildcard synthesis. Available A, AAAA, and same-type target RRsets are eligible for the Additional section; DO responses include covering RRSIGs.
+- **RRSIG (46).** The Signer's Name field is in canonical form per RFC 4034 §6.2 (uncompressed, lowercased on the wire for canonical comparison). The "Type Covered" field at RDATA offset 0–1 discriminates both DNSSEC response selection and the emitted TTL: each RRSIG TTL is normalized to the TTL of its covered RRset, so RRSIG records at one owner may legitimately carry different TTLs.
 - **NSEC (47).** The "Next Domain Name" field is uncompressed (RFC 4034 §6.2). The Type Bit Maps encoding is per RFC 4034 §4.1.2.
 
 ## 4.15 In-Memory Zone Store
@@ -2228,9 +2235,9 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 
 ### Cryptographic and protocol-option prohibitions
 
-**BDS-NEG-013.** The server MUST NOT implement the HMAC-MD5 TSIG algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). Messages bearing TSIG records with this algorithm name MUST receive a BADALG TSIG error response per BDS-FR-TSIG-004.
+**BDS-NEG-013.** The server MUST NOT implement the HMAC-MD5 TSIG algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). Requests bearing this unsupported algorithm name MUST receive the unsigned BADKEY response specified by BDS-FR-TSIG-004 and BDS-FR-TSIG-013.
 *Enforces.* BDS-FR-TSIG-004; RFC 8945 §6 ("hmac-md5 MUST NOT be used by new implementations").
-*Verification.* Conformance tests with HMAC-MD5-signed messages; verify BADALG response.
+*Verification.* Conformance tests with HMAC-MD5-signed messages; verify unsigned BADKEY response with the received algorithm name echoed.
 
 **BDS-NEG-014.** The server MUST NOT implement the TKEY mechanism (RFC 2930) for dynamic key establishment. Queries with QTYPE = 249 (TKEY) MUST be rejected with RCODE = 1 (FORMERR) per BDS-FR-QRY-009.
 *Enforces.* Appendix C.2; static-configuration invariant for TSIG keys per BDS-FR-TSIG-005.
@@ -2373,9 +2380,9 @@ The area code **PROV** is allocated.
 *Source.* RFC 9432 §3, §4.
 *Verification.* Tests with catalog zones containing valid version=2 properties; tests with absent or non-"2" version properties (expecting rejection); tests with valid and invalid PTR record structures.
 
-**BDS-FR-PROV-006.** The catalog zone itself MUST be subject to SOA-driven refresh (§4.7) and NOTIFY-driven refresh (§4.8) on the same terms as any other zone. Successful catalog refresh MUST trigger reconciliation between the previously applied member-zone set and the newly derived member-zone set. Newly accepted members MUST be added per BDS-FR-PROV-007; members no longer present MUST be removed per BDS-FR-PROV-008.
-*Source.* RFC 9432 §5.1 and §5.3; design integration with §4.16 zone state machine.
-*Verification.* Tests with catalog updates adding and removing member zones; confirm externally observable member-zone lifecycle, query, log, and metric changes.
+**BDS-FR-PROV-006.** The catalog zone itself MUST be subject to SOA-driven refresh (§4.7) and NOTIFY-driven refresh (§4.8) on the same terms as any other zone. Successful catalog refresh MUST trigger reconciliation between the previously applied member-zone set and the newly derived member-zone set. Newly accepted members MUST be added per BDS-FR-PROV-007; members no longer present MUST be removed per BDS-FR-PROV-008. If a member's Unique identifier changes while its PTR target remains the same, the consumer MUST process the change as removal of the old member followed by addition of a new member: transfer-plan, NOTIFY, refresh, and active-snapshot state tied to the old member node MUST be discarded, and the replacement MUST enter LOADING with a new plan generation.
+*Source.* RFC 9432 §5.1, §5.3, and §5.4; design integration with §4.16 zone state machine.
+*Verification.* Tests with catalog updates adding and removing member zones and renaming a member node; confirm externally observable member-zone lifecycle, state reset, query, log, metric, and plan-generation changes.
 
 **BDS-FR-PROV-007.** When a newly accepted catalog member zone is added, the server MUST initiate the standard zone-acquisition pathway per §4.16: the new zone enters the LOADING state, an initial AXFR is attempted against the effective member primary coordinates determined by BDS-FR-PROV-003, and successful AXFR completion transitions the zone to ACTIVE. Failure modes follow the normal zone state machine.
 *Source.* Design integration with §4.16.
@@ -2389,9 +2396,9 @@ The area code **PROV** is allocated.
 *Source.* RFC 9432 §3 and §7; operational separation of provisioning data from served data.
 *Verification.* Functional tests querying the catalog apex and member-property names with `serve_catalog_zone = false` and `true`; verify default REFUSED behavior and opt-in authoritative serving behavior.
 
-**BDS-FR-PROV-010.** Catalog membership reconciliation MUST use only a fully transferred and committed catalog zone version. A failed or partial catalog transfer MUST NOT partially add, remove, or alter member-zone service. The atomicity guarantee of BDS-INV-003 applies independently to catalog membership changes: query handlers MUST observe either the previously applied membership or the newly applied membership, never an intermediate partially reconciled state.
-*Source.* BDS-INV-003; clean architectural separation.
-*Verification.* Tests with deliberately failed catalog transfers confirming no partial membership changes; concurrent query tests during catalog reconciliation.
+**BDS-FR-PROV-010.** Catalog membership reconciliation MUST use only a fully transferred and committed catalog zone version. A failed or partial catalog transfer MUST NOT partially add, remove, or alter member-zone service. The atomicity guarantee of BDS-INV-003 applies independently to catalog membership changes: query handlers MUST observe either the previously applied membership or the newly applied membership, never an intermediate partially reconciled state. Where multiple catalogs list the same member-zone name, the already-applied instance MUST remain authoritative for provisioning and each later clashing instance MUST be ignored per RFC 9432 §5.2; catalog-name ordering MUST NOT replace it. Removal of the accepted instance MUST NOT automatically promote an ignored stale listing. That other catalog must supply a subsequent membership change or be retransferred before its instance can be accepted.
+*Source.* RFC 9432 §5.2 and §5.5; BDS-INV-003; clean architectural separation.
+*Verification.* Tests with deliberately failed catalog transfers confirming no partial membership changes; concurrent query tests during catalog reconciliation; arrival-order tests proving the first-applied instance wins even when a later catalog name sorts earlier; removal tests proving ignored clash state is not automatically promoted.
 
 ### Bootstrap and dependency ordering
 
@@ -2646,9 +2653,9 @@ The following requirements (BDS-NFR-SEC-008 through BDS-NFR-SEC-015) were introd
 
 **BDS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation and clash handling.)* Every candidate member-zone name derived from a catalog zone's PTR records MUST pass the structural validation required by RFC 9432 §4.1 and BDS-FR-PROV-013 before being surfaced to the zone manager per BDS-FR-PROV-007. BoronDNS MUST NOT apply LDH host-name restrictions, blanket IANA Special-Use Domain Name exclusions, or wildcard-label exclusions to catalog member names merely because of their spelling: RFC 9432 §4.1 represents member zones in PTR RDATA so all valid DNS domain names can be represented, and its examples include `example.com.`, `example.net.`, and `example.org.`. IANA Special-Use names and their subdomains are special-purpose names, not malformed DNS names.
 
-If a structurally valid incoming member zone name clashes with an existing zone name from a configured catalog zone, another already-applied catalog member, or an otherwise configured zone, BoronDNS MUST ignore the incoming instance and SHOULD log an error per RFC 9432 §5.2. Existing configured zones and previously applied catalog-owned zones MUST NOT be replaced by the clashing incoming instance. Optional operator allow-lists or deny-lists for admissible catalog member names may be introduced as explicit future configuration, but no implicit special-use or wildcard rejection is part of the default RFC 9432 profile.
+If a structurally valid incoming member zone name clashes with an existing zone name from a configured catalog zone, another already-applied catalog member, or an otherwise configured zone, BoronDNS MUST ignore the incoming instance and SHOULD log an error per RFC 9432 §5.2. Existing configured zones and previously applied catalog-owned zones MUST NOT be replaced by the clashing incoming instance, regardless of canonical catalog-name ordering. Removing the accepted instance MUST NOT promote a previously ignored stale listing without a new change from that catalog. Optional operator allow-lists or deny-lists for admissible catalog member names may be introduced as explicit future configuration, but no implicit special-use or wildcard rejection is part of the default RFC 9432 profile.
 *Source.* RFC 9432 §4.1, §5.2, §7; IANA Special-Use Domain Names registry; RFC 2606; RFC 6761.
-*Verification.* Tests with malformed member PTR structures/RDATA and duplicate PTR targets; tests proving RFC 9432 example member names and IANA Special-Use names are structurally accepted; tests proving configured-zone/catalog-zone name clashes are ignored with an operator-visible error. *Updated in v0.9.1.*
+*Verification.* Tests with malformed member PTR structures/RDATA and duplicate PTR targets; tests proving RFC 9432 example member names and IANA Special-Use names are structurally accepted; tests proving configured-zone/catalog-zone name clashes are ignored with an operator-visible error; multi-catalog tests proving first-applied ownership and no stale automatic takeover. *Updated in v0.9.1.*
 
 ## 5.4 Maintainability
 
@@ -2818,7 +2825,7 @@ Catalog zones and their member zones MUST also appear in the ordinary zone-state
 *Source.* Operational requirement for RFC 9432 membership visibility; standard practice for operationally significant subsystems.
 *Verification.* Endpoint inspection with catalog membership present and absent; functional tests covering `managed="true"` and `managed="false"` samples; inspection confirming catalog-managed zones appear in ordinary zone and transfer metrics after insertion into the zone-state machine.
 
-**BDS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses where NSEC3 denial-of-existence proof records were omitted because the configured iteration cap was exceeded. The Engineering MVP implementation metric is `borondns_dnssec_nsec3_iterations_exceed_cap_total`. This counter intentionally has no `zone` label in the current profile: the diagnostic signal is global, and per-zone attribution is provided by retained query artifacts rather than high-cardinality runtime metrics. The counter is driven by the lookup-time proof-omission observation, not by serialized EDE options, so affected responses are counted even when `edns.extended_dns_errors = "off"`.
+**BDS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses that fail closed because the configured NSEC3 iteration cap prevents correct denial-proof construction. The Engineering MVP implementation metric is `borondns_dnssec_nsec3_iterations_exceed_cap_total`. This counter intentionally has no `zone` label in the current profile: the diagnostic signal is global, and per-zone attribution is provided by retained query artifacts rather than high-cardinality runtime metrics. The counter is driven by the lookup-time cap observation, not by serialized EDE options, so affected SERVFAIL responses are counted even when `edns.extended_dns_errors = "off"`.
 *Source.* BDS-FR-DNSSEC-014; BDS-FR-EDNS-018.
 *Verification.* Metric endpoint inspection after queries that exceed the configured NSEC3 iteration cap with `edns.extended_dns_errors = "off"` and with the minimal EDE profile enabled. *Added in v0.9.*
 
@@ -3058,7 +3065,7 @@ The interaction with TSIG and XoT key material is by reference. Startup keys can
 
 **BDS-IF-CONF-015.** The server MUST accept a configurable maximum NSEC3 iteration count (per BDS-FR-DNSSEC-014) under the `[dnssec]` configuration subtree or equivalent. The parameter name MUST be `nsec3_max_iterations`, an unsigned integer in the inclusive range 0–65535. The default value MUST be 100, an BoronDNS compatibility default informed by RFC 9276 Appendix A deployment measurements for legacy NSEC3 zones. Where the configured value exceeds 100, the configuration warning `nsec3_iterations_large` MUST be emitted at startup per BDS-IF-CONF-008, recording the configured value, the project compatibility default, and the RFC 9276 §3.1 recommendation of zero iterations for NSEC3 zone publishers.
 *Source.* BDS-FR-DNSSEC-014; RFC 9276 §2.3, §3.1, Appendix A.
-*Note.* A value of 0 means that NSEC3 chain proofs are omitted from negative responses for any zone whose NSEC3PARAM iteration count is greater than zero — i.e., the strictest setting, consistent with RFC 9276's recommendation that new NSEC3 deployments use zero iterations.
+*Note.* A value of 0 means that negative queries requiring an NSEC3 chain with a nonzero iteration count fail closed with SERVFAIL; positive responses remain available. This is the strictest setting and is consistent with RFC 9276's recommendation that new NSEC3 deployments use zero iterations.
 *Verification.* Configuration round-trip tests across the range; warning emission test for values above 100; tests for the boundary values (0, 100, 101). *Added in v0.9.*
 
 **BDS-IF-CONF-016.** The Engineering MVP configuration MUST NOT provide a parameter that relaxes the strict out-of-zone owner-name rejection of BDS-FR-AXFR-012. Unknown transfer-owner relaxation keys, including a `[transfer]` key named `accept_out_of_zone_glue`, MUST be rejected by configuration validation per BDS-IF-CONF-005 rather than silently accepted. Future support for external glue would require a specified published-zone representation and end-to-end transfer-to-serving tests before any configuration key is exposed.
@@ -3242,7 +3249,7 @@ The area code **PROC** is allocated.
 | 74 | `EX_IOERR` | I/O error reading the configuration file or secret files referenced by it. |
 | 78 | `EX_CONFIG` | Configuration file unparseable (syntax error in TOML, file not found, or file unreadable due to permissions): distinct from `EX_CONFIG_INVALID` (which is syntactically valid but semantically incorrect). |
 
-Where a graceful path of execution leads to a deliberate non-zero exit (e.g., `--validate-config` finding an invalid configuration), the appropriate symbolic exit code MUST be used per the table above. The server MUST NOT use exit codes outside this enumeration for controlled exits. Uncaught Rust panics are implementation bugs, not graceful exit paths; panic prevention and task-level panic isolation are governed by BDS-INV-006.
+Where a graceful path of execution leads to a deliberate non-zero exit (e.g., `--validate-config` finding an invalid configuration), the appropriate symbolic exit code MUST be used per the table above. The server MUST NOT use exit codes outside this enumeration for controlled exits. Uncaught Rust panics are process-fatal implementation bugs in the abort-on-panic release profile; panic prevention and external service-manager recovery are governed by BDS-INV-006.
 
 The exit code MUST be observable by orchestrators (Kubernetes container restart policy, systemd `Restart=` directives) and used to inform appropriate operator action: `EX_CONFIG_INVALID` and `EX_CONFIG` typically warrant configuration review rather than restart; `EX_OSERR` and `EX_CANTCREAT` typically warrant environment review (privileges, port conflicts); any future controlled `EX_SOFTWARE` path would warrant bug reporting.
 *Source.* BSD `sysexits.h` (System V/BSD UNIX programming convention); operational requirement for orchestrator-friendly process exit semantics; resolution of v0.4 audit finding about exit code convention.
@@ -3912,7 +3919,7 @@ The entry is preserved in this register, with this updated status, per the ident
 
 *Description.* The EDE (Extended DNS Errors) EDNS option carries fine-grained error-condition information from the responder to the requestor, complementing the coarse-grained RCODE field. Defined error codes cover conditions such as "Stale Answer" (RFC 8767), "DNSSEC Bogus", "DNSKEY Missing", "Stale NXDomain", "Filtered", and many others.
 
-*Current scope.* Partially implemented as a bounded, operator-enabled diagnostic profile in BDS-FR-EDNS-018. The current profile emits only INFO-CODE 14 (`Not Ready`) for zone-state-machine not-ready responses and INFO-CODE 27 (`Unsupported NSEC3 Iterations`) for NSEC3 cap downgrades. It deliberately omits EXTRA-TEXT and does not expose policy, filtering, validator, stale-cache, or recursive-resolution EDE mappings that are outside this secondary-only authoritative scope.
+*Current scope.* Partially implemented as a bounded, operator-enabled diagnostic profile in BDS-FR-EDNS-018. The current profile emits only INFO-CODE 14 (`Not Ready`) for zone-state-machine not-ready responses and INFO-CODE 27 (`Unsupported NSEC3 Iterations`) for fail-closed NSEC3-cap SERVFAIL responses. It deliberately omits EXTRA-TEXT and does not expose policy, filtering, validator, stale-cache, or recursive-resolution EDE mappings that are outside this secondary-only authoritative scope.
 
 *Enforcement.* Implemented only for BDS-FR-EDNS-018. Other RFC 8914 codes remain out of current scope unless explicitly added by a future requirement.
 
@@ -4047,7 +4054,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **Authoritative server.** A DNS server holding authoritative data for one or more zones. This server is authoritative-only (never a resolver, never a forwarder).
 
-**BADALG.** TSIG error code 21 (RFC 8945 §4.3). Returned when the TSIG algorithm name is unsupported.
+**BADALG.** TSIG error code 21. BoronDNS does not emit BADALG while verifying requests; RFC 8945 §5.2 maps an unknown key or algorithm to BADKEY.
 
 **BADCOOKIE.** DNS extended RCODE 23 (RFC 7873 §5.2.3). Returned by a server operating under the "strict" cookies policy when a client query lacks a valid Server Cookie. The response carries a freshly computed Server Cookie that the client uses on retry. See §4.19 (BDS-FR-COOKIE-006).
 
@@ -4057,7 +4064,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **BADTIME.** TSIG error code 18. Returned when the time-signed field deviates from current time by more than the fudge value.
 
-**BADTRUNC.** TSIG error code 22 (RFC 8945; RFC 4635). Returned when the MAC truncation is below the algorithm's minimum.
+**BADTRUNC.** TSIG error code 22 (RFC 8945; RFC 4635). Reserved for an otherwise protocol-valid truncated MAC that is below a receiver's configured local acceptance minimum; protocol-invalid MAC lengths produce FORMERR.
 
 **BADVERS.** EDNS extended error code 16 (RFC 6891 §6.1.3). Returned when an inbound OPT RR carries an EDNS VERSION the server does not support.
 
