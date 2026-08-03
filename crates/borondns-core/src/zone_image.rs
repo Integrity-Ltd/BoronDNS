@@ -1216,7 +1216,8 @@ impl ZoneImage {
         if self.dnssec_denial_broken
             && (nodata_candidate || nxdomain_candidate || wildcard_candidate)
         {
-            return plan.into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
+            return plan;
         }
         if !referral_candidate
             && !self.dnssec_rrsig_augmentation_possible
@@ -3353,7 +3354,7 @@ impl ZoneImage {
             }
         }
         if self.dnssec_denial_broken {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
         } else if self.nsec3_denial_active() {
             let owner_wire = self.blob(&self.names, rrset.owner_wire);
             self.add_nsec3_unsigned_referral_proof(owner_wire, rrset.class(), plan, state);
@@ -3368,11 +3369,11 @@ impl ZoneImage {
         state: &mut ZoneImageDnssecState,
     ) {
         let Ok((delegation, consumed)) = DomainName::parse(delegation_wire, 0) else {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
             return;
         };
         if consumed != delegation_wire.len() {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
             return;
         }
 
@@ -3386,20 +3387,20 @@ impl ZoneImage {
             if self.selected_nsec3_rrset_has_types(exact, true, false) {
                 self.push_authority_rrset(plan, exact, state);
             } else {
-                *plan = plan.clone().into_dnssec_proof_servfail();
+                plan.set_dnssec_proof_servfail();
             }
             return;
         }
 
         let Some((label_ranges, consumed)) = canonical_wire_label_ranges(delegation_wire) else {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
             return;
         };
         let relative_labels = delegation
             .label_count()
             .saturating_sub(self.origin.label_count());
         if consumed != delegation_wire.len() || relative_labels == 0 {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
             return;
         }
 
@@ -3441,7 +3442,7 @@ impl ZoneImage {
             break;
         }
 
-        *plan = plan.clone().into_dnssec_proof_servfail();
+        plan.set_dnssec_proof_servfail();
     }
 
     fn selected_nsec3_rrset_is_optout(&self, rrset_id: ZoneImageRrsetId) -> bool {
@@ -3499,7 +3500,7 @@ impl ZoneImage {
             {
                 self.push_authority_rrset(plan, nsec, state);
             } else {
-                *plan = plan.clone().into_dnssec_proof_servfail();
+                plan.set_dnssec_proof_servfail();
             }
         } else if self.nsec3_denial_active() {
             if let Some(nsec3) = self.nsec3_exact_rrset_for_name(
@@ -3511,7 +3512,7 @@ impl ZoneImage {
             ) {
                 self.push_authority_rrset(plan, nsec3, state);
             } else {
-                *plan = plan.clone().into_dnssec_proof_servfail();
+                plan.set_dnssec_proof_servfail();
             }
         }
     }
@@ -3583,11 +3584,11 @@ impl ZoneImage {
                     self.push_authority_rrset(plan, covering_next_closer, state);
                     self.push_authority_rrset(plan, covering_wildcard, state);
                 } else {
-                    *plan = plan.clone().into_dnssec_proof_servfail();
+                    plan.set_dnssec_proof_servfail();
                 }
             }
         } else if has_nsec3_ranges {
-            *plan = plan.clone().into_dnssec_proof_servfail();
+            plan.set_dnssec_proof_servfail();
         }
     }
 
@@ -3653,10 +3654,10 @@ impl ZoneImage {
                     self.push_authority_rrset(plan, covering_next_closer, state);
                     self.push_authority_rrset(plan, exact_wildcard, state);
                 } else {
-                    *plan = plan.clone().into_dnssec_proof_servfail();
+                    plan.set_dnssec_proof_servfail();
                 }
             } else {
-                *plan = plan.clone().into_dnssec_proof_servfail();
+                plan.set_dnssec_proof_servfail();
             }
         }
     }
@@ -3699,7 +3700,7 @@ impl ZoneImage {
             if let Some(covering_next_closer) = covering_next_closer {
                 self.push_authority_rrset(plan, covering_next_closer, state);
             } else {
-                *plan = plan.clone().into_dnssec_proof_servfail();
+                plan.set_dnssec_proof_servfail();
             }
         }
     }
@@ -4644,6 +4645,11 @@ impl ZoneImageLookupPlan {
     }
 
     pub(crate) fn into_servfail(mut self, termination: LookupTermination) -> Self {
+        self.set_servfail(termination);
+        self
+    }
+
+    pub(crate) fn set_servfail(&mut self, termination: LookupTermination) {
         self.rcode = Rcode::ServFail;
         self.set_flag(PLAN_FLAG_AUTHORITATIVE, true);
         self.termination = Some(termination);
@@ -4664,13 +4670,11 @@ impl ZoneImageLookupPlan {
         self.selected_additionals_with_owner.clear();
         self.continuation = None;
         self.denial_context = None;
-        self
     }
 
-    fn into_dnssec_proof_servfail(mut self) -> Self {
-        self = self.into_servfail(LookupTermination::MalformedDname);
+    fn set_dnssec_proof_servfail(&mut self) {
+        self.set_servfail(LookupTermination::MalformedDname);
         self.termination = None;
-        self
     }
 
     fn with_indirection_continuation(mut self, target: &DomainName, remaining: usize) -> Self {

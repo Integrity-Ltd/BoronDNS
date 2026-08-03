@@ -1231,6 +1231,26 @@ fn merge_refresh_request(existing: &mut RefreshRequest, mut incoming: RefreshReq
     existing.reason = incoming.reason;
 }
 
+// Catalog/refresh lock hierarchy:
+//
+// 1. `CatalogManager::reconcile_lock` is the outer catalog mutation lock. While
+//    it is held, the membership/desired-membership/member-owner mutexes are
+//    acquired one at a time and released before another such mutex is taken.
+//    The guard is dropped before awaiting a refresh-queue send.
+// 2. A zone refresh takes the per-zone `AsyncMutex` before `statuses`. The
+//    `ownerships` mutex is held only long enough to obtain that per-zone lock;
+//    it is never held while waiting for the per-zone lock or taking `statuses`.
+// 3. NOTIFY admission may take `statuses` and then `last_signal_by_zone` for
+//    its synchronous reservation/enqueue transaction. No path may acquire
+//    `statuses` while holding `last_signal_by_zone`; catalog removal drops the
+//    status lock before removing a NOTIFY reservation.
+// 4. The catalog's notify/IXFR option mutexes may call into their contained
+//    tracker/registry while held. Their inner locks never acquire the option
+//    mutexes, so that direction must not be reversed.
+//
+// Ordinary `std::sync::Mutex` guards must never cross an `.await` point. New
+// nested acquisitions must extend this order explicitly rather than relying on
+// call-site inspection.
 #[derive(Debug, Clone)]
 struct CatalogManager {
     catalogs_by_key: Arc<HashMap<String, CatalogRuntimeConfig>>,

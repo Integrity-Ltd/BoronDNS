@@ -2665,9 +2665,9 @@ The area code **MAINT** is allocated.
 *Source.* Project maintainability target.
 *Verification.* Source-line measurement at release time using `tokei` or equivalent; release notes inspection.
 
-**BDS-NFR-MAINT-002.** The codebase MUST be organised into between 8 and 20 clearly-named, single-purpose modules at the top level of the crate hierarchy. Each major functional area of §4 MUST be mappable to one or more identifiable modules. The mapping is recorded in the Architecture Document.
+**BDS-NFR-MAINT-002.** The codebase MUST be organised into clearly named, single-purpose production modules with explicit review boundaries. Every first-party production Rust source module MUST appear in the Architecture Document's module map, and every mapped module MUST correspond to current production source. Each major functional area of §4 MUST be mappable to one or more identifiable modules; support-tool modules MUST be labelled separately so they do not silently expand the server's protocol scope. The release process MUST record the discovered module count, but the count is an inventory signal rather than an acceptance range: splitting or merging modules is justified by locality of behavior, ownership boundaries, and reviewability rather than an arbitrary numeric target.
 *Source.* Maintainability and auditability design principle.
-*Verification.* Code review against the documented module mapping at release time.
+*Verification.* A release-time audit discovers first-party production Rust source independently, excludes test-only modules, fails on either missing or stale Architecture Document map entries, records the resulting module count, and confirms the §4 functional-area mapping by code review.
 
 **BDS-NFR-MAINT-003.** Every `unsafe` block in first-party Rust code MUST carry a comment stating the reason `unsafe` is necessary and the invariants on which its soundness depends, per BDS-INV-006.
 *Source.* BDS-INV-006.

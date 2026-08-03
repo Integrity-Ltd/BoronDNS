@@ -1564,7 +1564,7 @@ fn try_answer_across_published_zone_images(
     loop {
         if !visited_names.insert(target.canonical_key()) {
             if let Some((_, plan)) = child_stages.last_mut() {
-                *plan = plan.clone().into_servfail(LookupTermination::CnameLoop);
+                plan.set_servfail(LookupTermination::CnameLoop);
             } else {
                 return Some(ZoneImageAnswerAttempt::Failure(
                     ZoneImageServeFailureReason::ResponseBuildFailed,

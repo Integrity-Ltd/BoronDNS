@@ -14,9 +14,9 @@ release artifacts remain tracked in `docs/mvp-gap-register.md`.
 ## Module Organisation
 
 The current first-party Rust source is organised into release-reviewed modules
-at the crate/file boundary across the BoronDNS core, server, CLI, eBPF, and
-BoronGun support-tool crates. This satisfies the `BDS-NFR-MAINT-002`
-module-count target shape for the current implementation. The server runtime
+at the crate/file boundary across the BoronDNS core, server, CLI, eBPF,
+BoronGun, and BoronGen support-tool crates. This satisfies the `BDS-NFR-MAINT-002`
+module-map requirement for the current implementation. The server runtime
 has been decomposed into transport, transfer, metrics, configuration, status,
 shutdown, rate-limit, cookie, and support modules; `crates/borondns-server/src/lib.rs`
 now remains the orchestration home for catalog reconciliation, refresh
@@ -60,17 +60,25 @@ accepted.
 | `crates/borondns-server/src/resource_limits.rs` | `BDS-NFR-RES-004`, OS startup validation, and the audited `BDS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for `RLIMIT_NOFILE` inspection; feeds runtime startup validation. |
 | `crates/borondns-server/build.rs` | Build metadata for `BDS-IF-PROC-002`, `BDS-NFR-OBS-006`, release traceability, and metrics labels | Embeds commit, Rust compiler version, and build timestamp labels without changing runtime behavior. |
 | `crates/borondns-cli/src/main.rs` | `BDS-IF-PROC`, CLI mode handling, bootstrap logging, config validation/dump/example output, release evidence entrypoints | Clap-derived CLI, SRS exit-code mapping, startup logging, config mode dispatch, and runtime invocation. |
+| `crates/boron-gen/src/lib.rs` | BoronGen support tooling outside BoronDNS server runtime requirements | Public API boundary for deterministic scenarios, generated records, wire construction, and the synthetic-primary service. |
+| `crates/boron-gen/src/main.rs` | BoronGen support tooling outside BoronDNS server runtime requirements | CLI for manifest validation and bounded-memory synthetic primary service profiles. |
+| `crates/boron-gen/src/scenario.rs` | BoronGen support tooling outside BoronDNS server runtime requirements | Deterministic zone/catalog naming, generated record streams, structural NSEC3 data, and bounded scenario validation. |
+| `crates/boron-gen/src/server.rs` | BoronGen support tooling outside BoronDNS server runtime requirements | UDP/TCP synthetic primary service, bounded connection admission, SOA/AXFR/unchanged-IXFR handling, and optional TSIG. |
+| `crates/boron-gen/src/wire.rs` | BoronGen support tooling outside BoronDNS server runtime requirements | DNS query parsing and bounded on-the-fly authoritative/AXFR wire encoding. |
 | `crates/boron-gun/src/main.rs` | Support tooling outside BoronDNS server runtime requirements | BoronGun load-generator CLI, portable UDP backend, packet generation, response classification, and self-test path. |
 | `crates/boron-gun/src/xdp_backend.rs` | Support tooling unsafe boundary for BoronGun lab-only AF_XDP backend | Linux AF_XDP UMEM and ring adapter used only when BoronGun is built with the explicit `xdp` feature; not part of the BoronDNS server runtime. |
 | `crates/boron-gun-ebpf/src/lib.rs` | BoronGun lab-only XDP drop program and audited unsafe boundary | no_std eBPF `XDP_DROP` support program used only by BoronGun's lab backend for reply suppression tests. |
 | `crates/borondns-server-ebpf/src/lib.rs` | Feature-gated BoronDNS XDP redirect program and audited unsafe boundary | no_std eBPF redirect program used only by the server AF_XDP adapter when explicitly built and attached in a lab profile. |
 
-The module count is intentionally measured at the first-party Rust file/module
-boundary, including `build.rs` and support-tool modules, while excluding
-test-only files from the release module map. `BDS-NFR-MAINT-002` still maps the
-major SRS §4 server functional areas to the BoronDNS server/CLI modules above;
-BoronGun entries are listed so first-party workspace code remains visible
-without expanding the server protocol scope. Tests remain colocated with
+The module count is measured at the first-party Rust file/module boundary,
+including `build.rs` and support-tool modules, while excluding test-only files
+from the release module map. The audit compares this map bidirectionally with
+the discovered production source set and fails for either an omitted source
+module or a stale map entry. The current count is 41; it is an inventory signal,
+not a size gate. `BDS-NFR-MAINT-002` still maps the major SRS §4 server
+functional areas to the BoronDNS server/CLI modules above; BoronGun and BoronGen
+entries are labelled as support tooling so first-party workspace code remains
+visible without expanding the server protocol scope. Tests remain colocated with
 implementation code for review locality, but they are not counted toward the
 `BDS-NFR-MAINT-001` production source-line target.
 
@@ -133,18 +141,18 @@ test directories, dependencies, and generated code in accordance with
 prints a release-review warning and can be made build-blocking with
 `BORONDNS_MAINT_ENFORCE=1`.
 
-The measurement includes BoronGun and its Rust eBPF companion because they are
-first-party Rust code in this workspace. BoronGun remains support-tool scope; it
-does not expand the BoronDNS server runtime or the externally observable DNS
-protocol requirements.
+The measurement includes BoronGun, BoronGen, and the Rust eBPF companions
+because they are first-party Rust code in this workspace. BoronGun and BoronGen
+remain support-tool scope; they do not expand the BoronDNS server runtime or the
+externally observable DNS protocol requirements.
 
-Current `scripts/audit-maintainability.sh` output reports 53,740 first-party
+Current `scripts/audit-maintainability.sh` output reports 53,688 first-party
 production Rust source lines, which is above the 15,000-line `SHOULD` target.
 Current BDS-NFR-MAINT-001 over-target rationale: the count reflects the
 implemented Engineering MVP scope now retained after external review, including
 IXFR with AXFR fallback, XoT, passive DNSSEC serving, RRL, DNS Cookies,
 RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE diagnostics,
-CHAOS diagnostics, installer/Docker release tooling, BoronGun support tooling,
+CHAOS diagnostics, installer/Docker release tooling, BoronGun and BoronGen support tooling,
 feature-gated server AF_XDP/eBPF preparation, standard UDP batch/reuseport
 adapters, the safe `ZoneImage` data-plane prototype, offline old/new comparison
 evidence, and the always-on serving path for supported `ZoneImage` responses. These

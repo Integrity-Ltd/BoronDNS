@@ -74,6 +74,33 @@
     }
 
     #[test]
+    fn dnssec_proof_servfail_transition_mutates_the_existing_plan() {
+        let mut plan = ZoneImageLookupPlan::positive();
+        plan.answer_rrsets.push(ZoneImageRrsetId(1));
+        plan.answer_record_count = 1;
+        plan.answer_wire_upper_bound = 41;
+        plan.body_wire_upper_bound = 97;
+        plan.authority_rrsets.push(ZoneImageRrsetId(2));
+        plan.authority_record_count = 2;
+        plan.additional_rrsets.push(ZoneImageRrsetId(3));
+        plan.additional_record_count = 3;
+        plan.termination = Some(LookupTermination::CnameLoop);
+
+        plan.set_dnssec_proof_servfail();
+
+        assert_eq!(plan.rcode, Rcode::ServFail);
+        assert!(plan.authoritative());
+        assert_eq!(plan.answer_rrsets.as_slice(), [ZoneImageRrsetId(1)]);
+        assert_eq!(plan.answer_record_count, 1);
+        assert!(plan.authority_rrsets.is_empty());
+        assert_eq!(plan.authority_record_count, 0);
+        assert!(plan.additional_rrsets.is_empty());
+        assert_eq!(plan.additional_record_count, 0);
+        assert_eq!(plan.body_wire_upper_bound, plan.answer_wire_upper_bound);
+        assert_eq!(plan.termination, None);
+    }
+
+    #[test]
     fn compact_u32_indexes_reserve_the_none_sentinel() {
         let largest_valid = usize::try_from(u32::MAX - 1).expect("supported pointer width");
         let sentinel = usize::try_from(u32::MAX).expect("supported pointer width");

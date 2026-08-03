@@ -36,6 +36,8 @@ python3 -m py_compile scripts/check-boron-gen-query-trace.py
 python3 -m py_compile scripts/summarize-boron-gen-performance.py
 python3 -m py_compile scripts/check-boron-gen-performance-summary.py
 python3 -m py_compile scripts/check-fuzz-targets.py
+python3 -m py_compile scripts/audit_maintainability.py
+python3 -m py_compile scripts/test-audit-maintainability.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
@@ -58,6 +60,8 @@ python3 scripts/check-zone-image-evidence-tools.py
 python3 scripts/check-boron-gen-query-trace.py
 python3 scripts/check-boron-gen-performance-summary.py
 python3 scripts/check-fuzz-targets.py
+python3 scripts/test-audit-maintainability.py
+scripts/audit-maintainability.sh
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
