@@ -378,6 +378,8 @@ fn write_xot_cert_files(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cert_path, std::fs::Permissions::from_mode(0o644))
+            .expect("read-only certificate mode");
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
             .expect("secure key mode");
     }
@@ -424,8 +426,8 @@ async fn spawn_axfr_primary_with_serial(serial: u32) -> std::net::SocketAddr {
     addr
 }
 
-async fn spawn_axfr_primary_with_unsigned_terminator_and_tsig_only_terminal()
--> std::net::SocketAddr {
+async fn spawn_axfr_primary_with_unsigned_terminator_and_tsig_only_terminal() -> std::net::SocketAddr
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -460,12 +462,7 @@ async fn spawn_axfr_primary_with_unsigned_terminator_and_tsig_only_terminal()
         );
         let time_signed = current_unix_time();
         let first = key
-            .sign_response(
-                &first,
-                &request_mac,
-                time_signed,
-                DEFAULT_TSIG_FUDGE_SECS,
-            )
+            .sign_response(&first, &request_mac, time_signed, DEFAULT_TSIG_FUDGE_SECS)
             .unwrap();
         let terminating = transfer_response_message(header.id, None, vec![soa]);
         let terminal = transfer_response_message(header.id, None, Vec::new());
@@ -597,7 +594,10 @@ async fn spawn_unsigned_transfer_error_primary(
         let (mut stream, _) = listener.accept().await.unwrap();
         let query = read_primary_query(&mut stream).await;
         let header = Header::parse(&query).unwrap();
-        assert_eq!(header.arcount, 1, "test query must request TSIG authentication");
+        assert_eq!(
+            header.arcount, 1,
+            "test query must request TSIG authentication"
+        );
         assert_eq!(query_qtype(&query), expected_qtype as u16);
         stream
             .write_all(&frame_tcp_message(&error_response(header.id, rcode)))
@@ -1222,7 +1222,9 @@ fn catalog_axfr_response_with_records(
         answers.push(record(
             &format!("m0.zones.{catalog_zone}"),
             RecordType::Ptr as u16,
-            DomainName::from_absolute_str(member_zone).unwrap().to_wire(),
+            DomainName::from_absolute_str(member_zone)
+                .unwrap()
+                .to_wire(),
         ));
     }
     answers.push(soa);
@@ -1348,10 +1350,8 @@ fn replace_tsig_only_message_mac(mut message: Vec<u8>, replacement_mac: &[u8]) -
     let rdata_offset = 12 + owner_len + 10;
     let (_, algorithm_len) = DomainName::parse(&message, rdata_offset).unwrap();
     let mac_len_offset = rdata_offset + algorithm_len + 6 + 2;
-    let mac_len = u16::from_be_bytes([
-        message[mac_len_offset],
-        message[mac_len_offset + 1],
-    ]) as usize;
+    let mac_len =
+        u16::from_be_bytes([message[mac_len_offset], message[mac_len_offset + 1]]) as usize;
     assert_eq!(mac_len, replacement_mac.len());
     let mac_offset = mac_len_offset + 2;
     message[mac_offset..mac_offset + mac_len].copy_from_slice(replacement_mac);
@@ -2220,10 +2220,7 @@ async fn read_framed_tcp_response(stream: &mut TcpStream) -> Vec<u8> {
     response
 }
 
-async fn eventually_tcp_connect_fails(
-    addr: std::net::SocketAddr,
-    timeout: std::time::Duration,
-) {
+async fn eventually_tcp_connect_fails(addr: std::net::SocketAddr, timeout: std::time::Duration) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         match TcpStream::connect(addr).await {

@@ -80,6 +80,19 @@ zone_shape_enabled = false
 # ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.
 any_response = "minimal"
 
+[zone_publication]
+# "auto" keeps compact ZoneImage publication for smaller zones and switches
+# large zones to structurally shared IXFR overlays. "compact" always rebuilds
+# the whole query image; "sharded" uses overlays after the initial publication.
+strategy = "auto"
+# Auto mode starts using incremental overlays at this RRset count. The default
+# preserves the existing compact hot path for ordinary zones.
+sharded_rrset_threshold = 1000000
+# Rebuild a compact base in a blocking background worker after this many
+# distinct owners have changed since the last compact base. Set to 0 to disable
+# automatic compaction for externally managed maintenance windows.
+overlay_compaction_dirty_owner_threshold = 100000
+
 [edns]
 # Extended DNS Errors per RFC 8914. Default: "off". Use "minimal" to include
 # diagnostic EDE codes for selected operational states, without extra text.

@@ -1,5 +1,12 @@
 fn write_secret_store_manifest(root: &std::path::Path, body: &str) {
     std::fs::create_dir_all(root).expect("create secret store directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+            .expect("private secret store directory mode");
+    }
     let manifest_path = root.join("secrets.toml");
     std::fs::write(&manifest_path, body).expect("write secret store manifest");
     #[cfg(unix)]
@@ -81,6 +88,12 @@ fn secret_store_manifest_enforces_exact_byte_limit_and_growth_fence() {
 fn secret_store_manifest_rejects_invalid_utf8_without_rendering_inline_secret() {
     let root = unique_test_path("borondns-secret-store-manifest-invalid-utf8", "dir");
     std::fs::create_dir_all(&root).expect("create secret store directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+            .expect("private secret store directory mode");
+    }
     let manifest_path = root.join("secrets.toml");
     let sentinel = b"MANIFEST_SECRET_SENTINEL";
     let mut manifest = br#"
@@ -213,9 +226,11 @@ fn secret_store_tsig_key_count_is_bounded_before_material_loading() {
             &store,
         )
         .expect_err("TSIG key count above snapshot limit is rejected");
-    assert!(error
-        .to_string()
-        .contains(&borondns_core::config::MAX_TSIG_KEYS_PER_SNAPSHOT.to_string()));
+    assert!(
+        error
+            .to_string()
+            .contains(&borondns_core::config::MAX_TSIG_KEYS_PER_SNAPSHOT.to_string())
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -230,8 +245,13 @@ fn secret_store_xot_budget_counts_repeated_material_at_exact_and_over_limit() {
         .set_len(chunk_size as u64)
         .expect("size aggregate material");
     drop(material);
-    let repetitions =
-        borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE / chunk_size;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&material_path, std::fs::Permissions::from_mode(0o600))
+            .expect("private aggregate material mode");
+    }
+    let repetitions = borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE / chunk_size;
     let repeated = vec![std::path::Path::new("material.pem"); repetitions];
     let store = crate::secret_store::FileSecretStore::new(root.clone());
 
@@ -243,6 +263,12 @@ fn secret_store_xot_budget_counts_repeated_material_at_exact_and_over_limit() {
     );
     let one_byte_path = root.join("one-byte.pem");
     std::fs::write(&one_byte_path, [b'x']).expect("write one-byte aggregate material");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&one_byte_path, std::fs::Permissions::from_mode(0o600))
+            .expect("private one-byte aggregate material mode");
+    }
     let mut over_limit = repeated;
     over_limit.push(std::path::Path::new("one-byte.pem"));
     let error = store
@@ -250,17 +276,14 @@ fn secret_store_xot_budget_counts_repeated_material_at_exact_and_over_limit() {
         .expect_err("one byte over the repeated-file profile budget is rejected");
     assert!(error.to_string().contains("aggregate XoT profile"));
     assert!(
-        error.to_string().contains(
-            &borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE.to_string()
-        )
+        error
+            .to_string()
+            .contains(&borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE.to_string())
     );
 
     let profile_count = borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_SNAPSHOT
         / borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE;
-    let profiles = vec![
-        vec![std::path::Path::new("material.pem"); repetitions];
-        profile_count
-    ];
+    let profiles = vec![vec![std::path::Path::new("material.pem"); repetitions]; profile_count];
     assert_eq!(
         store
             .read_xot_profiles_for_test(&profiles)
@@ -272,11 +295,15 @@ fn secret_store_xot_budget_counts_repeated_material_at_exact_and_over_limit() {
     let error = store
         .read_xot_profiles_for_test(&over_snapshot_limit)
         .expect_err("one byte over the repeated-file snapshot budget is rejected");
-    assert!(error.to_string().contains("aggregate secret-store snapshot"));
     assert!(
-        error.to_string().contains(
-            &borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_SNAPSHOT.to_string()
-        )
+        error
+            .to_string()
+            .contains("aggregate secret-store snapshot")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_SNAPSHOT.to_string())
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -302,7 +329,10 @@ fn file_secret_store_reloads_tsig_keys_atomically() {
         .get(&zone)
         .expect("zone transfer plan");
     assert_eq!(
-        plan.tsig_key_name.as_ref().map(ToString::to_string).as_deref(),
+        plan.tsig_key_name
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("dynamic-key.")
     );
 
@@ -346,10 +376,14 @@ async fn secret_reload_only_advances_and_cancels_for_changed_material() {
     );
     let config = config_with_secret_store(&root);
     let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
-    let initial = secrets.current_snapshot().expect("capture initial snapshot");
+    let initial = secrets
+        .current_snapshot()
+        .expect("capture initial snapshot");
 
     secrets.reload().expect("reload unchanged secret material");
-    let unchanged = secrets.current_snapshot().expect("capture unchanged snapshot");
+    let unchanged = secrets
+        .current_snapshot()
+        .expect("capture unchanged snapshot");
     assert!(Arc::ptr_eq(&initial, &unchanged));
     assert_eq!(initial.generation(), unchanged.generation());
     assert!(
@@ -369,16 +403,16 @@ async fn secret_reload_only_advances_and_cancels_for_changed_material() {
         "#,
     );
     secrets.reload().expect("reload changed secret material");
-    let changed = secrets.current_snapshot().expect("capture changed snapshot");
+    let changed = secrets
+        .current_snapshot()
+        .expect("capture changed snapshot");
     assert!(!Arc::ptr_eq(&initial, &changed));
     assert_eq!(changed.generation(), initial.generation() + 1);
     tokio::time::timeout(std::time::Duration::from_secs(1), initial.cancelled())
         .await
         .expect("changed secret material cancels the captured transfer generation");
     assert!(
-        secrets
-            .if_current_snapshot(&initial, || ())
-            .is_none(),
+        secrets.if_current_snapshot(&initial, || ()).is_none(),
         "an old-secret result must be rejected at the publication fence"
     );
     assert!(secrets.if_current_snapshot(&changed, || ()).is_some());
@@ -441,7 +475,9 @@ fn file_secret_store_reload_rejects_empty_tsig_candidate_and_retains_previous_sn
     );
     let config = config_with_secret_store(&root);
     let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
-    let initial = secrets.current_snapshot().expect("capture initial snapshot");
+    let initial = secrets
+        .current_snapshot()
+        .expect("capture initial snapshot");
     let key_name = DomainName::from_absolute_str("dynamic-key.").unwrap();
     let before = secrets
         .tsig_key(&key_name)
@@ -487,10 +523,7 @@ fn file_secret_store_reload_rejects_empty_tsig_candidate_and_retains_previous_sn
 fn malformed_secret_store_manifest_does_not_expose_source_secret() {
     let root = unique_test_path("borondns-secret-store-malformed-secret", "dir");
     let sentinel = "SECRET_STORE_TSIG_SENTINEL";
-    write_secret_store_manifest(
-        &root,
-        &format!("[[tsig_keys]]\nsecret = \"{sentinel}"),
-    );
+    write_secret_store_manifest(&root, &format!("[[tsig_keys]]\nsecret = \"{sentinel}"));
     let config = config_with_secret_store(&root);
     let error = SecretManager::from_config(&config).expect_err("malformed manifest rejected");
 
@@ -533,7 +566,11 @@ fn file_secret_store_reload_rejects_missing_referenced_tsig_key() {
     let error = secrets
         .reload()
         .expect_err("reload without referenced TSIG key must fail");
-    assert!(error.to_string().contains("references TSIG key dynamic-key."));
+    assert!(
+        error
+            .to_string()
+            .contains("references TSIG key dynamic-key.")
+    );
     let after = secrets
         .tsig_key(&key_name)
         .expect("previous key retained after rejected reload")
@@ -612,6 +649,8 @@ fn file_secret_store_rejects_manifest_symlink_and_non_regular_file() {
 
     let root = unique_test_path("borondns-secret-store-manifest-directory", "dir");
     std::fs::create_dir_all(root.join("secrets.toml")).expect("create manifest directory");
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .expect("secure manifest-directory root");
     let config = config_with_secret_store(&root);
     let error = SecretManager::from_config(&config).expect_err("manifest directory rejected");
     assert!(error.to_string().contains("must be a regular file"));
@@ -896,7 +935,8 @@ fn captured_intermediate_directory_prevents_same_uid_symlink_swap() {
 fn file_secret_store_reloads_xot_profiles() {
     let root = unique_test_path("borondns-secret-store-xot", "dir");
     let (trust_anchor_one, _key_one) = write_self_signed_xot_cert_files();
-    let (trust_anchor_two, _key_two) = write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let (trust_anchor_two, _key_two) =
+        write_self_signed_xot_cert_files_for_name("primary.example.test");
     copy_secret_store_file(&root, &trust_anchor_one, "anchor-one.pem");
     copy_secret_store_file(&root, &trust_anchor_two, "anchor-two.pem");
     write_secret_store_manifest(
@@ -935,7 +975,10 @@ fn file_secret_store_reloads_xot_profiles() {
         .expect("zone transfer plan");
     let resolved = resolve_transfer_primary(&plan.primaries[0], &secrets)
         .expect("resolve initial XoT profile");
-    assert_eq!(resolved.trust_anchors[0], root.join("anchor-one.pem").display().to_string());
+    assert_eq!(
+        resolved.trust_anchors[0],
+        root.join("anchor-one.pem").display().to_string()
+    );
 
     write_secret_store_manifest(
         &root,
@@ -948,7 +991,10 @@ fn file_secret_store_reloads_xot_profiles() {
     secrets.reload().expect("reload XoT profile");
     let resolved = resolve_transfer_primary(&plan.primaries[0], &secrets)
         .expect("resolve reloaded XoT profile");
-    assert_eq!(resolved.trust_anchors[0], root.join("anchor-two.pem").display().to_string());
+    assert_eq!(
+        resolved.trust_anchors[0],
+        root.join("anchor-two.pem").display().to_string()
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -988,7 +1034,9 @@ async fn xot_path_only_reload_refreshes_provenance_without_cancelling_material_g
     ))
     .expect("valid XoT profile config");
     let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
-    let initial = secrets.current_snapshot().expect("initial material generation");
+    let initial = secrets
+        .current_snapshot()
+        .expect("initial material generation");
 
     write_secret_store_manifest(
         &root,
@@ -999,7 +1047,9 @@ async fn xot_path_only_reload_refreshes_provenance_without_cancelling_material_g
         "#,
     );
     secrets.reload().expect("reload path-only XoT provenance");
-    let refreshed = secrets.current_snapshot().expect("refreshed provenance snapshot");
+    let refreshed = secrets
+        .current_snapshot()
+        .expect("refreshed provenance snapshot");
 
     assert!(!Arc::ptr_eq(&initial, &refreshed));
     assert_eq!(initial.generation(), refreshed.generation());
@@ -1107,9 +1157,9 @@ fn file_secret_store_enforces_xot_profile_and_trust_anchor_count_limits() {
         .load_snapshot_after_root_capture(|| {})
         .expect_err("one trust anchor over the profile limit is rejected");
     assert!(
-        error.to_string().contains(
-            &borondns_core::config::MAX_XOT_TRUST_ANCHORS_PER_PROFILE.to_string()
-        )
+        error
+            .to_string()
+            .contains(&borondns_core::config::MAX_XOT_TRUST_ANCHORS_PER_PROFILE.to_string())
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -1180,26 +1230,22 @@ fn transfer_resolves_xot_and_tsig_from_one_snapshot_across_reload() {
         "#,
     );
 
-    let credentials = resolve_transfer_credentials_with_hook(
-        &plan.primaries[0],
-        &plan,
-        &secrets,
-        || secrets.reload().expect("commit new snapshot between resolutions"),
-    )
-    .expect("resolve transfer credentials from captured snapshot");
+    let credentials =
+        resolve_transfer_credentials_with_hook(&plan.primaries[0], &plan, &secrets, || {
+            secrets
+                .reload()
+                .expect("commit new snapshot between resolutions")
+        })
+        .expect("resolve transfer credentials from captured snapshot");
     assert_eq!(
         credentials.primary.trust_anchors[0],
         root.join("old-anchor.pem").display().to_string(),
         "XoT resolution must use the captured old snapshot"
     );
-    let old_signature = TsigKey::from_base64(
-        "dynamic-key.",
-        "hmac-sha256",
-        "b2xkLXNlY3JldA==",
-    )
-    .unwrap()
-    .sign(b"snapshot-probe")
-    .unwrap();
+    let old_signature = TsigKey::from_base64("dynamic-key.", "hmac-sha256", "b2xkLXNlY3JldA==")
+        .unwrap()
+        .sign(b"snapshot-probe")
+        .unwrap();
     assert_eq!(
         credentials
             .tsig_key
@@ -1215,14 +1261,10 @@ fn transfer_resolves_xot_and_tsig_from_one_snapshot_across_reload() {
             .unwrap()
             .sign(b"snapshot-probe")
             .unwrap(),
-        TsigKey::from_base64(
-            "dynamic-key.",
-            "hmac-sha256",
-            "bmV3LXNlY3JldA==",
-        )
-        .unwrap()
-        .sign(b"snapshot-probe")
-        .unwrap(),
+        TsigKey::from_base64("dynamic-key.", "hmac-sha256", "bmV3LXNlY3JldA==",)
+            .unwrap()
+            .sign(b"snapshot-probe")
+            .unwrap(),
         "the manager may advance independently after the transfer capture"
     );
 
@@ -1235,10 +1277,8 @@ fn transfer_resolves_xot_and_tsig_from_one_snapshot_across_reload() {
 #[test]
 fn file_secret_store_xot_material_is_one_immutable_generation() {
     let root = unique_test_path("borondns-secret-store-xot-generation", "dir");
-    let (cert_one, key_one) =
-        write_self_signed_xot_cert_files_for_name("primary.example.test");
-    let (cert_two, key_two) =
-        write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let (cert_one, key_one) = write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let (cert_two, key_two) = write_self_signed_xot_cert_files_for_name("primary.example.test");
     copy_secret_store_file(&root, &cert_one, "client.pem");
     copy_secret_store_file(&root, &key_one, "client.key");
     write_secret_store_manifest(
@@ -1273,17 +1313,21 @@ fn file_secret_store_xot_material_is_one_immutable_generation() {
     ))
     .expect("valid XoT profile config");
     let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
-    let initial = secrets.xot_profile("customer-xot").expect("initial profile");
+    let initial = secrets
+        .xot_profile("customer-xot")
+        .expect("initial profile");
 
     let staged_cert = unique_test_path("xot-atomic-cert", "pem");
     std::fs::copy(&cert_two, &staged_cert).expect("stage replacement certificate");
-    std::fs::rename(&staged_cert, root.join("client.pem"))
-        .expect("atomically replace certificate");
+    std::fs::rename(&staged_cert, root.join("client.pem")).expect("atomically replace certificate");
 
     let unchanged = secrets
         .xot_profile("customer-xot")
         .expect("active profile after path replacement");
-    assert!(Arc::ptr_eq(&initial.client_config, &unchanged.client_config));
+    assert!(Arc::ptr_eq(
+        &initial.client_config,
+        &unchanged.client_config
+    ));
     let error = secrets
         .reload()
         .expect_err("mixed certificate/key generation must not replace active snapshot");
@@ -1298,9 +1342,10 @@ fn file_secret_store_xot_material_is_one_immutable_generation() {
 
     let staged_key = unique_test_path("xot-atomic-key", "pem");
     std::fs::copy(&key_two, &staged_key).expect("stage replacement private key");
-    std::fs::rename(&staged_key, root.join("client.key"))
-        .expect("atomically replace private key");
-    secrets.reload().expect("reload complete material generation");
+    std::fs::rename(&staged_key, root.join("client.key")).expect("atomically replace private key");
+    secrets
+        .reload()
+        .expect("reload complete material generation");
     let reloaded = secrets
         .xot_profile("customer-xot")
         .expect("reloaded profile");
@@ -1327,10 +1372,8 @@ fn captured_secret_root_prevents_cross_generation_xot_and_tsig_mixing() {
     let old_root = base.join("generation-old");
     let new_root = base.join("generation-new");
     let current = base.join("current");
-    let (old_cert, old_key) =
-        write_self_signed_xot_cert_files_for_name("primary.example.test");
-    let (new_cert, new_key) =
-        write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let (old_cert, old_key) = write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let (new_cert, new_key) = write_self_signed_xot_cert_files_for_name("primary.example.test");
     for (root, cert, key, secret) in [
         (&old_root, &old_cert, &old_key, "b2xkLXNlY3JldA=="),
         (&new_root, &new_cert, &new_key, "bmV3LXNlY3JldA=="),
@@ -1405,22 +1448,14 @@ fn captured_secret_root_prevents_cross_generation_xot_and_tsig_mixing() {
     switcher.join().expect("generation switch thread");
 
     let key_name = DomainName::from_absolute_str("dynamic-key.").unwrap();
-    let old_signature = TsigKey::from_base64(
-        "dynamic-key.",
-        "hmac-sha256",
-        "b2xkLXNlY3JldA==",
-    )
-    .unwrap()
-    .sign(b"generation-probe")
-    .unwrap();
-    let new_signature = TsigKey::from_base64(
-        "dynamic-key.",
-        "hmac-sha256",
-        "bmV3LXNlY3JldA==",
-    )
-    .unwrap()
-    .sign(b"generation-probe")
-    .unwrap();
+    let old_signature = TsigKey::from_base64("dynamic-key.", "hmac-sha256", "b2xkLXNlY3JldA==")
+        .unwrap()
+        .sign(b"generation-probe")
+        .unwrap();
+    let new_signature = TsigKey::from_base64("dynamic-key.", "hmac-sha256", "bmV3LXNlY3JldA==")
+        .unwrap()
+        .sign(b"generation-probe")
+        .unwrap();
     assert_eq!(
         overlapping
             .tsig_key(&key_name)
@@ -1446,7 +1481,9 @@ fn captured_secret_root_prevents_cross_generation_xot_and_tsig_mixing() {
         "active snapshot remains entirely old until reload commits"
     );
 
-    secrets.reload().expect("load and atomically commit new generation");
+    secrets
+        .reload()
+        .expect("load and atomically commit new generation");
     assert_eq!(
         secrets
             .tsig_key(&key_name)
@@ -1456,10 +1493,7 @@ fn captured_secret_root_prevents_cross_generation_xot_and_tsig_mixing() {
         new_signature
     );
     assert!(
-        secrets
-            .xot_profile("customer-xot")
-            .unwrap()
-            .trust_anchors[0]
+        secrets.xot_profile("customer-xot").unwrap().trust_anchors[0]
             .starts_with(&new_root.display().to_string())
     );
 

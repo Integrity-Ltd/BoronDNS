@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
+    collections::{BTreeSet, HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
@@ -206,6 +206,58 @@ pub enum IxfrError {
 pub enum IxfrResponse {
     Updated(Box<ZoneSnapshot>),
     Current,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IxfrDelta {
+    old_serial: u32,
+    new_serial: u32,
+    sequences: Vec<IxfrDeltaSequence>,
+    affected_rrsets: Vec<(String, u16, u16)>,
+}
+
+impl IxfrDelta {
+    pub fn old_serial(&self) -> u32 {
+        self.old_serial
+    }
+
+    pub fn new_serial(&self) -> u32 {
+        self.new_serial
+    }
+
+    pub fn sequences(&self) -> &[IxfrDeltaSequence] {
+        &self.sequences
+    }
+
+    pub fn affected_rrsets(&self) -> &[(String, u16, u16)] {
+        &self.affected_rrsets
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IxfrDeltaSequence {
+    old_soa: ResourceRecord,
+    deletes: Vec<ResourceRecord>,
+    new_soa: ResourceRecord,
+    adds: Vec<ResourceRecord>,
+}
+
+impl IxfrDeltaSequence {
+    pub fn old_soa(&self) -> &ResourceRecord {
+        &self.old_soa
+    }
+
+    pub fn deletes(&self) -> &[ResourceRecord] {
+        &self.deletes
+    }
+
+    pub fn new_soa(&self) -> &ResourceRecord {
+        &self.new_soa
+    }
+
+    pub fn adds(&self) -> &[ResourceRecord] {
+        &self.adds
+    }
 }
 
 pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
@@ -697,18 +749,138 @@ fn apply_ixfr_incremental(
     current_zone: &ZoneSnapshot,
     answers: &[ResourceRecord],
 ) -> Result<IxfrResponse, IxfrError> {
-    let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
-    let final_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
     let mut current_soa = current_zone
         .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
     normalize_record_owner(&mut current_soa);
-    let mut expected_old_soa = current_soa;
-    let mut records = current_zone.transfer_records();
-    for record in &mut records {
-        normalize_record_owner(record);
+    let (delta, terminal_soa_seen) =
+        parse_ixfr_incremental_delta_parts(zone_apex, qclass, &current_soa, answers)?;
+    let mut working_rrsets = HashMap::<(String, u16, u16), Vec<ResourceRecord>>::new();
+
+    for sequence in delta.sequences() {
+        remove_delta_record(current_zone, &mut working_rrsets, sequence.old_soa())?;
+        for record in sequence.deletes() {
+            remove_delta_record(current_zone, &mut working_rrsets, record)?;
+        }
+        add_delta_record(current_zone, &mut working_rrsets, sequence.new_soa())?;
+        for record in sequence.adds() {
+            add_delta_record(current_zone, &mut working_rrsets, record)?;
+        }
     }
-    let mut records = IndexedRecordSet::new(records);
+    if !terminal_soa_seen {
+        return Err(IxfrError::IncompleteResponse);
+    }
+    let replacements = working_rrsets
+        .into_iter()
+        .map(|((owner_key, rr_type, class), records)| {
+            let mut rrsets = rrsets_from_records(records);
+            debug_assert!(rrsets.len() <= 1);
+            (owner_key, rr_type, class, rrsets.pop())
+        })
+        .collect();
+    let updated = current_zone.with_cow_rrset_replacements(delta.new_serial(), replacements);
+    validate_incremental_zone(zone_apex, qclass, &updated, &delta)?;
+
+    Ok(IxfrResponse::Updated(Box::new(updated)))
+}
+
+fn remove_delta_record(
+    current_zone: &ZoneSnapshot,
+    working_rrsets: &mut HashMap<(String, u16, u16), Vec<ResourceRecord>>,
+    record: &ResourceRecord,
+) -> Result<(), IxfrError> {
+    let key = rrset_identity(record);
+    let records = working_rrsets
+        .entry(key.clone())
+        .or_insert_with(|| current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2));
+    let Some(index) = records
+        .iter()
+        .position(|existing| resource_records_semantically_equal(existing, record))
+    else {
+        return Err(IxfrError::DeleteAbsentRecord);
+    };
+    records.swap_remove(index);
+    Ok(())
+}
+
+fn add_delta_record(
+    current_zone: &ZoneSnapshot,
+    working_rrsets: &mut HashMap<(String, u16, u16), Vec<ResourceRecord>>,
+    record: &ResourceRecord,
+) -> Result<(), IxfrError> {
+    let key = rrset_identity(record);
+    let records = working_rrsets
+        .entry(key.clone())
+        .or_insert_with(|| current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2));
+    if records
+        .iter()
+        .any(|existing| resource_records_semantically_equal(existing, record))
+    {
+        return Err(IxfrError::AddExistingRecord);
+    }
+    records.push(record.clone());
+    Ok(())
+}
+
+fn validate_incremental_zone(
+    zone_apex: &DomainName,
+    qclass: u16,
+    updated: &ZoneSnapshot,
+    delta: &IxfrDelta,
+) -> Result<(), IxfrError> {
+    let apex_key = zone_apex.canonical_key();
+    let soa = updated.transfer_rrset_records_by_key(&apex_key, RecordType::Soa as u16, qclass);
+    if soa.len() != 1 || updated.soa_record_count() != 1 {
+        return Err(IxfrError::Axfr(AxfrError::InvalidZoneSoa));
+    }
+    if updated
+        .transfer_rrset_records_by_key(&apex_key, RecordType::Ns as u16, qclass)
+        .is_empty()
+    {
+        return Err(IxfrError::Axfr(AxfrError::MissingApexNs));
+    }
+
+    let affected_owners = delta
+        .affected_rrsets()
+        .iter()
+        .map(|(owner, _, _)| owner.as_str())
+        .collect::<BTreeSet<_>>();
+    let affected_records = affected_owners
+        .into_iter()
+        .flat_map(|owner| updated.transfer_records_at_name_key(owner))
+        .collect::<Vec<_>>();
+    validate_cname_and_dname_coexistence(zone_apex, &affected_records).map_err(IxfrError::Axfr)
+}
+
+#[cfg(test)]
+fn parse_ixfr_incremental_delta(
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa: &ResourceRecord,
+    answers: &[ResourceRecord],
+) -> Result<IxfrDelta, IxfrError> {
+    let (delta, terminal_soa_seen) =
+        parse_ixfr_incremental_delta_parts(zone_apex, qclass, current_soa, answers)?;
+    if !terminal_soa_seen {
+        return Err(IxfrError::IncompleteResponse);
+    }
+    Ok(delta)
+}
+
+fn parse_ixfr_incremental_delta_parts(
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa: &ResourceRecord,
+    answers: &[ResourceRecord],
+) -> Result<(IxfrDelta, bool), IxfrError> {
+    validate_current_soa(current_soa, zone_apex, qclass)?;
+    let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
+    validate_current_soa(outer_soa, zone_apex, qclass).map_err(|_| IxfrError::MissingInitialSoa)?;
+    let old_serial = soa_serial(&current_soa.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
+    let new_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+    let mut expected_old_soa = current_soa.clone();
+    let mut sequences = Vec::new();
+    let mut affected_rrsets = BTreeSet::new();
     let mut index = 1usize;
     let mut terminal_soa_seen = false;
 
@@ -726,53 +898,70 @@ fn apply_ixfr_incremental(
         {
             return Err(IxfrError::BrokenSoaChain);
         }
-        records.remove(old_soa)?;
+        affected_rrsets.insert(rrset_identity(old_soa));
         index += 1;
 
+        let delete_start = index;
         while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
-            records.remove(&answers[index])?;
+            affected_rrsets.insert(rrset_identity(&answers[index]));
             index += 1;
         }
+        let deletes = answers[delete_start..index].to_vec();
 
         let Some(new_soa) = answers.get(index) else {
             return Err(IxfrError::IncompleteResponse);
         };
         if new_soa.rr_type != RecordType::Soa as u16
             || new_soa.owner.canonical_key() != zone_apex.canonical_key()
+            || new_soa.class != qclass
         {
             return Err(IxfrError::BrokenSoaChain);
         }
-        records.add(new_soa.clone())?;
+        soa_serial(&new_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+        affected_rrsets.insert(rrset_identity(new_soa));
         expected_old_soa = new_soa.clone();
         index += 1;
 
+        let add_start = index;
         while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
-            records.add(answers[index].clone())?;
+            affected_rrsets.insert(rrset_identity(&answers[index]));
             index += 1;
         }
-    }
-    if !terminal_soa_seen {
-        return Err(IxfrError::IncompleteResponse);
+        let adds = answers[add_start..index].to_vec();
+        sequences.push(IxfrDeltaSequence {
+            old_soa: old_soa.clone(),
+            deletes,
+            new_soa: new_soa.clone(),
+            adds,
+        });
     }
     if index != answers.len() {
         return Err(IxfrError::BrokenSoaChain);
     }
 
-    let final_applied_serial =
-        soa_serial(&expected_old_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
-    if !resource_records_semantically_equal(&expected_old_soa, outer_soa)
-        || final_applied_serial != final_serial
-    {
-        return Err(IxfrError::BrokenSoaChain);
+    if terminal_soa_seen {
+        let final_applied_serial =
+            soa_serial(&expected_old_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+        if !resource_records_semantically_equal(&expected_old_soa, outer_soa)
+            || final_applied_serial != new_serial
+        {
+            return Err(IxfrError::BrokenSoaChain);
+        }
     }
-    let records = records.into_records();
-    validate_zone_record_set(zone_apex, &records).map_err(IxfrError::Axfr)?;
 
-    Ok(IxfrResponse::Updated(Box::new(ZoneSnapshot::active(
-        zone_apex.clone(),
-        Some(final_serial),
-        rrsets_from_records(records),
-    ))))
+    Ok((
+        IxfrDelta {
+            old_serial,
+            new_serial,
+            sequences,
+            affected_rrsets: affected_rrsets.into_iter().collect(),
+        },
+        terminal_soa_seen,
+    ))
+}
+
+fn rrset_identity(record: &ResourceRecord) -> (String, u16, u16) {
+    (record.owner.canonical_key(), record.rr_type, record.class)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -893,79 +1082,6 @@ fn canonical_rdata_hash(rr_type: u16, rdata: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     canonical_rdata_identity(rr_type, rdata).hash(&mut hasher);
     hasher.finish()
-}
-
-struct IndexedRecordSet {
-    records: Vec<ResourceRecord>,
-    positions: HashMap<RecordKey, Vec<usize>>,
-    slot_indexes: Vec<usize>,
-}
-
-impl IndexedRecordSet {
-    fn new(records: Vec<ResourceRecord>) -> Self {
-        let mut indexed = Self {
-            records: Vec::with_capacity(records.len()),
-            positions: HashMap::with_capacity(records.len()),
-            slot_indexes: Vec::with_capacity(records.len()),
-        };
-        for record in records {
-            indexed.push_unchecked(record);
-        }
-        indexed
-    }
-
-    fn add(&mut self, record: ResourceRecord) -> Result<(), IxfrError> {
-        let key = RecordKey::from_record(&record);
-        if self
-            .positions
-            .get(&key)
-            .is_some_and(|positions| !positions.is_empty())
-        {
-            return Err(IxfrError::AddExistingRecord);
-        }
-        self.push_unchecked(record);
-        Ok(())
-    }
-
-    fn remove(&mut self, target: &ResourceRecord) -> Result<(), IxfrError> {
-        let key = RecordKey::from_record(target);
-        let Some(target_positions) = self.positions.get_mut(&key) else {
-            return Err(IxfrError::DeleteAbsentRecord);
-        };
-        let Some(index) = target_positions.pop() else {
-            return Err(IxfrError::DeleteAbsentRecord);
-        };
-
-        let last_index = self.records.len() - 1;
-        self.records.swap_remove(index);
-        self.slot_indexes.swap_remove(index);
-
-        if index != last_index {
-            let moved_key = RecordKey::from_record(&self.records[index]);
-            let moved_slot = self.slot_indexes[index];
-            let moved_positions = self
-                .positions
-                .get_mut(&moved_key)
-                .expect("moved IXFR record remains indexed");
-            moved_positions[moved_slot] = index;
-        }
-
-        Ok(())
-    }
-
-    fn into_records(self) -> Vec<ResourceRecord> {
-        self.records
-    }
-
-    fn push_unchecked(&mut self, record: ResourceRecord) {
-        let key = RecordKey::from_record(&record);
-        let index = self.records.len();
-        let positions = self.positions.entry(key).or_default();
-        let slot_index = positions.len();
-        positions.push(index);
-        self.records.push(record);
-        self.slot_indexes.push(slot_index);
-    }
 }
 
 fn ixfr_scope_error(error: AxfrError) -> IxfrError {
@@ -3174,6 +3290,270 @@ mod tests {
                 )
                 .answers,
             vec![new_a]
+        );
+    }
+
+    #[test]
+    fn ixfr_incremental_wire_is_retained_as_rrset_granular_delta() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let old_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let removed = record(
+            "changed.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let added = record(
+            "changed.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let answers = vec![
+            new_soa.clone(),
+            old_soa.clone(),
+            removed.clone(),
+            new_soa.clone(),
+            added.clone(),
+            new_soa,
+        ];
+
+        let delta = parse_ixfr_incremental_delta(&apex, 1, &old_soa, &answers)
+            .expect("valid RFC 1995 delta");
+
+        assert_eq!(delta.old_serial(), 1);
+        assert_eq!(delta.new_serial(), 2);
+        assert_eq!(delta.sequences().len(), 1);
+        assert_eq!(delta.sequences()[0].deletes(), &[removed]);
+        assert_eq!(delta.sequences()[0].adds(), &[added]);
+        assert_eq!(
+            delta.affected_rrsets(),
+            [
+                ("changed.example.test.".to_owned(), RecordType::A as u16, 1),
+                ("example.test.".to_owned(), RecordType::Soa as u16, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_ixfr_generations_match_fresh_snapshot_and_image_compilation() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let owner = DomainName::from_absolute_str("churn.example.test.").unwrap();
+        let mut soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut value = record_with_owner(owner.clone(), RecordType::A as u16, vec![192, 0, 2, 0]);
+        let mut snapshot = ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            rrsets_from_records(vec![soa.clone(), apex_ns(), value.clone()]),
+        );
+
+        for new_serial in 2..=101 {
+            let new_soa = record(
+                "example.test.",
+                RecordType::Soa as u16,
+                soa_rdata_with_serial(new_serial),
+            );
+            let new_value = record_with_owner(
+                owner.clone(),
+                RecordType::A as u16,
+                vec![192, 0, 2, (new_serial - 1) as u8],
+            );
+            let response = parse_ixfr_response(
+                new_serial as u16,
+                &apex,
+                1,
+                &snapshot,
+                &[ixfr_message(
+                    new_serial as u16,
+                    vec![
+                        new_soa.clone(),
+                        soa,
+                        value,
+                        new_soa.clone(),
+                        new_value.clone(),
+                        new_soa.clone(),
+                    ],
+                )],
+            )
+            .expect("churn IXFR remains valid");
+            let IxfrResponse::Updated(updated) = response else {
+                panic!("churn IXFR must advance the zone");
+            };
+            snapshot = *updated;
+
+            let fresh = ZoneSnapshot::active(
+                apex.clone(),
+                Some(new_serial),
+                rrsets_from_records(vec![new_soa.clone(), apex_ns(), new_value.clone()]),
+            );
+            assert_eq!(snapshot, fresh, "snapshot diverged at serial {new_serial}");
+            assert_eq!(
+                ZoneImage::compile(&snapshot).unwrap(),
+                ZoneImage::compile(&fresh).unwrap(),
+                "query image diverged at serial {new_serial}"
+            );
+            soa = new_soa;
+            value = new_value;
+        }
+    }
+
+    #[test]
+    fn ixfr_owner_creation_and_removal_matches_fresh_empty_non_terminal_semantics() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let wildcard = record("*.example.test.", RecordType::A as u16, vec![192, 0, 2, 1]);
+        let leaf = record(
+            "leaf.branch.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let queried = DomainName::from_absolute_str("missing.branch.example.test.").unwrap();
+        let soa1 = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let soa2 = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let soa3 = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(3),
+        );
+        let initial = ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            rrsets_from_records(vec![soa1.clone(), apex_ns(), wildcard.clone()]),
+        );
+
+        let added = parse_ixfr_response(
+            0x2002,
+            &apex,
+            1,
+            &initial,
+            &[ixfr_message(
+                0x2002,
+                vec![soa2.clone(), soa1, soa2.clone(), leaf.clone(), soa2.clone()],
+            )],
+        )
+        .expect("IXFR may create a new owner below a new empty non-terminal");
+        let IxfrResponse::Updated(added) = added else {
+            panic!("owner-creation IXFR must advance the zone");
+        };
+        let fresh_added = ZoneSnapshot::active(
+            apex.clone(),
+            Some(2),
+            rrsets_from_records(vec![
+                soa2.clone(),
+                apex_ns(),
+                wildcard.clone(),
+                leaf.clone(),
+            ]),
+        );
+        assert_eq!(*added, fresh_added);
+        assert_eq!(
+            added
+                .offline_oracle()
+                .lookup(&queried, RecordType::A as u16, 1),
+            fresh_added
+                .offline_oracle()
+                .lookup(&queried, RecordType::A as u16, 1),
+            "the new empty non-terminal must suppress the apex wildcard"
+        );
+
+        let removed = parse_ixfr_response(
+            0x2003,
+            &apex,
+            1,
+            &added,
+            &[ixfr_message(
+                0x2003,
+                vec![soa3.clone(), soa2, leaf, soa3.clone(), soa3.clone()],
+            )],
+        )
+        .expect("IXFR may remove the last owner below an empty non-terminal");
+        let IxfrResponse::Updated(removed) = removed else {
+            panic!("owner-removal IXFR must advance the zone");
+        };
+        let fresh_removed = ZoneSnapshot::active(
+            apex,
+            Some(3),
+            rrsets_from_records(vec![soa3, apex_ns(), wildcard]),
+        );
+        assert_eq!(*removed, fresh_removed);
+        assert_eq!(
+            removed
+                .offline_oracle()
+                .lookup(&queried, RecordType::A as u16, 1),
+            fresh_removed
+                .offline_oracle()
+                .lookup(&queried, RecordType::A as u16, 1),
+            "removing the last descendant must restore apex-wildcard synthesis"
+        );
+    }
+
+    #[test]
+    fn small_ixfr_reuses_untouched_large_snapshot_shards() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let old_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut records = Vec::with_capacity(70_002);
+        records.push(old_soa.clone());
+        records.push(apex_ns());
+        for index in 0..70_000u32 {
+            records.push(record(
+                &format!("n{index}.example.test."),
+                RecordType::A as u16,
+                index.to_be_bytes().to_vec(),
+            ));
+        }
+        let old_value = record(
+            "n4242.example.test.",
+            RecordType::A as u16,
+            4_242u32.to_be_bytes().to_vec(),
+        );
+        let new_value = record(
+            "n4242.example.test.",
+            RecordType::A as u16,
+            70_001u32.to_be_bytes().to_vec(),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current = ZoneSnapshot::active(apex.clone(), Some(1), rrsets_from_records(records));
+        assert!(current.rrset_storage_shard_count() > 1);
+
+        let response = parse_ixfr_response(
+            0x4242,
+            &apex,
+            1,
+            &current,
+            &[ixfr_message(
+                0x4242,
+                vec![
+                    new_soa.clone(),
+                    old_soa,
+                    old_value,
+                    new_soa.clone(),
+                    new_value,
+                    new_soa,
+                ],
+            )],
+        )
+        .expect("small update to large snapshot");
+        let IxfrResponse::Updated(updated) = response else {
+            panic!("expected updated snapshot");
+        };
+        assert_eq!(
+            updated.rrset_storage_shard_count(),
+            current.rrset_storage_shard_count()
+        );
+        assert!(
+            updated.shared_rrset_storage_shards(&current)
+                >= current.rrset_storage_shard_count().saturating_sub(2),
+            "only the SOA and changed-owner shards may be copied"
         );
     }
 

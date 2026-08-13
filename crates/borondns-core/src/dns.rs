@@ -14,8 +14,8 @@ use thiserror::Error;
 use crate::{
     zone::{PublishedZone, PublishedZoneView, ResourceRecord, Rrset, ZoneState, ZoneStore},
     zone_image::{
-        PackedRdataEncoding, ZoneImage, ZoneImageLookupPlan, ZoneImagePlanResponseShape,
-        ZoneImageWireRecord,
+        PackedRdataEncoding, ZoneImage, ZoneImageLookupOutcome, ZoneImageLookupPlan,
+        ZoneImagePlanResponseShape, ZoneImageWireRecord,
     },
 };
 
@@ -1099,6 +1099,7 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
 trait AnswerQueryObserver {
     fn observe_zone_image_plan(&self, plan: &ZoneImageLookupPlan, direct_answer: bool);
     fn observe_zone_image_failure(&self, reason: ZoneImageServeFailureReason);
+    fn observe_snapshot_lookup(&self, lookup: &LookupResult);
 }
 
 struct LookupMetricsObserver<F> {
@@ -1115,6 +1116,10 @@ where
 
     fn observe_zone_image_failure(&self, reason: ZoneImageServeFailureReason) {
         (self.callback)(LookupMetrics::from_zone_image_failure(reason));
+    }
+
+    fn observe_snapshot_lookup(&self, lookup: &LookupResult) {
+        (self.callback)(LookupMetrics::from_snapshot_lookup(lookup));
     }
 }
 
@@ -1282,6 +1287,17 @@ fn answer_query_message(
                     options,
                 ));
             }
+            if published_zone.has_incremental_overlay() {
+                return answer_with_incremental_overlay(
+                    header,
+                    &question,
+                    metadata,
+                    options,
+                    query_observer,
+                    zone_image_provider,
+                    &published_zone,
+                );
+            }
             match try_answer_with_zone_image(
                 header,
                 &question,
@@ -1315,6 +1331,137 @@ fn answer_query_message(
         ));
     };
     action
+}
+
+#[allow(clippy::too_many_arguments)]
+fn answer_with_incremental_overlay(
+    header: &Header,
+    question: &Question,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+    query_observer: &impl AnswerQueryObserver,
+    zone_image_provider: ZoneImageProvider<'_>,
+    published_zone: &dyn PublishedZoneView,
+) -> DatagramAction {
+    if !metadata.dnssec_requested()
+        && published_zone.overlay_allows_compact_direct_shape(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+        )
+    {
+        let image = zone_image_provider(published_zone);
+        let exact = image.lookup_exact_plan(&question.qname, question.qtype, question.qclass);
+        if let ZoneImageLookupOutcome::Found(exact_plan) = &exact
+            && published_zone.overlay_allows_compact_plan(exact_plan)
+            && let Some(plan) = image.lookup_direct_answer_plan_with_ascii_lowercase_hint(
+                &question.qname,
+                question.qtype,
+                question.qclass,
+                question.qname_ascii_lowercase(),
+            )
+        {
+            let sizing = zone_image_response_sizing(
+                question,
+                metadata.udp_ceiling(options),
+                &metadata,
+                options,
+            );
+            if let Some(response) = build_direct_zone_image_answer_response(
+                header, question, image, &plan, metadata, options, sizing,
+            ) {
+                query_observer.observe_zone_image_plan(&plan, true);
+                return DatagramAction::Respond(response);
+            }
+        }
+    }
+
+    let image = zone_image_provider(published_zone);
+    let plan = image.lookup_response_plan_with_ascii_lowercase_hint(
+        &question.qname,
+        question.qtype,
+        question.qclass,
+        options.max_cname_chain,
+        options.any_response,
+        question.qname_ascii_lowercase(),
+    );
+    let plan = if metadata.dnssec_requested() {
+        image.augment_lookup_plan_with_dnssec_ascii_lowercase_hint(
+            plan,
+            &question.qname,
+            question.qclass,
+            options.nsec3_max_iterations,
+            question.qname_ascii_lowercase(),
+        )
+    } else {
+        plan
+    };
+    if plan.indirection_continuation().is_none()
+        && published_zone.overlay_allows_compact_response_plan(&plan)
+    {
+        let mut response_metadata = metadata;
+        if plan.nsec3_iterations_exceeded() {
+            response_metadata = response_metadata
+                .with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
+        }
+        let response_sizing = zone_image_response_sizing(
+            question,
+            response_metadata.udp_ceiling(options),
+            &response_metadata,
+            options,
+        );
+        if let Some(response) = build_zone_image_response(
+            header,
+            question,
+            image,
+            &plan,
+            response_metadata,
+            options,
+            false,
+            response_sizing,
+        ) {
+            query_observer.observe_zone_image_plan(&plan, false);
+            return DatagramAction::Respond(response);
+        }
+    }
+
+    let lookup = published_zone.active_snapshot_ref().lookup_with_options(
+        &question.qname,
+        question.qtype,
+        question.qclass,
+        options.max_cname_chain,
+        options.any_response,
+    );
+    let (lookup, _dnssec_augmented, nsec3_iterations_exceeded) = if metadata.dnssec_requested() {
+        published_zone
+            .active_snapshot_ref()
+            .augment_lookup_result_with_dnssec(
+                lookup,
+                &question.qname,
+                question.qtype,
+                question.qclass,
+                options.nsec3_max_iterations,
+            )
+    } else {
+        (lookup, false, false)
+    };
+    let metadata = if nsec3_iterations_exceeded {
+        metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations)
+    } else {
+        metadata
+    };
+    query_observer.observe_snapshot_lookup(&lookup);
+    DatagramAction::Respond(build_response(
+        header,
+        lookup.rcode,
+        lookup.authoritative,
+        Some(question),
+        &lookup.answers,
+        &lookup.authorities,
+        &lookup.additionals,
+        metadata,
+        options,
+    ))
 }
 
 fn answer_empty_question_cookie_query(
@@ -4347,6 +4494,16 @@ impl From<&ZoneImageLookupPlan> for LookupMetrics {
 }
 
 impl LookupMetrics {
+    fn from_snapshot_lookup(lookup: &LookupResult) -> Self {
+        Self {
+            termination: lookup.termination,
+            nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
+            zone_image_used: false,
+            zone_image_direct_answer: false,
+            zone_image_failure_reason: None,
+        }
+    }
+
     fn from_zone_image_plan(plan: &ZoneImageLookupPlan, direct_answer: bool) -> Self {
         Self {
             termination: plan.termination(),

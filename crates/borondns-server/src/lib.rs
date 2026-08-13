@@ -49,8 +49,8 @@ use borondns_core::{
         sign_tsig_error_response,
     },
     zone::{
-        CatalogZoneView, SoaTimers, TransferZoneSnapshot, ZoneMetadata, ZoneSnapshot, ZoneState,
-        ZoneStore,
+        CatalogZoneView, SoaTimers, TransferZoneSnapshot, ZoneMetadata,
+        ZoneOverlayCompactionOutcome, ZoneSnapshot, ZoneState, ZoneStore,
     },
 };
 #[cfg(any(test, feature = "fuzzing"))]
@@ -244,7 +244,7 @@ impl Runtime {
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         validate_runtime_config(&config)
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
-        let zones = ZoneStore::new();
+        let zones = ZoneStore::with_publication_policy(config.zone_publication.policy());
         let mut visible_origins = config
             .zones
             .iter()
@@ -5817,6 +5817,48 @@ async fn refresh_zone_metadata_from_primaries(
     })
 }
 
+fn schedule_zone_overlay_compaction(zones: &ZoneStore, origin: &DomainName) {
+    if !zones.overlay_compaction_due(origin) {
+        return;
+    }
+    let zones = zones.clone();
+    let origin = origin.clone();
+    tokio::task::spawn_blocking(move || match zones.compact_overlay_if_due(&origin) {
+        Ok(ZoneOverlayCompactionOutcome::Compacted {
+            remaining_dirty_owners,
+        }) => {
+            info!(
+                category = "transfer",
+                event = "zone_overlay_compaction_completed",
+                zone = %origin,
+                remaining_dirty_owners,
+                "large-zone IXFR overlay compaction completed"
+            );
+            if zones.overlay_compaction_due(&origin) {
+                warn!(
+                    category = "transfer",
+                    event = "zone_overlay_compaction_still_due",
+                    zone = %origin,
+                    remaining_dirty_owners,
+                    "zone changed faster than the bounded compaction passes; a later transfer will retry"
+                );
+            }
+        }
+        Ok(
+            ZoneOverlayCompactionOutcome::NotNeeded
+            | ZoneOverlayCompactionOutcome::AlreadyRunning
+            | ZoneOverlayCompactionOutcome::Obsolete,
+        ) => {}
+        Err(error) => warn!(
+            category = "transfer",
+            event = "zone_overlay_compaction_failed",
+            zone = %origin,
+            %error,
+            "large-zone IXFR overlay compaction failed; current serving snapshot remains active"
+        ),
+    });
+}
+
 #[cfg(test)]
 async fn refresh_zone_metadata_from_primaries_preferring(
     zones: &ZoneStore,
@@ -6084,6 +6126,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                         .serial
                         .expect("IXFR current snapshot metadata has a serial");
                     context.metrics.record_ixfr_started();
+                    let ixfr_started = Instant::now();
                     match transfer_ixfr_from_target_with_tsig(
                         &primary_target,
                         &plan.origin,
@@ -6148,10 +6191,17 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                     Some(Ok(metadata)) => {
                                         context.metrics.record_ixfr_succeeded();
                                         let serial = metadata.serial;
+                                        let elapsed_seconds = ixfr_started.elapsed().as_secs_f64();
+                                        let generations = serial
+                                            .map(|serial| serial.wrapping_sub(current_serial));
+                                        schedule_zone_overlay_compaction(zones, &metadata.origin);
                                         info!(
                                             zone = %plan.origin,
                                             %primary,
                                             ?serial,
+                                            from_serial = current_serial,
+                                            ?generations,
+                                            elapsed_seconds,
                                             reason = %context.reason,
                                             "IXFR completed"
                                         );
@@ -6350,6 +6400,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     Some(Ok(metadata)) => {
                         context.metrics.record_axfr_succeeded();
                         let serial = metadata.serial;
+                        schedule_zone_overlay_compaction(zones, &metadata.origin);
                         info!(
                             zone = %plan.origin,
                             %primary,

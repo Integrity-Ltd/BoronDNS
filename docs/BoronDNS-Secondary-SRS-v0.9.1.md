@@ -37,6 +37,7 @@
 | v0.9.1 | 26 May 2026 | DT | **CHAOS class self-identification addition.** Normalises legacy non-BoronDNS naming to the project-canonical `BoronDNS`/`BDS-` namespace and retains the v0.9 corrections for catalog-zone configuration (`[[zones]]` and `[[catalog_zones]]`), DNS-interface NOTIFY handling, and the bounded EDE profile. Introduces §4.21 (CHAOS Class Query Handling) and allocates functional area code **CHAS**. New requirements BDS-FR-CHAS-001 through BDS-FR-CHAS-006 specify opt-in `version.bind.` / `version.server.` and `hostname.bind.` / `id.server.` CH/TXT responses, REFUSED defaults, REFUSED handling for unsupported CHAOS names and non-TXT CHAOS queries, IN-class orthogonality, and low-noise counters/logging. Adds BDS-IF-CONF-018 for the `[chaos]` configuration subtree while preserving BDS-IF-CONF-017 for the bounded Extended DNS Errors profile. Aligns BDS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model; external secret stores project secrets into files rather than BoronDNS reading secret values from environment variables. No invariant changes. No NEG changes. |
 | v0.9.1 alignment note | 13 Jun 2026 | DT | Source-alignment cleanup for the v0.2.0 preparation branch. The document version and requirement identifiers stay unchanged, but §4.20, §5.3, and §6.2 now describe the implemented reloadable filesystem `secret_store`, split catalog/member transfer configuration, opt-in catalog member transfer extensions, and the private-address-only legacy unsigned member AXFR policy. |
 | v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
+| v0.9.1 large-zone IXFR note | 13 Aug 2026 | Codex | Adds BDS-IF-CONF-019 for the externally visible compact/sharded/auto zone-publication policy used to keep small-zone query behavior while allowing delta-sensitive publication of large-zone IXFR. The policy is explicitly performance-only and does not weaken atomic refresh or DNS correctness requirements. |
 
 ---
 
@@ -3095,6 +3096,38 @@ The configuration validator (per BDS-IF-CONF-005) MUST verify that `chaos.versio
 *Source.* §4.21; BDS-FR-CHAS-001; BDS-FR-CHAS-002.
 *Note.* `BDS-IF-CONF-017` is allocated to the bounded Extended DNS Errors profile. The CHAOS configuration requirement is therefore numbered `BDS-IF-CONF-018` to preserve identifier stability and avoid collision.
 *Verification.* Configuration round-trip tests across absent, empty, populated, and oversized values; environment-override tests where supported; warning emission test for build-version-shaped `chaos.version`. *Added in v0.9.1.*
+
+**BDS-IF-CONF-019.** The server MUST accept an optional zone-publication
+performance policy under the `[zone_publication]` configuration subtree. The
+schema is:
+
+```toml
+[zone_publication]
+strategy = "auto"                               # compact | sharded | auto
+sharded_rrset_threshold = 1000000               # integer >= 1
+overlay_compaction_dirty_owner_threshold = 100000 # integer >= 0; 0 disables
+```
+
+`compact` MUST rebuild a complete immutable query image for each accepted zone
+generation. `sharded` MUST permit structurally shared incremental publication
+after the initial complete publication. `auto` MUST select compact publication
+below `sharded_rrset_threshold` RRsets and structurally shared publication at or
+above it. When nonzero, `overlay_compaction_dirty_owner_threshold` MUST request
+a bounded complete rebuild after at least that many distinct owners differ from
+the compact base; zero MUST disable automatic compaction. The defaults MUST be
+the values shown above.
+
+The selected representation is an implementation-performance policy only. For
+every value, a successful transfer MUST still satisfy atomic generation
+publication per BDS-INV-003 and MUST produce the same authoritative DNS
+semantics. Configuration validation MUST reject an unknown strategy or a zero
+`sharded_rrset_threshold`.
+
+*Source.* Large-zone IXFR operational scaling; BDS-INV-003; BDS-NFR-PERF and
+BDS-NFR-RES-002. *Verification.* Configuration round-trip/default/boundary
+tests; differential compact-versus-sharded lookup tests after add, replace,
+delete, and DNSSEC denial-index changes; concurrent publication tests proving
+no partial generation is visible. *Added in v0.9.1.*
 
 ## 6.3 Logging Interface
 

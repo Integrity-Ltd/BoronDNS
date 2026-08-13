@@ -1239,6 +1239,12 @@ fn unique_temp_path(label: &str, extension: &str) -> PathBuf {
 
 fn write_secret_store_manifest(root: &std::path::Path, contents: &str) {
     fs::create_dir_all(root).expect("create secret store root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700))
+            .expect("secure secret store root");
+    }
     let manifest = root.join("secrets.toml");
     fs::write(&manifest, contents).expect("write secret store manifest");
     #[cfg(unix)]
@@ -1270,6 +1276,6 @@ fn write_self_signed_xot_cert_file(label: &str) -> (PathBuf, String) {
         .expect("self-signed certificate");
     let cert_pem = cert.cert.pem();
     let key_pem = cert.signing_key.serialize_pem();
-    let cert_path = write_config(label, &cert_pem);
+    let cert_path = write_secret_file(label, &cert_pem, 0o644);
     (cert_path, key_pem)
 }

@@ -22,6 +22,12 @@ zones="${BORON_LOAD_ZONES:-1}"
 names_per_zone="${BORON_LOAD_NAMES_PER_ZONE:-10000}"
 nsec3_records_per_zone="${BORON_LOAD_NSEC3_RECORDS_PER_ZONE:-$names_per_zone}"
 records_per_name="${BORON_LOAD_RECORDS_PER_NAME:-4}"
+ixfr_delta_rrsets="${BORON_LOAD_IXFR_DELTA_RRSETS:-0}"
+ixfr_churn_interval_ms="${BORON_LOAD_IXFR_CHURN_INTERVAL_MS:-0}"
+ixfr_churn_start_delay_ms="${BORON_LOAD_IXFR_CHURN_START_DELAY_MS:-0}"
+ixfr_max_generations="${BORON_LOAD_IXFR_MAX_GENERATIONS:-1024}"
+soa_refresh_seconds="${BORON_LOAD_SOA_REFRESH_SECONDS:-3600}"
+zsm_min_interval_seconds="${BORON_LOAD_ZSM_MIN_INTERVAL_SECONDS:-60}"
 origin="${BORON_LOAD_ORIGIN:-load.borongen.}"
 catalog_origin="${BORON_LOAD_CATALOG_ORIGIN:-catalog.borongen.}"
 generator_listen="${BORON_LOAD_GENERATOR_LISTEN:-127.0.0.1:15353}"
@@ -31,6 +37,7 @@ message_bytes="${BORON_LOAD_MESSAGE_BYTES:-60000}"
 transfer_bytes="${BORON_LOAD_MAX_TRANSFER_BYTES:-25769803776}"
 transfer_messages="${BORON_LOAD_MAX_TRANSFER_MESSAGES:-1000000}"
 ready_timeout="${BORON_LOAD_READY_TIMEOUT_SECONDS:-7200}"
+ixfr_ready_timeout="${BORON_LOAD_IXFR_READY_TIMEOUT_SECONDS:-$ready_timeout}"
 hold_seconds="${BORON_LOAD_HOLD_SECONDS:-60}"
 query_packets="${BORON_LOAD_QUERY_PACKETS:-10000}"
 query_target_qps="${BORON_LOAD_QUERY_TARGET_QPS:-20000}"
@@ -73,6 +80,9 @@ server_memory_high="${BORON_LOAD_MEMORY_HIGH:-30G}"
 server_memory_max="${BORON_LOAD_MEMORY_MAX:-32G}"
 generator_memory_high="${BORON_GEN_MEMORY_HIGH:-768M}"
 generator_memory_max="${BORON_GEN_MEMORY_MAX:-1G}"
+zone_publication_strategy="${BORON_LOAD_ZONE_PUBLICATION_STRATEGY:-auto}"
+zone_publication_threshold="${BORON_LOAD_ZONE_PUBLICATION_THRESHOLD:-1000000}"
+overlay_compaction_threshold="${BORON_LOAD_OVERLAY_COMPACTION_DIRTY_OWNER_THRESHOLD:-100000}"
 systemd_manager="${BORON_LOAD_SYSTEMD_MANAGER:-user}"
 oomd_pressure_limit_percent="${BORON_LOAD_OOMD_PRESSURE_LIMIT_PERCENT:-80}"
 load_slice="${BORON_LOAD_SYSTEMD_SLICE:-borondnsload${slice_suffix}.slice}"
@@ -93,10 +103,15 @@ for pair in \
     "BORON_LOAD_NAMES_PER_ZONE:$names_per_zone" \
     "BORON_LOAD_NSEC3_RECORDS_PER_ZONE:$nsec3_records_per_zone" \
     "BORON_LOAD_RECORDS_PER_NAME:$records_per_name" \
+    "BORON_LOAD_IXFR_MAX_GENERATIONS:$ixfr_max_generations" \
+    "BORON_LOAD_SOA_REFRESH_SECONDS:$soa_refresh_seconds" \
+    "BORON_LOAD_ZSM_MIN_INTERVAL_SECONDS:$zsm_min_interval_seconds" \
+    "BORON_LOAD_ZONE_PUBLICATION_THRESHOLD:$zone_publication_threshold" \
     "BORON_LOAD_MESSAGE_BYTES:$message_bytes" \
     "BORON_LOAD_MAX_TRANSFER_BYTES:$transfer_bytes" \
     "BORON_LOAD_MAX_TRANSFER_MESSAGES:$transfer_messages" \
     "BORON_LOAD_READY_TIMEOUT_SECONDS:$ready_timeout" \
+    "BORON_LOAD_IXFR_READY_TIMEOUT_SECONDS:$ixfr_ready_timeout" \
     "BORON_LOAD_HOLD_SECONDS:$hold_seconds" \
     "BORON_LOAD_QUERY_PACKETS:$query_packets" \
     "BORON_LOAD_HTTP_CONNECT_TIMEOUT_SECONDS:$http_connect_timeout" \
@@ -114,6 +129,17 @@ for pair in \
     "BORON_LOAD_PERFORMANCE_CLIENT_TIMEOUT_MS:$performance_client_timeout_ms" \
     "BORON_LOAD_PERFORMANCE_EXTERNAL_TIMEOUT_SECONDS:$performance_external_timeout"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
+done
+for pair in \
+    "BORON_LOAD_IXFR_DELTA_RRSETS:$ixfr_delta_rrsets" \
+    "BORON_LOAD_IXFR_CHURN_INTERVAL_MS:$ixfr_churn_interval_ms" \
+    "BORON_LOAD_IXFR_CHURN_START_DELAY_MS:$ixfr_churn_start_delay_ms" \
+    "BORON_LOAD_OVERLAY_COMPACTION_DIRTY_OWNER_THRESHOLD:$overlay_compaction_threshold"; do
+    if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
+        printf '%s must be a non-negative integer, got %q\n' \
+            "${pair%%:*}" "${pair#*:}" >&2
+        exit 64
+    fi
 done
 if ! [[ "$query_target_qps" =~ ^[0-9]+$ ]]; then
     printf 'BORON_LOAD_QUERY_TARGET_QPS must be a non-negative integer, got %q\n' \
@@ -190,6 +216,13 @@ case "$profile" in
 registry-nsec3 | mixed | large-rrset) ;;
 *)
     printf 'BORON_LOAD_PROFILE must be registry-nsec3, mixed, or large-rrset\n' >&2
+    exit 64
+    ;;
+esac
+case "$zone_publication_strategy" in
+compact | sharded | auto) ;;
+*)
+    printf 'BORON_LOAD_ZONE_PUBLICATION_STRATEGY must be compact, sharded, or auto\n' >&2
     exit 64
     ;;
 esac
@@ -860,9 +893,16 @@ sha256sum "$generator_binary" "$load_binary" "$server_binary" >"$artifact_dir/bi
     --names-per-zone "$names_per_zone" \
     --records-per-name "$records_per_name" \
     --nsec3-records-per-zone "$nsec3_records_per_zone" \
+    --soa-refresh-seconds "$soa_refresh_seconds" \
+    --ixfr-delta-rrsets "$ixfr_delta_rrsets" \
     >"$artifact_dir/scenario-manifest.json"
 
 cat >"$workdir/borondns.toml" <<EOF
+[zone_publication]
+strategy = "$zone_publication_strategy"
+sharded_rrset_threshold = $zone_publication_threshold
+overlay_compaction_dirty_owner_threshold = $overlay_compaction_threshold
+
 [server]
 log_level = "info"
 log_format = "json"
@@ -894,6 +934,7 @@ max_concurrent_transfers = 1
 max_transfer_ingest_bytes = $transfer_bytes
 max_transfer_ingest_messages = $transfer_messages
 zsm_loading_warning_threshold_secs = 31536000
+zsm_min_interval_secs = $zsm_min_interval_seconds
 
 [rrl]
 # The bounded query probe runs from loopback and measures the loaded-zone
@@ -925,6 +966,17 @@ udp_idle_strategy=$udp_idle_strategy
 udp_socket_receive_buffer_bytes=$udp_socket_receive_buffer_bytes
 udp_socket_send_buffer_bytes=$udp_socket_send_buffer_bytes
 EOF
+cat >"$artifact_dir/ixfr-settings.env" <<EOF
+ixfr_delta_rrsets=$ixfr_delta_rrsets
+ixfr_churn_interval_ms=$ixfr_churn_interval_ms
+ixfr_churn_start_delay_ms=$ixfr_churn_start_delay_ms
+ixfr_max_generations=$ixfr_max_generations
+soa_refresh_seconds=$soa_refresh_seconds
+zsm_min_interval_seconds=$zsm_min_interval_seconds
+zone_publication_strategy=$zone_publication_strategy
+zone_publication_threshold=$zone_publication_threshold
+overlay_compaction_dirty_owner_threshold=$overlay_compaction_threshold
+EOF
 "$server_binary" --validate-config "$workdir/borondns.toml" \
     >"$artifact_dir/config-validation.txt"
 
@@ -950,6 +1002,11 @@ start_load_unit "$generator_unit" \
     --names-per-zone "$names_per_zone" \
     --records-per-name "$records_per_name" \
     --nsec3-records-per-zone "$nsec3_records_per_zone" \
+    --soa-refresh-seconds "$soa_refresh_seconds" \
+    --ixfr-delta-rrsets "$ixfr_delta_rrsets" \
+    --ixfr-churn-interval-ms "$ixfr_churn_interval_ms" \
+    --ixfr-churn-start-delay-ms "$ixfr_churn_start_delay_ms" \
+    --ixfr-max-generations "$ixfr_max_generations" \
     --tsig-name "$tsig_name" \
     --json-logs
 
@@ -1265,6 +1322,40 @@ if summary.get("errors_total") != 0:
     raise SystemExit(f"BoronGun reported {summary.get('errors_total')} errors")
 PY
 
+if ((ixfr_churn_interval_ms > 0)); then
+    failure_stage="ixfr-churn-readiness"
+    failure_reason="BoronDNS did not complete a member IXFR before performance measurement"
+    ixfr_deadline=$((SECONDS + ixfr_ready_timeout))
+    while true; do
+        http_get \
+            "http://$health_host:$health_port/metrics" \
+            >"$artifact_dir/metrics-before-performance.prom"
+        if python3 - "$artifact_dir/metrics-before-performance.prom" <<'PY'; then
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    for raw_line in source:
+        line = raw_line.strip()
+        if line.startswith(
+            'borondns_transfer_sessions_completed_total{protocol="ixfr"} '
+        ) and float(line.rsplit(None, 1)[1]) >= 1:
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+            break
+        fi
+        if ! systemctl_load is-active --quiet "$server_unit"; then
+            echo "BoronDNS stopped while waiting for the first member IXFR" >&2
+            exit 1
+        fi
+        if ((SECONDS >= ixfr_deadline)); then
+            echo "timed out waiting for the first member IXFR" >&2
+            exit 1
+        fi
+        sleep 1
+    done
+fi
+
 if [[ "$performance_mode" == "local" || "$performance_mode" == "ssh" ]]; then
     failure_stage="query-performance"
     failure_reason="BoronGen two-host query performance phase failed"
@@ -1441,12 +1532,15 @@ http_get \
 
 python3 - \
     "$artifact_dir/metrics-after-hold.prom" \
+    "$artifact_dir/metrics-at-ready.prom" \
     "$profile" \
-    "$query_packets" <<'PY'
+    "$query_packets" \
+    "$ixfr_churn_interval_ms" <<'PY'
 import sys
 
-metrics_path, profile, expected_text = sys.argv[1:]
+metrics_path, ready_metrics_path, profile, expected_text, churn_interval_text = sys.argv[1:]
 expected = int(expected_text)
+churn_enabled = int(churn_interval_text) != 0
 metrics = {}
 with open(metrics_path, encoding="utf-8") as source:
     for raw_line in source:
@@ -1456,8 +1550,31 @@ with open(metrics_path, encoding="utf-8") as source:
         name, value = line.rsplit(None, 1)
         metrics[name] = float(value)
 
+ready_metrics = {}
+with open(ready_metrics_path, encoding="utf-8") as source:
+    for raw_line in source:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, value = line.rsplit(None, 1)
+        ready_metrics[name] = float(value)
+
 if metrics.get("borondns_rrl_responses_dropped_total", 0) != 0:
     raise SystemExit("loopback lookup probe unexpectedly exercised RRL drops")
+if churn_enabled:
+    ixfr_completed = metrics.get(
+        'borondns_transfer_sessions_completed_total{protocol="ixfr"}', 0
+    )
+    ixfr_failed = metrics.get(
+        'borondns_transfer_sessions_failed_total{protocol="ixfr"}', 0
+    )
+    axfr_metric = 'borondns_transfer_sessions_completed_total{protocol="axfr"}'
+    if ixfr_completed < 1:
+        raise SystemExit("IXFR churn did not complete an incremental transfer")
+    if ixfr_failed != 0:
+        raise SystemExit(f"IXFR churn recorded {ixfr_failed:g} failed transfers")
+    if metrics.get(axfr_metric, 0) != ready_metrics.get(axfr_metric, 0):
+        raise SystemExit("IXFR churn unexpectedly fell back to AXFR after readiness")
 if profile == "registry-nsec3":
     metric = (
         'borondns_secondary_query_duration_seconds_count'

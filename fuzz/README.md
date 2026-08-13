@@ -6,7 +6,8 @@ these targets:
 - `dns_datagram`: DNS header/question parsing and ordinary datagram response
   construction.
 - `transfer_stream`: AXFR and IXFR response-stream parsing from TCP-style
-  length-prefixed chunks.
+  length-prefixed chunks, plus bounded valid multi-generation IXFR sequences
+  checked differentially against fresh snapshot and ZoneImage rebuilds.
 - `tsig_message`: TSIG record detection, MAC extraction, request/response
   verification, TSIG error responses, and TCP response-stream TSIG chaining.
 - `notify_edns_datagram`: NOTIFY request handling and EDNS OPT parsing against
@@ -15,9 +16,12 @@ these targets:
 - `zone_image_datagram`: raw and shaped query packets through the `ZoneImage`
   response path against a populated `zoneimage.test.` zone, including direct
   answers, CNAME, DNAME synthesis, wildcard owner substitution, referrals with
-  glue, answer-section additionals, basic DNSSEC augmentation, QTYPE=ANY,
-  EDNS, opaque unknown records, and malformed known-name RDATA records that
-  must be copied opaquely without panicking.
+  glue, answer-section additionals, DNSSEC augmentation including fail-closed
+  denial proofs, QTYPE=ANY, transport-specific EDNS Keepalive validation,
+  EDNS COOKIE, opaque unknown records, and malformed known-name RDATA records
+  that must be copied opaquely without panicking. Its base plan is compared
+  with the offline snapshot oracle before the production DNSSEC augmentation
+  is compared with the final response.
 - `catalog_zone`: RFC 9432 catalog-zone member parsing plus the uDNS transfer
   extension records for member primaries, TSIG key names, XoT/TCP transfer
   hints, and NOTIFY source overrides.
@@ -144,7 +148,10 @@ The target exercises public `borondns-core` DNS parser and datagram handling API
 `ZoneStore`.
 
 The transfer target exercises `parse_axfr_response` and `parse_ixfr_response`
-against a fixed current `alpha.test.` zone snapshot.
+against a fixed current `alpha.test.` zone snapshot. It also interprets the
+same fuzz input as up to 64 valid add, replace, and remove generations and
+requires every incremental snapshot and compiled ZoneImage to equal a fresh
+rebuild of the modeled zone.
 
 The TSIG target exercises public `borondns-core::tsig` APIs for raw and shaped DNS
 messages. The NOTIFY/EDNS target exercises public datagram answering APIs with

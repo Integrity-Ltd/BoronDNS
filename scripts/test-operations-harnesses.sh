@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1
@@ -1110,6 +1111,25 @@ if ((deadline_missing_continue_status != 124 || deadline_missing_continue_elapse
     exit 1
 fi
 [[ -f "$deadline_missing_continue_marker" ]]
+
+# Automatic build roots are created before fuzz-campaign acquires its evidence
+# publication lock. An error in that interval must still remove the exact
+# descriptor/journal-bound tree without weakening any lock-present cleanup.
+(
+    campaign_detach_inherited_private_lock
+    lockless_cleanup_trees="$workdir/lockless-cleanup-trees"
+    mkdir -m 0700 "$lockless_cleanup_trees"
+    lockless_cleanup_tree=""
+    campaign_prepare_private_temporary_tree "$lockless_cleanup_trees" \
+        lockless-cleanup lockless_cleanup_identity lockless_cleanup_tree
+    lockless_cleanup_journal="${CAMPAIGN_CLEANUP_IDENTITIES["lockless_cleanup_identity:journal_path"]}"
+    printf 'pre-lock cleanup payload\n' >"$lockless_cleanup_tree/payload"
+    [[ -z "${campaign_lock_pid:-}" && -z "${campaign_lock_control_fd:-}" &&
+        -z "${campaign_lock_response_fd:-}" ]]
+    campaign_remove_private_temporary_tree "$lockless_cleanup_tree" \
+        lockless_cleanup_identity "pre-lock automatic tree"
+    [[ ! -e "$lockless_cleanup_tree" && ! -e "$lockless_cleanup_journal" ]]
+)
 
 # An explicit operation deadline still rejects ordinary protected mutations.
 # The broker remains available only for a separately authenticated cleanup
@@ -6083,16 +6103,21 @@ if (
     exit 1
 fi
 [[ ! -e "$provenance_guard_evidence" ]]
+execution_deadline_now="$(monotonic_nanoseconds)"
+execution_deadline_nanoseconds=$((execution_deadline_now + 4000000000))
+execution_timeout="$(scenario_timeout_within_campaign 300 \
+    "$execution_deadline_nanoseconds" "$execution_deadline_now" 500000000 1)"
 started="$(monotonic_nanoseconds)"
 set +e
-run_bounded_scenario_command "$deadline_timeout" 1 TEST_ARTIFACT "$workdir/timeout-artifact" "$timeout_fixture"
+run_bounded_scenario_command "$execution_timeout" 1 TEST_ARTIFACT \
+    "$workdir/timeout-artifact" "$timeout_fixture"
 timeout_status=$?
 set -e
 ended_nanoseconds="$(monotonic_nanoseconds)"
 elapsed=$((ended_nanoseconds - started))
 [[ "$timeout_status" -ne 0 ]]
 ((elapsed <= 4000000000))
-((ended_nanoseconds < deadline_nanoseconds))
+((ended_nanoseconds < execution_deadline_nanoseconds))
 read -r fixture_pid fixture_child <"$workdir/timeout-artifact/pids"
 for pid in "$fixture_pid" "$fixture_child"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -8525,6 +8550,7 @@ cleanup_large_fragment="$BORONDNS_CAMPAIGN_UNIT_ROOT/$cleanup_large_unit"
 cleanup_large_build=/var/tmp/borondns-large-cleanup-large/h1
 mkdir -p "$cleanup_large_attempt" "$cleanup_large_build" "$BORONDNS_CAMPAIGN_UNIT_ROOT"
 sudo -n chown root:root "$cleanup_large_build"
+sudo -n chmod 0755 "$cleanup_large_build"
 cleanup_large_candidate="$cleanup_large_attempt/run.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$cleanup_large_candidate"
 chmod +x "$cleanup_large_candidate"
@@ -9866,6 +9892,45 @@ package_fake_second_config_payload="$(printf '{"rootfs":{"diff_ids":["sha256:%s"
 package_fake_second_image_id="sha256:$(printf '%s' "$package_fake_second_config_payload" | sha256sum | awk '{ print $1 }')"
 mkdir -p "$foreign_workspace" "$package_fake_bin" "$package_fake_dist" "$package_fake_target" \
     "$package_docker_input"
+# Reading an archive is allowed to update only its access time. Keep this
+# regression independent of Docker by exercising the verifier's descriptor-
+# bound staging primitive on a file whose atime is deliberately older than its
+# mtime, forcing relatime filesystems to update atime during the read.
+python3 - "$repo_root/scripts/verify-docker-archive.py" "$workdir" <<'PY'
+import importlib.util
+import os
+import pathlib
+import sys
+
+module_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("verify_docker_archive", module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load Docker archive verifier")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+archive = pathlib.Path(sys.argv[2]) / "archive-atime-regression.tar.xz"
+archive.write_bytes(b"descriptor-bound archive fixture")
+current = archive.stat()
+os.utime(
+    archive,
+    ns=(current.st_mtime_ns - 1_000_000_000, current.st_mtime_ns),
+)
+descriptor, before = module.open_archive(str(archive), 1024 * 1024)
+try:
+    staged = module.stage_archive(
+        descriptor,
+        before,
+        module.time.monotonic_ns() + 5_000_000_000,
+    )
+    staged.close()
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+if after.st_atime_ns == before.st_atime_ns:
+    raise SystemExit("archive staging fixture did not force an atime update")
+if module.stable_archive_identity(after) != module.stable_archive_identity(before):
+    raise SystemExit("atime-only archive read changed the stable identity")
+PY
 printf '%s\n' '[package]' 'name = "foreign-workspace"' 'version = "9.9.9"' 'edition = "2024"' \
     >"$foreign_workspace/Cargo.toml"
 # shellcheck disable=SC2016
@@ -10999,11 +11064,31 @@ package_clean_prefix="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-mu
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz.sha256")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.bin")" == 755 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix-boron-gun.bin")" == 755 ]]
-tar -tJvf "$package_clean_prefix.tar.xz" | awk '
-    $6 ~ /\/$/ { if ($1 !~ /^drwxr-xr-x/) exit 1; next }
-    $6 ~ /\/(borondns|boron-gun|install.sh)$/ { if ($1 !~ /^-rwxr-xr-x/) exit 1; next }
-    { if ($1 !~ /^-rw-r--r--/) exit 1 }
-'
+python3 - "$package_clean_prefix.tar.xz" <<'PY'
+import pathlib
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], mode="r:xz") as archive:
+    for member in archive.getmembers():
+        if member.isdir():
+            expected_mode = 0o755
+        elif member.isfile():
+            expected_mode = (
+                0o755
+                if pathlib.PurePosixPath(member.name).name
+                in {"borondns", "boron-gun", "install.sh"}
+                else 0o644
+            )
+        else:
+            raise SystemExit(f"unexpected installer archive member type: {member.name}")
+        actual_mode = member.mode & 0o777
+        if actual_mode != expected_mode:
+            raise SystemExit(
+                f"installer archive mode mismatch: {member.name} "
+                f"actual={actual_mode:o} expected={expected_mode:o}"
+            )
+PY
 clean_commit="$(git -C "$package_dirty_repo" rev-parse --short=12 HEAD)"
 clean_epoch="$(git -C "$package_dirty_repo" show -s --format=%ct HEAD)"
 clean_timestamp="$(
@@ -11869,5 +11954,17 @@ grep -Fq 'post_active" == inactive && "$post_sub" == dead' \
 # shellcheck disable=SC2016
 grep -Fq 'post_active" == inactive && "$post_sub" == dead' \
     "$repo_root/scripts/large-surface-soak-campaign.sh"
+
+bounded_load_harness="$repo_root/scripts/boron-gen-bounded-load.sh"
+grep -Fq 'BORON_LOAD_IXFR_DELTA_RRSETS' "$bounded_load_harness"
+grep -Fq 'BORON_LOAD_IXFR_CHURN_INTERVAL_MS' "$bounded_load_harness"
+grep -Fq 'BORON_LOAD_IXFR_CHURN_START_DELAY_MS' "$bounded_load_harness"
+grep -Fq 'BORON_LOAD_SOA_REFRESH_SECONDS' "$bounded_load_harness"
+grep -Fq 'BORON_LOAD_ZSM_MIN_INTERVAL_SECONDS' "$bounded_load_harness"
+grep -Fq 'BORON_LOAD_ZONE_PUBLICATION_STRATEGY' "$bounded_load_harness"
+grep -Fq -- '--ixfr-max-generations "$ixfr_max_generations"' "$bounded_load_harness"
+grep -Fq 'IXFR churn unexpectedly fell back to AXFR after readiness' "$bounded_load_harness"
+grep -Fq 'BoronDNS did not complete a member IXFR before performance measurement' \
+    "$bounded_load_harness"
 
 printf 'operations harness regressions passed\n'

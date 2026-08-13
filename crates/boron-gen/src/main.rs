@@ -25,7 +25,7 @@ struct Cli {
 enum Command {
     /// Validate and print a machine-readable scenario manifest.
     Manifest(ScenarioArgs),
-    /// Serve catalog/SOA/AXFR/unchanged-IXFR over UDP and TCP.
+    /// Serve catalog/SOA/AXFR and deterministic IXFR over UDP and TCP.
     Serve(ServeArgs),
 }
 
@@ -75,6 +75,14 @@ struct ScenarioArgs {
 
     #[arg(long, default_value_t = 300)]
     ttl: u32,
+
+    /// SOA refresh timer advertised to secondaries.
+    #[arg(long, default_value_t = 3_600)]
+    soa_refresh_seconds: u32,
+
+    /// Fixed RRsets replaced in every generated IXFR generation.
+    #[arg(long, default_value_t = 0)]
+    ixfr_delta_rrsets: u64,
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +98,18 @@ struct ServeArgs {
 
     #[arg(long, default_value_t = 4)]
     max_connections: usize,
+
+    /// Advance the served serial at this interval; zero keeps IXFR unchanged.
+    #[arg(long, default_value_t = 0)]
+    ixfr_churn_interval_ms: u64,
+
+    /// Keep the base serial for this long before starting the churn clock.
+    #[arg(long, default_value_t = 0)]
+    ixfr_churn_start_delay_ms: u64,
+
+    /// Maximum on-the-fly generations returned before AXFR fallback.
+    #[arg(long, default_value_t = 1_024)]
+    ixfr_max_generations: u32,
 
     #[arg(long, default_value = "transfer-key.")]
     tsig_name: String,
@@ -136,6 +156,8 @@ impl From<ScenarioArgs> for ScenarioConfig {
             seed: args.seed,
             serial: args.serial,
             ttl: args.ttl,
+            soa_refresh_seconds: args.soa_refresh_seconds,
+            ixfr_delta_rrsets: args.ixfr_delta_rrsets,
         }
     }
 }
@@ -193,6 +215,9 @@ async fn run_server(args: ServeArgs) -> Result<()> {
             message_bytes: args.message_bytes,
             max_connections: args.max_connections,
             tsig_key,
+            ixfr_churn_interval_ms: args.ixfr_churn_interval_ms,
+            ixfr_churn_start_delay_ms: args.ixfr_churn_start_delay_ms,
+            ixfr_max_generations: args.ixfr_max_generations,
         },
     )
     .await?;

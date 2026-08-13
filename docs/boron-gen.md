@@ -41,16 +41,32 @@ cargo run -p boron-gen -- serve \
   --nsec3-records-per-zone 100000
 ```
 
-The same address and port serve UDP SOA polling and TCP SOA, AXFR, and
-unchanged single-SOA IXFR responses. AXFR uses bounded messages and awaits each
-TCP write, so increasing the generated corpus does not increase BoronGen's
-retained zone memory.
+The same address and port serve UDP SOA polling and TCP SOA, AXFR, and IXFR.
+AXFR uses bounded messages and awaits each TCP write, so increasing the
+generated corpus does not increase BoronGen's retained zone memory.
 
-The initial NSEC3 mode produces a sorted and fully linked synthetic hash ring.
-It exercises BoronDNS denial-range indexing and lookup but does not claim that
-the hashes are SHA-1 preimages of the ordinary generated owner names. Generated
-RRSIG RDATA is structurally valid load-test material, not a cryptographic
-signature.
+To simulate a primary changing 1,000 RRsets every 100 ms, while leaving four
+minutes for the initial AXFR, add:
+
+```sh
+  --soa-refresh-seconds 1 \
+  --ixfr-delta-rrsets 1000 \
+  --ixfr-churn-interval-ms 100 \
+  --ixfr-churn-start-delay-ms 240000 \
+  --ixfr-max-generations 4096
+```
+
+Every generation replaces the same deterministic RRsets. BoronGen derives old
+and new RDATA from the serial and streams all requested RFC 1995 generations on
+the fly. It does not retain a materialized zone or IXFR journal. If the
+secondary requests an older serial than `ixfr_max_generations` permits,
+BoronGen deliberately sends AXFR so fallback and catch-up policy can be tested.
+
+The NSEC3 mode produces a sorted and fully linked hash ring containing the real
+apex preimage hash, allowing BoronDNS's actual DNSSEC NXDOMAIN proof path to run.
+Other generated hashes are synthetic and are not claimed to be SHA-1 preimages
+of ordinary generated owner names. Generated RRSIG RDATA is structurally valid
+load-test material, not a cryptographic signature.
 
 Before using a corpus larger than the conservative production default, raise
 both BoronDNS's configured transfer byte allowance and transfer message-count

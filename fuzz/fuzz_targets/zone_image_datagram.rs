@@ -54,13 +54,19 @@ fn exercise_shaped_query(data: &[u8]) -> Header {
     let request_header = Header::parse(&packet).expect("shaped header is valid");
     let question = Question::parse(&packet).expect("shaped question is valid");
     let options = answer_options(data);
-    let edns_well_formed = shaped_edns_well_formed(data);
+    let edns_well_formed = shaped_edns_well_formed(data, options.transport);
     // The production query path consults authoritative zone data only for IN
     // and ANY. CHAOS is answered separately and every other QCLASS is refused
     // before ZoneStore/ZoneImage lookup, so direct image/oracle equivalence is
     // neither required nor observable for those classes.
     let plan_summary = (edns_well_formed && matches!(question.qclass, QCLASS_IN | QCLASS_ANY))
-        .then(|| assert_zone_image_matches_offline_oracle(&question, options));
+        .then(|| {
+            assert_zone_image_matches_offline_oracle(
+                &question,
+                options,
+                shaped_dnssec_requested(data),
+            )
+        });
 
     let DatagramAction::Respond(response) = exercise_packet(&packet, options) else {
         panic!("valid authoritative query was discarded");
@@ -110,19 +116,20 @@ fn exercise_shaped_query(data: &[u8]) -> Header {
 fn assert_zone_image_matches_offline_oracle(
     question: &Question,
     options: AnswerOptions<'_>,
+    dnssec_requested: bool,
 ) -> ZoneImagePlanSummary {
     let published = zones()
         .find_published_zone(&question.qname)
         .expect("shaped query is inside fixture zone");
     let image = published.active_zone_image_ref();
-    let plan = image.lookup_response_plan(
+    let mut plan = image.lookup_response_plan(
         &question.qname,
         question.qtype,
         question.qclass,
         options.max_cname_chain,
         options.any_response,
     );
-    let image_summary = image.plan_summary(&plan).expect("image plan summarizes");
+    let base_image_summary = image.plan_summary(&plan).expect("image plan summarizes");
     let snapshot = fixture()
         .snapshots
         .iter()
@@ -135,8 +142,18 @@ fn assert_zone_image_matches_offline_oracle(
         options.max_cname_chain,
         options.any_response,
     );
-    assert_eq!(image_summary, lookup_summary(&oracle_lookup));
-    image_summary
+    assert_eq!(base_image_summary, lookup_summary(&oracle_lookup));
+    if dnssec_requested {
+        plan = image.augment_lookup_plan_with_dnssec(
+            plan,
+            &question.qname,
+            question.qclass,
+            options.nsec3_max_iterations,
+        );
+    }
+    image
+        .plan_summary(&plan)
+        .expect("augmented image plan summarizes")
 }
 
 struct Fixture {
@@ -180,8 +197,8 @@ fn exercise_regression_seeds_once() {
     });
 }
 
-fn regression_seeds() -> [[u8; 32]; 11] {
-    let mut seeds = [[0u8; 32]; 11];
+fn regression_seeds() -> [[u8; 32]; 13] {
+    let mut seeds = [[0u8; 32]; 13];
 
     // CNAME, wildcard synthesis, DNAME synthesis, referral, ANY/full,
     // DNSSEC/EDNS denial, UDP truncation, and QCLASS=ANY.
@@ -213,10 +230,25 @@ fn regression_seeds() -> [[u8; 32]; 11] {
     seeds[10][4] = 17;
     seeds[10][13] = 1;
     seeds[10][16] = 1;
+    // Retained-corpus regression: a DO=1 NSEC3 NXDOMAIN whose synthetic ring
+    // lacks an exact closest-encloser proof is deliberately converted from the
+    // base NXDOMAIN plan to SERVFAIL by DNSSEC augmentation. Compare the
+    // production response with the augmented plan, not the pre-DNSSEC oracle.
+    seeds[11][..17].copy_from_slice(&[
+        0x00, 0xf1, 0x0a, 0xf1, 0x3b, 0x30, 0x2b, 0x1c, 0x3c, 0x3c, 0x53, 0xff, 0x00, 0xff, 0x2e,
+        0x2d, 0x2f,
+    ]);
+    // Retained-corpus regression: a nonempty TCP Keepalive request option is
+    // malformed and produces FORMERR before the otherwise valid zone lookup.
+    seeds[12].copy_from_slice(&[
+        0x2d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x00, 0x00, 0x00, 0xdd, 0xdd,
+        0x00, 0xdd, 0xdd, 0xdd, 0xdd, 0x01, 0x00, 0x0b, 0xf2, 0x58, 0xf1, 0x74, 0x2d, 0xdd, 0xdd,
+        0xdd, 0x00,
+    ]);
     seeds
 }
 
-fn shaped_edns_well_formed(data: &[u8]) -> bool {
+fn shaped_edns_well_formed(data: &[u8], transport: Transport) -> bool {
     if byte(data, 13) & 1 == 0 {
         return true;
     }
@@ -228,7 +260,15 @@ fn shaped_edns_well_formed(data: &[u8]) -> bool {
     // The shaped generator emits one exactly framed option. Of the option
     // codes interpreted by the server, only COOKIE imposes a payload length:
     // 8 bytes for a client cookie, or 8 plus a 8..=32 byte server cookie.
-    option_code != 10 || option_len == 8 || (16..=40).contains(&option_len)
+    match option_code {
+        10 => option_len == 8 || (16..=40).contains(&option_len),
+        11 => option_len == 0 || transport == Transport::Udp,
+        _ => true,
+    }
+}
+
+fn shaped_dnssec_requested(data: &[u8]) -> bool {
+    byte(data, 13) & 1 != 0 && byte(data, 16) & 1 != 0
 }
 
 fn lookup_summary(lookup: &LookupResult) -> ZoneImagePlanSummary {

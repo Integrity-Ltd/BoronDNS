@@ -2,6 +2,7 @@ use std::fmt;
 
 use borondns_core::dns::{DomainName, RecordType};
 use serde::Serialize;
+use sha1::{Digest, Sha1};
 use thiserror::Error;
 
 const DNS_CLASS_IN: u16 = 1;
@@ -55,6 +56,8 @@ pub struct ScenarioConfig {
     pub seed: u64,
     pub serial: u32,
     pub ttl: u32,
+    pub soa_refresh_seconds: u32,
+    pub ixfr_delta_rrsets: u64,
 }
 
 impl Default for ScenarioConfig {
@@ -75,6 +78,8 @@ impl Default for ScenarioConfig {
             seed: 0x626f_726f_6e67_656e,
             serial: 1,
             ttl: DEFAULT_TTL,
+            soa_refresh_seconds: 3_600,
+            ixfr_delta_rrsets: 0,
         }
     }
 }
@@ -150,12 +155,15 @@ pub struct Manifest {
     pub nsec3_opt_out: bool,
     pub nsec3_ring_is_hash_ordered_and_linked: bool,
     pub nsec3_hashes_are_owner_name_preimages: bool,
+    pub nsec3_ring_includes_apex_preimage_hash: bool,
     pub structural_rrsigs: bool,
     pub signatures_are_cryptographically_valid: bool,
     pub ds_every: u32,
     pub seed: u64,
     pub serial: u32,
     pub ttl: u32,
+    pub soa_refresh_seconds: u32,
+    pub ixfr_delta_rrsets: u64,
     pub catalog_snapshot_records: u64,
     pub catalog_axfr_records: u64,
     pub member_snapshot_records_each: u64,
@@ -189,6 +197,11 @@ impl Scenario {
         }
         if config.ds_every == 0 {
             return Err(ScenarioError::ZeroValue { field: "ds_every" });
+        }
+        if config.soa_refresh_seconds == 0 {
+            return Err(ScenarioError::ZeroValue {
+                field: "soa_refresh_seconds",
+            });
         }
         if config.profile == ContentProfile::RegistryNsec3 && config.nsec3_records_per_zone < 2 {
             return Err(ScenarioError::TooFewNsec3Records);
@@ -237,12 +250,15 @@ impl Scenario {
             nsec3_opt_out: config.nsec3_opt_out,
             nsec3_ring_is_hash_ordered_and_linked: config.profile == ContentProfile::RegistryNsec3,
             nsec3_hashes_are_owner_name_preimages: false,
+            nsec3_ring_includes_apex_preimage_hash: config.profile == ContentProfile::RegistryNsec3,
             structural_rrsigs: config.structural_rrsigs,
             signatures_are_cryptographically_valid: false,
             ds_every: config.ds_every,
             seed: config.seed,
             serial: config.serial,
             ttl: config.ttl,
+            soa_refresh_seconds: config.soa_refresh_seconds,
+            ixfr_delta_rrsets: config.ixfr_delta_rrsets,
             catalog_snapshot_records,
             catalog_axfr_records,
             member_snapshot_records_each,
@@ -298,17 +314,49 @@ impl Scenario {
     }
 
     pub fn soa(&self, zone: ZoneKind) -> Result<GeneratedRecord, ScenarioError> {
+        self.soa_at_serial(zone, self.config.serial)
+    }
+
+    pub fn soa_at_serial(
+        &self,
+        zone: ZoneKind,
+        serial: u32,
+    ) -> Result<GeneratedRecord, ScenarioError> {
         let origin = self.zone_name(zone)?;
         Ok(record(
             origin.clone(),
             RecordType::Soa as u16,
             self.config.ttl,
-            soa_rdata(&origin, self.config.serial)?,
+            soa_rdata(&origin, serial, self.config.soa_refresh_seconds)?,
         ))
     }
 
     pub fn records(&self, zone: ZoneKind) -> Result<ZoneRecordIter<'_>, ScenarioError> {
-        ZoneRecordIter::new(self, zone)
+        self.records_at_serial(zone, self.config.serial)
+    }
+
+    pub fn records_at_serial(
+        &self,
+        zone: ZoneKind,
+        serial: u32,
+    ) -> Result<ZoneRecordIter<'_>, ScenarioError> {
+        ZoneRecordIter::new(self, zone, serial)
+    }
+
+    pub fn ixfr_records(
+        &self,
+        zone: ZoneKind,
+        from_serial: u32,
+        to_serial: u32,
+    ) -> Result<IxfrRecordIter<'_>, ScenarioError> {
+        IxfrRecordIter::new(self, zone, from_serial, to_serial)
+    }
+
+    pub fn ixfr_delta_rrsets(&self, zone: ZoneKind) -> u64 {
+        match zone {
+            ZoneKind::Catalog => 0,
+            ZoneKind::Member(_) => self.config.ixfr_delta_rrsets,
+        }
     }
 
     fn zone_name(&self, zone: ZoneKind) -> Result<DomainName, ScenarioError> {
@@ -327,18 +375,148 @@ pub struct ZoneRecordIter<'a> {
     owner_index: u64,
     slot: u64,
     nsec3_index: u64,
+    nsec3_apex_hash: Option<[u8; 20]>,
+    nsec3_apex_rank: u64,
+    serial: u32,
 }
 
-impl<'a> ZoneRecordIter<'a> {
-    fn new(scenario: &'a Scenario, kind: ZoneKind) -> Result<Self, ScenarioError> {
+pub struct IxfrRecordIter<'a> {
+    scenario: &'a Scenario,
+    kind: ZoneKind,
+    origin: DomainName,
+    from_serial: u32,
+    to_serial: u32,
+    generation_serial: u32,
+    stage: u8,
+    rrset_index: u64,
+}
+
+impl<'a> IxfrRecordIter<'a> {
+    fn new(
+        scenario: &'a Scenario,
+        kind: ZoneKind,
+        from_serial: u32,
+        to_serial: u32,
+    ) -> Result<Self, ScenarioError> {
         Ok(Self {
             scenario,
             kind,
             origin: scenario.zone_name(kind)?,
+            from_serial,
+            to_serial,
+            generation_serial: from_serial,
+            stage: 0,
+            rrset_index: 0,
+        })
+    }
+}
+
+impl Iterator for IxfrRecordIter<'_> {
+    type Item = Result<GeneratedRecord, ScenarioError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stage {
+                0 => {
+                    self.stage = if self.from_serial == self.to_serial {
+                        6
+                    } else {
+                        1
+                    };
+                    return Some(self.scenario.soa_at_serial(self.kind, self.to_serial));
+                }
+                1 => {
+                    self.stage = 2;
+                    return Some(
+                        self.scenario
+                            .soa_at_serial(self.kind, self.generation_serial),
+                    );
+                }
+                2 if self.rrset_index < self.scenario.ixfr_delta_rrsets(self.kind) => {
+                    let index = self.rrset_index;
+                    self.rrset_index += 1;
+                    return Some(ixfr_churn_record(
+                        &self.origin,
+                        self.scenario.config.ttl,
+                        self.scenario.config.seed,
+                        match self.kind {
+                            ZoneKind::Catalog => 0,
+                            ZoneKind::Member(index) => index,
+                        },
+                        index,
+                        self.generation_serial,
+                    ));
+                }
+                2 => {
+                    self.stage = 3;
+                    self.rrset_index = 0;
+                }
+                3 => {
+                    self.stage = 4;
+                    return Some(
+                        self.scenario
+                            .soa_at_serial(self.kind, self.generation_serial.wrapping_add(1)),
+                    );
+                }
+                4 if self.rrset_index < self.scenario.ixfr_delta_rrsets(self.kind) => {
+                    let index = self.rrset_index;
+                    self.rrset_index += 1;
+                    return Some(ixfr_churn_record(
+                        &self.origin,
+                        self.scenario.config.ttl,
+                        self.scenario.config.seed,
+                        match self.kind {
+                            ZoneKind::Catalog => 0,
+                            ZoneKind::Member(index) => index,
+                        },
+                        index,
+                        self.generation_serial.wrapping_add(1),
+                    ));
+                }
+                4 => {
+                    self.generation_serial = self.generation_serial.wrapping_add(1);
+                    self.rrset_index = 0;
+                    if self.generation_serial == self.to_serial {
+                        self.stage = 5;
+                    } else {
+                        self.stage = 1;
+                    }
+                }
+                5 => {
+                    self.stage = 6;
+                    return Some(self.scenario.soa_at_serial(self.kind, self.to_serial));
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+impl<'a> ZoneRecordIter<'a> {
+    fn new(scenario: &'a Scenario, kind: ZoneKind, serial: u32) -> Result<Self, ScenarioError> {
+        let origin = scenario.zone_name(kind)?;
+        let zone_index = match kind {
+            ZoneKind::Catalog => 0,
+            ZoneKind::Member(index) => index,
+        };
+        let nsec3_apex_hash = (scenario.config.profile == ContentProfile::RegistryNsec3
+            && matches!(kind, ZoneKind::Member(_)))
+        .then(|| nsec3_hash_name(&origin, &scenario.config));
+        let nsec3_apex_rank = nsec3_apex_hash
+            .as_ref()
+            .map(|hash| nsec3_apex_rank(&scenario.config, zone_index, hash))
+            .unwrap_or(0);
+        Ok(Self {
+            scenario,
+            kind,
+            origin,
             stage: 0,
             owner_index: 0,
             slot: 0,
             nsec3_index: 0,
+            nsec3_apex_hash,
+            nsec3_apex_rank,
+            serial,
         })
     }
 
@@ -347,7 +525,7 @@ impl<'a> ZoneRecordIter<'a> {
             match self.stage {
                 0 => {
                     self.stage = 1;
-                    return Some(self.scenario.soa(self.kind));
+                    return Some(self.scenario.soa_at_serial(self.kind, self.serial));
                 }
                 1 => {
                     self.stage = 2;
@@ -396,7 +574,7 @@ impl<'a> ZoneRecordIter<'a> {
                 4 => self.stage = 5,
                 5 => {
                     self.stage = 6;
-                    return Some(self.scenario.soa(self.kind));
+                    return Some(self.scenario.soa_at_serial(self.kind, self.serial));
                 }
                 _ => return None,
             }
@@ -408,7 +586,7 @@ impl<'a> ZoneRecordIter<'a> {
             match self.stage {
                 0 => {
                     self.stage = 1;
-                    return Some(self.scenario.soa(self.kind));
+                    return Some(self.scenario.soa_at_serial(self.kind, self.serial));
                 }
                 1 => {
                     self.stage = 2;
@@ -475,8 +653,25 @@ impl<'a> ZoneRecordIter<'a> {
                 5 => {
                     self.stage = 6;
                     self.slot = 0;
+                    self.owner_index = 0;
                 }
-                6 if self.scenario.config.profile == ContentProfile::RegistryNsec3
+                6 if self.owner_index < self.scenario.config.ixfr_delta_rrsets => {
+                    let index = self.owner_index;
+                    self.owner_index += 1;
+                    return Some(ixfr_churn_record(
+                        &self.origin,
+                        self.scenario.config.ttl,
+                        self.scenario.config.seed,
+                        zone_index,
+                        index,
+                        self.serial,
+                    ));
+                }
+                6 => {
+                    self.stage = 7;
+                    self.owner_index = 0;
+                }
+                7 if self.scenario.config.profile == ContentProfile::RegistryNsec3
                     && self.nsec3_index < self.scenario.config.nsec3_records_per_zone =>
                 {
                     if self.slot == 0 {
@@ -486,6 +681,10 @@ impl<'a> ZoneRecordIter<'a> {
                             &self.scenario.config,
                             zone_index,
                             self.nsec3_index,
+                            self.nsec3_apex_hash
+                                .as_ref()
+                                .expect("registry member has an apex NSEC3 hash"),
+                            self.nsec3_apex_rank,
                         ));
                     }
                     self.slot = 0;
@@ -497,6 +696,10 @@ impl<'a> ZoneRecordIter<'a> {
                             &self.scenario.config,
                             zone_index,
                             current,
+                            self.nsec3_apex_hash
+                                .as_ref()
+                                .expect("registry member has an apex NSEC3 hash"),
+                            self.nsec3_apex_rank,
                         ) {
                             Ok(owner) => owner,
                             Err(error) => return Some(Err(error)),
@@ -512,10 +715,10 @@ impl<'a> ZoneRecordIter<'a> {
                         ));
                     }
                 }
-                6 => self.stage = 7,
-                7 => {
-                    self.stage = 8;
-                    return Some(self.scenario.soa(self.kind));
+                7 => self.stage = 8,
+                8 => {
+                    self.stage = 9;
+                    return Some(self.scenario.soa_at_serial(self.kind, self.serial));
                 }
                 _ => return None,
             }
@@ -777,6 +980,12 @@ fn validate_generated_names(
         parse_generated_name(format!("b.{owner_key}"))?;
         parse_generated_name(format!("{}.{zone_key}", "0".repeat(32)))?;
     }
+    if config.ixfr_delta_rrsets != 0 {
+        parse_generated_name(format!(
+            "ix{:016x}.{zone_key}",
+            config.ixfr_delta_rrsets - 1
+        ))?;
+    }
     Ok(())
 }
 
@@ -845,6 +1054,7 @@ fn member_snapshot_record_count(config: &ScenarioConfig) -> Result<u64, Scenario
         0
     };
     apex.checked_add(content)
+        .and_then(|value| value.checked_add(config.ixfr_delta_rrsets))
         .and_then(|value| value.checked_add(nsec3))
         .ok_or(ScenarioError::RecordCountOverflow)
 }
@@ -877,14 +1087,34 @@ fn generated_owner(index: u64, origin: &DomainName) -> Result<DomainName, Scenar
     child_name(&format!("n{index:016x}"), origin)
 }
 
-fn soa_rdata(origin: &DomainName, serial: u32) -> Result<Vec<u8>, ScenarioError> {
+fn ixfr_churn_record(
+    origin: &DomainName,
+    ttl: u32,
+    _seed: u64,
+    _zone_index: u64,
+    index: u64,
+    serial: u32,
+) -> Result<GeneratedRecord, ScenarioError> {
+    Ok(record(
+        child_name(&format!("ix{index:016x}"), origin)?,
+        RecordType::A as u16,
+        ttl,
+        serial.to_be_bytes().to_vec(),
+    ))
+}
+
+fn soa_rdata(
+    origin: &DomainName,
+    serial: u32,
+    refresh_seconds: u32,
+) -> Result<Vec<u8>, ScenarioError> {
     let mname = child_name("ns", origin)?;
     let rname = child_name("hostmaster", origin)?;
     let mut rdata = Vec::with_capacity(mname.to_wire().len() + rname.to_wire().len() + 20);
     rdata.extend_from_slice(&mname.to_wire());
     rdata.extend_from_slice(&rname.to_wire());
     rdata.extend_from_slice(&serial.to_be_bytes());
-    rdata.extend_from_slice(&3_600u32.to_be_bytes());
+    rdata.extend_from_slice(&refresh_seconds.to_be_bytes());
     rdata.extend_from_slice(&600u32.to_be_bytes());
     rdata.extend_from_slice(&604_800u32.to_be_bytes());
     rdata.extend_from_slice(&300u32.to_be_bytes());
@@ -932,11 +1162,13 @@ fn nsec3_record(
     config: &ScenarioConfig,
     zone_index: u64,
     index: u64,
+    apex_hash: &[u8; 20],
+    apex_rank: u64,
 ) -> Result<GeneratedRecord, ScenarioError> {
-    let owner = nsec3_owner(origin, config, zone_index, index)?;
+    let owner = nsec3_owner(origin, config, zone_index, index, apex_hash, apex_rank)?;
     let count = config.nsec3_records_per_zone;
     let next_index = if index + 1 == count { 0 } else { index + 1 };
-    let next_hash = synthetic_nsec3_hash(config.seed ^ zone_index, next_index, count);
+    let next_hash = generated_nsec3_hash(config, zone_index, next_index, apex_hash, apex_rank);
     let salt = nsec3_salt(config.seed);
     let mut rdata = Vec::with_capacity(6 + salt.len() + next_hash.len() + 9);
     rdata.push(1);
@@ -966,13 +1198,64 @@ fn nsec3_owner(
     config: &ScenarioConfig,
     zone_index: u64,
     index: u64,
+    apex_hash: &[u8; 20],
+    apex_rank: u64,
 ) -> Result<DomainName, ScenarioError> {
-    let hash = synthetic_nsec3_hash(
-        config.seed ^ zone_index,
-        index,
-        config.nsec3_records_per_zone,
-    );
+    let hash = generated_nsec3_hash(config, zone_index, index, apex_hash, apex_rank);
     child_name(&base32hex_no_padding(&hash), origin)
+}
+
+fn nsec3_hash_name(name: &DomainName, config: &ScenarioConfig) -> [u8; 20] {
+    let canonical = DomainName::from_absolute_str(&name.canonical_key())
+        .expect("validated generated name remains valid")
+        .to_wire();
+    let salt = nsec3_salt(config.seed);
+    let mut digest = Sha1::new();
+    digest.update(&canonical);
+    digest.update(salt);
+    let mut hash: [u8; 20] = digest.finalize().into();
+    for _ in 0..config.nsec3_iterations {
+        let mut digest = Sha1::new();
+        digest.update(hash);
+        digest.update(salt);
+        hash = digest.finalize().into();
+    }
+    hash
+}
+
+fn nsec3_apex_rank(config: &ScenarioConfig, zone_index: u64, apex_hash: &[u8; 20]) -> u64 {
+    let synthetic_count = config.nsec3_records_per_zone - 1;
+    let prefix = u64::from_be_bytes(apex_hash[..8].try_into().expect("fixed SHA-1 width"));
+    let mut rank = ((u128::from(prefix) * u128::from(synthetic_count)) >> 64) as u64;
+    while rank < synthetic_count
+        && synthetic_nsec3_hash(config.seed ^ zone_index, rank, synthetic_count) < *apex_hash
+    {
+        rank += 1;
+    }
+    while rank > 0
+        && synthetic_nsec3_hash(config.seed ^ zone_index, rank - 1, synthetic_count) >= *apex_hash
+    {
+        rank -= 1;
+    }
+    rank
+}
+
+fn generated_nsec3_hash(
+    config: &ScenarioConfig,
+    zone_index: u64,
+    index: u64,
+    apex_hash: &[u8; 20],
+    apex_rank: u64,
+) -> [u8; 20] {
+    if index == apex_rank {
+        return *apex_hash;
+    }
+    let synthetic_index = index - u64::from(index > apex_rank);
+    synthetic_nsec3_hash(
+        config.seed ^ zone_index,
+        synthetic_index,
+        config.nsec3_records_per_zone - 1,
+    )
 }
 
 fn rrsig_record(
@@ -1158,18 +1441,21 @@ mod tests {
             .filter(|record| record.rr_type == RecordType::Nsec3 as u16)
             .collect::<Vec<_>>();
         assert_eq!(nsec3.len(), 17);
+        let origin = scenario.zone_origin(1).unwrap();
+        let apex_hash = nsec3_hash_name(&origin, &scenario.config);
+        let apex_rank = nsec3_apex_rank(&scenario.config, 1, &apex_hash);
+        let mut previous_hash = None;
         for index in 0..nsec3.len() {
             let owner_wire = nsec3[index].owner.to_wire();
             let label_len = owner_wire[0] as usize;
             let owner_label = std::str::from_utf8(&owner_wire[1..1 + label_len]).unwrap();
-            assert_eq!(
-                owner_label,
-                base32hex_no_padding(&synthetic_nsec3_hash(
-                    scenario.config.seed ^ 1,
-                    index as u64,
-                    17,
-                ))
-            );
+            let current_hash =
+                generated_nsec3_hash(&scenario.config, 1, index as u64, &apex_hash, apex_rank);
+            assert_eq!(owner_label, base32hex_no_padding(&current_hash));
+            if let Some(previous_hash) = previous_hash {
+                assert!(previous_hash < current_hash);
+            }
+            previous_hash = Some(current_hash);
             let rdata = &nsec3[index].rdata;
             let salt_len = rdata[4] as usize;
             let next_len_offset = 5 + salt_len;
@@ -1177,13 +1463,24 @@ mod tests {
             let next = &rdata[next_len_offset + 1..next_len_offset + 1 + next_len];
             assert_eq!(
                 next,
-                &synthetic_nsec3_hash(
-                    scenario.config.seed ^ 1,
+                &generated_nsec3_hash(
+                    &scenario.config,
+                    1,
                     ((index + 1) % nsec3.len()) as u64,
-                    17,
+                    &apex_hash,
+                    apex_rank,
                 )
             );
         }
+        assert_eq!(
+            base32hex_no_padding(&apex_hash),
+            nsec3[apex_rank as usize]
+                .owner
+                .canonical_key()
+                .split('.')
+                .next()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1233,6 +1530,32 @@ mod tests {
                 .unwrap();
             assert_eq!(first, second);
         }
+    }
+
+    #[test]
+    fn configured_soa_refresh_is_emitted_and_zero_is_rejected() {
+        let scenario = Scenario::new(ScenarioConfig {
+            soa_refresh_seconds: 1,
+            ..ScenarioConfig::default()
+        })
+        .unwrap();
+        let origin = scenario.zone_origin(0).unwrap();
+        let soa = scenario.soa_at_serial(ZoneKind::Member(0), 7).unwrap();
+        let names_len = child_name("ns", &origin).unwrap().to_wire().len()
+            + child_name("hostmaster", &origin).unwrap().to_wire().len();
+        assert_eq!(
+            u32::from_be_bytes(soa.rdata[names_len + 4..names_len + 8].try_into().unwrap()),
+            1
+        );
+        assert!(matches!(
+            Scenario::new(ScenarioConfig {
+                soa_refresh_seconds: 0,
+                ..ScenarioConfig::default()
+            }),
+            Err(ScenarioError::ZeroValue {
+                field: "soa_refresh_seconds"
+            })
+        ));
     }
 
     #[test]

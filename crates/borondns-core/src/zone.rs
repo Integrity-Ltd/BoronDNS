@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    hash::{Hash, Hasher},
     mem,
     sync::{
         Arc, Mutex,
@@ -11,14 +12,18 @@ use std::{
 use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
+use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use tracing::{info, warn};
 
 use crate::dns::{
-    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
-    RecordType,
+    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination, Rcode,
+    RecordType, canonical_name_key_from_labels,
 };
-use crate::zone_image::{ZoneImage, ZoneImageBuildError, ZoneImageStats};
+use crate::zone_image::{
+    ZoneImage, ZoneImageBuildError, ZoneImageLookupOutcome, ZoneImageLookupPlan, ZoneImageRrsetId,
+    ZoneImageStats,
+};
 
 // BDS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
@@ -29,6 +34,41 @@ pub enum ZoneState {
     Loading,
     Active,
     Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZonePublicationStrategy {
+    #[default]
+    Compact,
+    Sharded,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZonePublicationPolicy {
+    pub strategy: ZonePublicationStrategy,
+    pub sharded_rrset_threshold: usize,
+    /// Number of unique dirty owners that triggers an out-of-band compact
+    /// image rebuild. Zero disables automatic compaction.
+    pub overlay_compaction_dirty_owner_threshold: usize,
+}
+
+impl Default for ZonePublicationPolicy {
+    fn default() -> Self {
+        Self {
+            strategy: ZonePublicationStrategy::Compact,
+            sharded_rrset_threshold: 1_000_000,
+            overlay_compaction_dirty_owner_threshold: 100_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneOverlayCompactionOutcome {
+    NotNeeded,
+    AlreadyRunning,
+    Compacted { remaining_dirty_owners: usize },
+    Obsolete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,13 +85,45 @@ pub struct ZoneSnapshot {
     pub state: ZoneState,
     pub serial: Option<u32>,
     pub soa_timers: Option<SoaTimers>,
+    soa_record_count: usize,
+    dnssec_rrset_count: usize,
+    rdata_record_count: usize,
+    denial_indexes: DenialIndexes,
+    shape_summary_cache: ZoneShapeSummary,
+    rdata_count_frequencies: Arc<BTreeMap<usize, usize>>,
+    lineage: ZoneSnapshotLineage,
     origin_key: NameKey,
-    rrsets: HashMap<RrsetKey, Rrset>,
-    name_classes: NameClassIndex,
-    empty_non_terminal_classes: NameClassIndex,
-    delegation_rrsets: Vec<RrsetKey>,
-    dname_rrsets: Vec<RrsetKey>,
+    rrsets: ShardedRrsets,
+    name_classes: Arc<NameClassIndex>,
+    empty_non_terminal_classes: Arc<NameClassIndex>,
+    delegation_rrsets: ShardedRrsetKeys,
+    dname_rrsets: ShardedRrsetKeys,
 }
+
+#[derive(Debug, Clone)]
+struct ZoneSnapshotLineage {
+    identity: Arc<()>,
+    parent_identity: Option<Arc<()>>,
+    changed_rrset_keys: Arc<[RrsetKey]>,
+}
+
+impl Default for ZoneSnapshotLineage {
+    fn default() -> Self {
+        Self {
+            identity: Arc::new(()),
+            parent_identity: None,
+            changed_rrset_keys: Arc::from([]),
+        }
+    }
+}
+
+impl PartialEq for ZoneSnapshotLineage {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ZoneSnapshotLineage {}
 
 #[derive(Debug, Clone, Copy)]
 #[doc(hidden)]
@@ -94,6 +166,263 @@ pub struct ZoneShapeHistogramSummary {
 struct ZoneShapeBucketDefinition {
     label: &'static str,
     upper_bound: Option<usize>,
+}
+
+struct DnssecAugmentationState {
+    dnssec_augmented: bool,
+    nsec3_iterations_exceeded: bool,
+    nsec3_max_iterations: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DenialIndexes {
+    nsec: PersistentOrderIndex<NsecOrderKey>,
+    nsec3: PersistentOrderIndex<Nsec3OrderKey>,
+    nsec3_param_counts: Arc<HashMap<(u16, Nsec3Params), u32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct NsecOrderKey {
+    class: u16,
+    owner: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Nsec3OrderKey {
+    class: u16,
+    params: Nsec3Params,
+    owner_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistentOrderIndex<K> {
+    root: Option<Arc<PersistentOrderNode<K>>>,
+    len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistentOrderNode<K> {
+    key: K,
+    value: RrsetKey,
+    priority: u64,
+    left: Option<Arc<Self>>,
+    right: Option<Arc<Self>>,
+}
+
+impl<K> Default for PersistentOrderIndex<K> {
+    fn default() -> Self {
+        Self { root: None, len: 0 }
+    }
+}
+
+impl<K> PersistentOrderIndex<K>
+where
+    K: Clone + Hash + Ord,
+{
+    fn insert(&mut self, key: K, value: RrsetKey) {
+        let existed = persistent_order_get(&self.root, &key).is_some();
+        self.root = Some(persistent_order_insert(self.root.take(), key, value));
+        if !existed {
+            self.len += 1;
+        }
+    }
+
+    fn remove(&mut self, key: &K) {
+        if persistent_order_get(&self.root, key).is_none() {
+            return;
+        }
+        self.root = persistent_order_remove(self.root.take(), key);
+        self.len -= 1;
+    }
+
+    fn predecessor(&self, key: &K) -> Option<(&K, &RrsetKey)> {
+        let mut node = self.root.as_deref();
+        let mut found = None;
+        while let Some(current) = node {
+            if current.key <= *key {
+                found = Some((&current.key, &current.value));
+                node = current.right.as_deref();
+            } else {
+                node = current.left.as_deref();
+            }
+        }
+        found
+    }
+
+    fn last_before(&self, upper_exclusive: &K) -> Option<(&K, &RrsetKey)> {
+        let mut node = self.root.as_deref();
+        let mut found = None;
+        while let Some(current) = node {
+            if current.key < *upper_exclusive {
+                found = Some((&current.key, &current.value));
+                node = current.right.as_deref();
+            } else {
+                node = current.left.as_deref();
+            }
+        }
+        found
+    }
+}
+
+fn persistent_order_priority<K: Hash>(key: &K) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn persistent_order_get<'a, K: Ord>(
+    root: &'a Option<Arc<PersistentOrderNode<K>>>,
+    key: &K,
+) -> Option<&'a RrsetKey> {
+    let mut node = root.as_deref();
+    while let Some(current) = node {
+        match key.cmp(&current.key) {
+            std::cmp::Ordering::Less => node = current.left.as_deref(),
+            std::cmp::Ordering::Greater => node = current.right.as_deref(),
+            std::cmp::Ordering::Equal => return Some(&current.value),
+        }
+    }
+    None
+}
+
+fn persistent_order_insert<K>(
+    root: Option<Arc<PersistentOrderNode<K>>>,
+    key: K,
+    value: RrsetKey,
+) -> Arc<PersistentOrderNode<K>>
+where
+    K: Clone + Hash + Ord,
+{
+    let priority = persistent_order_priority(&key);
+    let Some(node) = root else {
+        return Arc::new(PersistentOrderNode {
+            key,
+            value,
+            priority,
+            left: None,
+            right: None,
+        });
+    };
+    match key.cmp(&node.key) {
+        std::cmp::Ordering::Equal => Arc::new(PersistentOrderNode {
+            key,
+            value,
+            priority,
+            left: node.left.clone(),
+            right: node.right.clone(),
+        }),
+        _ if priority < node.priority => {
+            let (left, right) = persistent_order_split(Some(node), &key);
+            Arc::new(PersistentOrderNode {
+                key,
+                value,
+                priority,
+                left,
+                right,
+            })
+        }
+        std::cmp::Ordering::Less => Arc::new(PersistentOrderNode {
+            key: node.key.clone(),
+            value: node.value.clone(),
+            priority: node.priority,
+            left: Some(persistent_order_insert(node.left.clone(), key, value)),
+            right: node.right.clone(),
+        }),
+        std::cmp::Ordering::Greater => Arc::new(PersistentOrderNode {
+            key: node.key.clone(),
+            value: node.value.clone(),
+            priority: node.priority,
+            left: node.left.clone(),
+            right: Some(persistent_order_insert(node.right.clone(), key, value)),
+        }),
+    }
+}
+
+fn persistent_order_split<K: Clone + Ord>(
+    root: Option<Arc<PersistentOrderNode<K>>>,
+    key: &K,
+) -> (
+    Option<Arc<PersistentOrderNode<K>>>,
+    Option<Arc<PersistentOrderNode<K>>>,
+) {
+    let Some(node) = root else {
+        return (None, None);
+    };
+    if node.key < *key {
+        let (middle, right) = persistent_order_split(node.right.clone(), key);
+        (
+            Some(Arc::new(PersistentOrderNode {
+                key: node.key.clone(),
+                value: node.value.clone(),
+                priority: node.priority,
+                left: node.left.clone(),
+                right: middle,
+            })),
+            right,
+        )
+    } else {
+        let (left, middle) = persistent_order_split(node.left.clone(), key);
+        (
+            left,
+            Some(Arc::new(PersistentOrderNode {
+                key: node.key.clone(),
+                value: node.value.clone(),
+                priority: node.priority,
+                left: middle,
+                right: node.right.clone(),
+            })),
+        )
+    }
+}
+
+fn persistent_order_remove<K: Clone + Ord>(
+    root: Option<Arc<PersistentOrderNode<K>>>,
+    key: &K,
+) -> Option<Arc<PersistentOrderNode<K>>> {
+    let node = root?;
+    match key.cmp(&node.key) {
+        std::cmp::Ordering::Less => Some(Arc::new(PersistentOrderNode {
+            key: node.key.clone(),
+            value: node.value.clone(),
+            priority: node.priority,
+            left: persistent_order_remove(node.left.clone(), key),
+            right: node.right.clone(),
+        })),
+        std::cmp::Ordering::Greater => Some(Arc::new(PersistentOrderNode {
+            key: node.key.clone(),
+            value: node.value.clone(),
+            priority: node.priority,
+            left: node.left.clone(),
+            right: persistent_order_remove(node.right.clone(), key),
+        })),
+        std::cmp::Ordering::Equal => persistent_order_merge(node.left.clone(), node.right.clone()),
+    }
+}
+
+fn persistent_order_merge<K: Clone + Ord>(
+    left: Option<Arc<PersistentOrderNode<K>>>,
+    right: Option<Arc<PersistentOrderNode<K>>>,
+) -> Option<Arc<PersistentOrderNode<K>>> {
+    match (left, right) {
+        (None, right) => right,
+        (left, None) => left,
+        (Some(left), Some(right)) if left.priority < right.priority => {
+            Some(Arc::new(PersistentOrderNode {
+                key: left.key.clone(),
+                value: left.value.clone(),
+                priority: left.priority,
+                left: left.left.clone(),
+                right: persistent_order_merge(left.right.clone(), Some(right)),
+            }))
+        }
+        (Some(left), Some(right)) => Some(Arc::new(PersistentOrderNode {
+            key: right.key.clone(),
+            value: right.value.clone(),
+            priority: right.priority,
+            left: persistent_order_merge(Some(left), right.left.clone()),
+            right: right.right.clone(),
+        })),
+    }
 }
 
 const ZONE_SHAPE_COUNT_BUCKETS: &[ZoneShapeBucketDefinition] = &[
@@ -190,45 +519,61 @@ impl ZoneSnapshot {
             state: ZoneState::Loading,
             serial: None,
             soa_timers: None,
+            soa_record_count: 0,
+            dnssec_rrset_count: 0,
+            rdata_record_count: 0,
+            denial_indexes: DenialIndexes::default(),
+            shape_summary_cache: ZoneShapeSummary::default(),
+            rdata_count_frequencies: Arc::new(BTreeMap::new()),
+            lineage: ZoneSnapshotLineage::default(),
             origin_key,
-            rrsets: HashMap::new(),
-            name_classes: NameClassIndex::in_only(),
-            empty_non_terminal_classes: NameClassIndex::in_only(),
-            delegation_rrsets: Vec::new(),
-            dname_rrsets: Vec::new(),
+            rrsets: ShardedRrsets::empty(),
+            name_classes: Arc::new(NameClassIndex::in_only()),
+            empty_non_terminal_classes: Arc::new(NameClassIndex::in_only()),
+            delegation_rrsets: ShardedRrsetKeys::new(1),
+            dname_rrsets: ShardedRrsetKeys::new(1),
         }
     }
 
     pub fn active(origin: DomainName, serial: Option<u32>, rrsets: Vec<Rrset>) -> Self {
         let mut name_interner = NameInterner::default();
         let origin_key = name_interner.intern_domain(&origin);
-        let mut by_key = HashMap::new();
-        for rrset in rrsets {
-            by_key.insert(
-                RrsetKey::new_interned(
-                    &rrset.owner,
-                    rrset.rr_type,
-                    rrset.class,
-                    &mut name_interner,
-                ),
-                rrset,
-            );
-        }
+        let by_key = ShardedRrsets::from_rrsets(rrsets, &mut name_interner);
         let soa_timers = soa_timers_from_rrsets(&origin_key, &by_key);
+        let soa_record_count = by_key
+            .values()
+            .filter(|rrset| rrset.rr_type == RecordType::Soa as u16)
+            .map(|rrset| rrset.rdatas.len())
+            .sum();
+        let dnssec_rrset_count = by_key
+            .values()
+            .filter(|rrset| is_dnssec_rr_type(rrset.rr_type))
+            .count();
+        let rdata_record_count = by_key.values().map(|rrset| rrset.rdatas.len()).sum();
+        let denial_indexes = DenialIndexes::build(&by_key, &origin);
         let indexes = ZoneSnapshotIndexes::build(&origin, &by_key, &mut name_interner);
 
-        Self {
+        let mut snapshot = Self {
             origin,
             state: ZoneState::Active,
             serial,
             soa_timers,
+            soa_record_count,
+            dnssec_rrset_count,
+            rdata_record_count,
+            denial_indexes,
+            shape_summary_cache: ZoneShapeSummary::default(),
+            rdata_count_frequencies: Arc::new(rrset_rdata_count_frequencies(&by_key)),
+            lineage: ZoneSnapshotLineage::default(),
             origin_key,
             rrsets: by_key,
-            name_classes: indexes.name_classes,
-            empty_non_terminal_classes: indexes.empty_non_terminal_classes,
+            name_classes: Arc::new(indexes.name_classes),
+            empty_non_terminal_classes: Arc::new(indexes.empty_non_terminal_classes),
             delegation_rrsets: indexes.delegation_rrsets,
             dname_rrsets: indexes.dname_rrsets,
-        }
+        };
+        snapshot.shape_summary_cache = snapshot.compute_shape_summary();
+        snapshot
     }
 
     pub fn with_state(&self, state: ZoneState) -> Self {
@@ -237,6 +582,13 @@ impl ZoneSnapshot {
             state,
             serial: self.serial,
             soa_timers: self.soa_timers,
+            soa_record_count: self.soa_record_count,
+            dnssec_rrset_count: self.dnssec_rrset_count,
+            rdata_record_count: self.rdata_record_count,
+            denial_indexes: self.denial_indexes.clone(),
+            shape_summary_cache: self.shape_summary_cache,
+            rdata_count_frequencies: self.rdata_count_frequencies.clone(),
+            lineage: self.lineage.clone(),
             origin_key: self.origin_key.clone(),
             rrsets: self.rrsets.clone(),
             name_classes: self.name_classes.clone(),
@@ -262,6 +614,7 @@ impl ZoneSnapshot {
             .and_then(|rrset| rrset.records().into_iter().next())
     }
 
+    #[cfg(test)]
     pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
         self.rrsets
             .iter()
@@ -285,6 +638,278 @@ impl ZoneSnapshot {
 
     pub(crate) fn rrsets(&self) -> impl Iterator<Item = &Rrset> {
         self.rrsets.values()
+    }
+
+    pub(crate) fn transfer_rrset_records_by_key(
+        &self,
+        owner_key: &str,
+        rr_type: u16,
+        class: u16,
+    ) -> Vec<ResourceRecord> {
+        let Some(rrset) = self
+            .rrsets
+            .get(&RrsetKey::new_from_key(owner_key, rr_type, class))
+        else {
+            return Vec::new();
+        };
+        rrset
+            .rdatas
+            .iter()
+            .map(|rdata| ResourceRecord {
+                owner: rrset.owner.clone(),
+                rr_type,
+                class,
+                ttl: self.record_ttl_by_owner_key(owner_key, class, rr_type, rrset.ttl, rdata),
+                rdata: rdata.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn transfer_records_at_name_key(&self, owner_key: &str) -> Vec<ResourceRecord> {
+        self.rrsets
+            .values_at_owner(owner_key)
+            .flat_map(|rrset| {
+                rrset.rdatas.iter().map(move |rdata| ResourceRecord {
+                    owner: rrset.owner.clone(),
+                    rr_type: rrset.rr_type,
+                    class: rrset.class,
+                    ttl: self.record_ttl_by_owner_key(
+                        owner_key,
+                        rrset.class,
+                        rrset.rr_type,
+                        rrset.ttl,
+                        rdata,
+                    ),
+                    rdata: rdata.clone(),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn with_cow_rrset_replacements(
+        &self,
+        serial: u32,
+        replacements: Vec<(String, u16, u16, Option<Rrset>)>,
+    ) -> Self {
+        let changed_rrset_keys = replacements
+            .iter()
+            .map(|(owner_key, rr_type, class, _)| {
+                RrsetKey::new_from_key(owner_key, *rr_type, *class)
+            })
+            .collect::<Vec<_>>();
+        let mut soa_record_count = self.soa_record_count;
+        let mut dnssec_rrset_count = self.dnssec_rrset_count;
+        let mut rdata_record_count = self.rdata_record_count;
+        let mut shape_summary = self.shape_summary_cache;
+        let mut rdata_count_frequencies = self.rdata_count_frequencies.clone();
+        let mut rrset_presence_changes = Vec::<(String, u16, bool)>::new();
+        let mut special_index_changes = Vec::<(RrsetKey, bool, bool)>::new();
+        for (owner_key, rr_type, class, replacement) in &replacements {
+            let key = RrsetKey::new_from_key(owner_key, *rr_type, *class);
+            let previous_rrset = self.rrsets.get(&key);
+            let previous_present = previous_rrset.is_some();
+            let replacement_present = replacement.is_some();
+            if let Some(previous) = previous_rrset {
+                remove_rrset_from_shape(
+                    &mut shape_summary,
+                    Arc::make_mut(&mut rdata_count_frequencies),
+                    previous,
+                );
+            }
+            if let Some(next) = replacement {
+                add_rrset_to_shape(
+                    &mut shape_summary,
+                    Arc::make_mut(&mut rdata_count_frequencies),
+                    next,
+                );
+            }
+            let previous_rdata_count = previous_rrset.map_or(0, |rrset| rrset.rdatas.len());
+            let replacement_rdata_count =
+                replacement.as_ref().map_or(0, |rrset| rrset.rdatas.len());
+            rdata_record_count =
+                rdata_record_count.saturating_sub(previous_rdata_count) + replacement_rdata_count;
+            if previous_present != replacement_present {
+                rrset_presence_changes.push((owner_key.clone(), *class, replacement_present));
+                if is_dnssec_rr_type(*rr_type) {
+                    if replacement_present {
+                        dnssec_rrset_count = dnssec_rrset_count.saturating_add(1);
+                    } else {
+                        dnssec_rrset_count = dnssec_rrset_count.saturating_sub(1);
+                    }
+                }
+            }
+            if previous_present != replacement_present {
+                let is_delegation = *rr_type == RecordType::Ns as u16
+                    && owner_key.as_str() != self.origin_key.as_ref();
+                let is_dname = *rr_type == RecordType::Dname as u16;
+                if is_delegation || is_dname {
+                    special_index_changes.push((
+                        RrsetKey::new_from_key(owner_key, *rr_type, *class),
+                        replacement_present,
+                        is_delegation,
+                    ));
+                }
+            }
+            if *rr_type != RecordType::Soa as u16 {
+                continue;
+            }
+            let previous = self
+                .rrsets
+                .get(&RrsetKey::new_from_key(owner_key, *rr_type, *class))
+                .map_or(0, |rrset| rrset.rdatas.len());
+            let next = replacement.as_ref().map_or(0, |rrset| rrset.rdatas.len());
+            soa_record_count = soa_record_count.saturating_sub(previous) + next;
+        }
+        let rrsets = self.rrsets.with_replacements(replacements);
+        let denial_indexes = self
+            .denial_indexes
+            .updated(&self.rrsets, &rrsets, &self.origin);
+        let mut name_classes = (*self.name_classes).clone();
+        let mut empty_non_terminal_classes = (*self.empty_non_terminal_classes).clone();
+        let mut affected_names = HashSet::<String>::new();
+        for (owner_key, class, added) in &rrset_presence_changes {
+            affected_names.insert(owner_key.clone());
+            let owner = NameKey::from(owner_key.as_str());
+            if *added {
+                name_classes.insert(owner, *class);
+            } else {
+                name_classes.remove(owner_key, *class);
+            }
+            let mut ancestor = parent_name_key(owner_key);
+            while let Some(name) = ancestor {
+                affected_names.insert(name.clone());
+                if *added {
+                    empty_non_terminal_classes.insert(NameKey::from(name.as_str()), *class);
+                } else {
+                    empty_non_terminal_classes.remove(&name, *class);
+                }
+                if name == self.origin_key.as_ref() {
+                    break;
+                }
+                ancestor = parent_name_key(&name);
+            }
+        }
+        for name in affected_names {
+            update_name_shape_membership(
+                &mut shape_summary,
+                &name,
+                self.name_classes.contains_name(&name),
+                name_classes.contains_name(&name),
+                self.empty_non_terminal_classes.contains_name(&name),
+                empty_non_terminal_classes.contains_name(&name),
+            );
+        }
+        let mut delegation_rrsets = self.delegation_rrsets.clone();
+        let mut dname_rrsets = self.dname_rrsets.clone();
+        for (key, added, is_delegation) in special_index_changes {
+            let index = if is_delegation {
+                &mut delegation_rrsets
+            } else {
+                &mut dname_rrsets
+            };
+            if added {
+                shape_summary.name_key_logical_bytes += key.owner.len();
+                index.insert(key);
+            } else {
+                shape_summary.name_key_logical_bytes = shape_summary
+                    .name_key_logical_bytes
+                    .saturating_sub(key.owner.len());
+                index.remove(&key);
+            }
+        }
+        shape_summary.max_rdata_per_rrset = rdata_count_frequencies
+            .last_key_value()
+            .map_or(0, |(count, _)| *count);
+        shape_summary.owner_name_count = name_classes.len();
+        shape_summary.empty_non_terminal_name_count = empty_non_terminal_classes.len();
+        shape_summary.in_only_class_index_bytes_saved =
+            name_classes.value_bytes_saved() + empty_non_terminal_classes.value_bytes_saved();
+        shape_summary.name_key_deduplicated_bytes = shape_summary
+            .name_key_logical_bytes
+            .saturating_sub(shape_summary.name_key_unique_bytes);
+        Self {
+            origin: self.origin.clone(),
+            state: ZoneState::Active,
+            serial: Some(serial),
+            soa_timers: soa_timers_from_rrsets(&self.origin_key, &rrsets),
+            soa_record_count,
+            dnssec_rrset_count,
+            rdata_record_count,
+            denial_indexes,
+            shape_summary_cache: shape_summary,
+            rdata_count_frequencies,
+            lineage: ZoneSnapshotLineage {
+                identity: Arc::new(()),
+                parent_identity: Some(self.lineage.identity.clone()),
+                changed_rrset_keys: Arc::from(changed_rrset_keys),
+            },
+            origin_key: self.origin_key.clone(),
+            rrsets,
+            name_classes: Arc::new(name_classes),
+            empty_non_terminal_classes: Arc::new(empty_non_terminal_classes),
+            delegation_rrsets,
+            dname_rrsets,
+        }
+    }
+
+    pub(crate) fn soa_record_count(&self) -> usize {
+        self.soa_record_count
+    }
+
+    fn has_dnssec_rrsets(&self) -> bool {
+        self.dnssec_rrset_count != 0
+    }
+
+    pub fn rdata_record_count(&self) -> usize {
+        self.rdata_record_count
+    }
+
+    fn changed_rrset_keys_from(&self, previous: &Self) -> Option<Vec<RrsetKey>> {
+        if self
+            .lineage
+            .parent_identity
+            .as_ref()
+            .is_some_and(|parent| Arc::ptr_eq(parent, &previous.lineage.identity))
+        {
+            return Some(self.lineage.changed_rrset_keys.to_vec());
+        }
+        if self.origin_key != previous.origin_key
+            || self.rrsets.shards.len() != previous.rrsets.shards.len()
+        {
+            return None;
+        }
+        let mut changed = Vec::new();
+        for (current, old) in self.rrsets.shards.iter().zip(&previous.rrsets.shards) {
+            if Arc::ptr_eq(current, old) {
+                continue;
+            }
+            for (key, old_rrset) in old.iter() {
+                if current.get(key) != Some(old_rrset) {
+                    changed.push(key.clone());
+                }
+            }
+            for key in current.keys() {
+                if !old.contains_key(key) {
+                    changed.push(key.clone());
+                }
+            }
+        }
+        Some(changed)
+    }
+
+    #[doc(hidden)]
+    pub fn rrset_storage_shard_count(&self) -> usize {
+        self.rrsets.shards.len()
+    }
+
+    #[doc(hidden)]
+    pub fn shared_rrset_storage_shards(&self, other: &Self) -> usize {
+        self.rrsets
+            .shards
+            .iter()
+            .zip(other.rrsets.shards.iter())
+            .filter(|(left, right)| Arc::ptr_eq(left, right))
+            .count()
     }
 
     pub(crate) fn record_ttl_by_owner_key(
@@ -312,6 +937,10 @@ impl ZoneSnapshot {
     }
 
     pub fn shape_summary(&self) -> ZoneShapeSummary {
+        self.shape_summary_cache
+    }
+
+    fn compute_shape_summary(&self) -> ZoneShapeSummary {
         let mut summary = ZoneShapeSummary {
             rrset_count: self.rrsets.len(),
             owner_name_count: self.name_classes.len(),
@@ -423,7 +1052,7 @@ impl ZoneSnapshot {
     }
 
     fn offline_oracle_lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
-        self.offline_oracle_lookup_with_options(
+        self.lookup_with_options(
             qname,
             qtype,
             qclass,
@@ -432,7 +1061,7 @@ impl ZoneSnapshot {
         )
     }
 
-    fn offline_oracle_lookup_with_options(
+    pub(crate) fn lookup_with_options(
         &self,
         qname: &DomainName,
         qtype: u16,
@@ -483,6 +1112,113 @@ impl ZoneSnapshot {
             wildcard_result
         } else {
             LookupResult::nxdomain(self.soa_rrset(qclass))
+        }
+    }
+
+    pub(crate) fn augment_lookup_result_with_dnssec(
+        &self,
+        lookup: LookupResult,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        nsec3_max_iterations: u16,
+    ) -> (LookupResult, bool, bool) {
+        let mut seen = HashSet::new();
+        let mut dnssec_state = DnssecAugmentationState {
+            dnssec_augmented: false,
+            nsec3_iterations_exceeded: false,
+            nsec3_max_iterations,
+        };
+        let nodata_candidate =
+            lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
+        let nxdomain_candidate =
+            lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
+        let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &lookup);
+        let authorities =
+            self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_state);
+        let authorities = self.add_nodata_nsec_augmentations(
+            qname,
+            qtype,
+            qclass,
+            nodata_candidate,
+            authorities,
+            &mut dnssec_state,
+        );
+        let authorities = self.add_nxdomain_nsec_augmentations(
+            qname,
+            qclass,
+            nxdomain_candidate,
+            authorities,
+            &mut dnssec_state,
+        );
+        let authorities = self.add_wildcard_nsec_augmentations(
+            qname,
+            qclass,
+            wildcard_candidate,
+            authorities,
+            &mut dnssec_state,
+        );
+        let answers = self.add_rrsig_augmentations(
+            lookup.answers,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        let authorities = self.add_rrsig_augmentations(
+            authorities,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        let additionals = self.add_rrsig_augmentations(
+            lookup.additionals,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+
+        (
+            LookupResult {
+                answers,
+                authorities,
+                additionals,
+                nsec3_iterations_exceeded: dnssec_state.nsec3_iterations_exceeded,
+                ..lookup
+            },
+            dnssec_state.dnssec_augmented,
+            dnssec_state.nsec3_iterations_exceeded,
+        )
+    }
+
+    fn is_wildcard_synthesis(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        lookup: &LookupResult,
+    ) -> bool {
+        if lookup.rcode != Rcode::NoError
+            || !lookup.authoritative
+            || lookup.answers.is_empty()
+            || lookup
+                .answers
+                .first()
+                .is_none_or(|record| record.owner != *qname)
+            || self.name_exists(qname, qclass)
+        {
+            return false;
+        }
+        let Some(wildcard) = self
+            .closest_encloser(qname, qclass)
+            .map(|closest| closest.wildcard_child())
+        else {
+            return false;
+        };
+        if qtype == 255 {
+            !self.rrsets_at_name(&wildcard, qclass).is_empty()
+        } else {
+            self.rrset(&wildcard, qtype, qclass).is_some()
+                || (qtype != RecordType::Cname as u16
+                    && self
+                        .rrset(&wildcard, RecordType::Cname as u16, qclass)
+                        .is_some())
         }
     }
 
@@ -712,25 +1448,39 @@ impl ZoneSnapshot {
     }
 
     fn delegation_for(&self, qname: &DomainName, qclass: u16) -> Option<&Rrset> {
-        self.delegation_rrsets
-            .iter()
-            .filter_map(|key| self.rrsets.get(key))
-            .filter(|rrset| {
-                qclass_matches(rrset.class, qclass) && qname.is_equal_or_subdomain_of(&rrset.owner)
-            })
-            .max_by_key(|rrset| rrset.owner.label_count())
+        let mut candidate = Some(qname.clone());
+        while let Some(name) = candidate {
+            if !name.is_equal_or_subdomain_of(&self.origin) {
+                return None;
+            }
+            let is_origin = name.label_count() == self.origin.label_count();
+            if !is_origin && let Some(rrset) = self.rrset(&name, RecordType::Ns as u16, qclass) {
+                return Some(rrset);
+            }
+            if is_origin {
+                return None;
+            }
+            candidate = name.parent();
+        }
+        None
     }
 
     fn dname_for(&self, qname: &DomainName, qclass: u16) -> Option<&Rrset> {
-        self.dname_rrsets
-            .iter()
-            .filter_map(|key| self.rrsets.get(key))
-            .filter(|rrset| {
-                qclass_matches(rrset.class, qclass)
-                    && rrset.owner != *qname
-                    && qname.is_equal_or_subdomain_of(&rrset.owner)
-            })
-            .max_by_key(|rrset| rrset.owner.label_count())
+        let mut candidate = qname.parent();
+        while let Some(name) = candidate {
+            if !name.is_equal_or_subdomain_of(&self.origin) {
+                return None;
+            }
+            let is_origin = name.label_count() == self.origin.label_count();
+            if let Some(rrset) = self.rrset(&name, RecordType::Dname as u16, qclass) {
+                return Some(rrset);
+            }
+            if is_origin {
+                return None;
+            }
+            candidate = name.parent();
+        }
+        None
     }
 
     fn glue_for_ns_records(
@@ -814,6 +1564,305 @@ impl ZoneSnapshot {
         additionals
     }
 
+    fn add_referral_dnssec_augmentations(
+        &self,
+        authorities: Vec<ResourceRecord>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) -> Vec<ResourceRecord> {
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        for record in &authorities {
+            if record.rr_type != RecordType::Ns as u16 {
+                continue;
+            }
+            let proof_rrset = self
+                .rrset(&record.owner, RecordType::Ds as u16, record.class)
+                .or_else(|| self.rrset(&record.owner, RecordType::Nsec as u16, record.class));
+            if let Some(proof_rrset) = proof_rrset {
+                push_rrset_records(
+                    proof_rrset,
+                    &mut augmented,
+                    &mut seen,
+                    &mut dnssec_state.dnssec_augmented,
+                );
+            } else {
+                self.push_nsec3_for_name(
+                    &record.owner,
+                    record.class,
+                    true,
+                    &mut augmented,
+                    &mut seen,
+                    dnssec_state,
+                );
+            }
+        }
+        augmented
+    }
+
+    fn add_nodata_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        nodata_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) -> Vec<ResourceRecord> {
+        if !nodata_candidate
+            || !authorities
+                .iter()
+                .any(|record| record.rr_type == RecordType::Soa as u16)
+            || self.rrset(qname, qtype, qclass).is_some()
+        {
+            return authorities;
+        }
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        if let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) {
+            push_rrset_records(
+                nsec_rrset,
+                &mut augmented,
+                &mut seen,
+                &mut dnssec_state.dnssec_augmented,
+            );
+        } else {
+            self.push_nsec3_for_name(qname, qclass, true, &mut augmented, &mut seen, dnssec_state);
+        }
+        augmented
+    }
+
+    fn add_nxdomain_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        nxdomain_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) -> Vec<ResourceRecord> {
+        if !nxdomain_candidate
+            || !authorities
+                .iter()
+                .any(|record| record.rr_type == RecordType::Soa as u16)
+        {
+            return authorities;
+        }
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        self.push_nsec_covering_name(
+            qname,
+            qclass,
+            &mut augmented,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        if let Some(closest_encloser) = self.closest_encloser(qname, qclass) {
+            self.push_nsec_covering_name(
+                &closest_encloser.wildcard_child(),
+                qclass,
+                &mut augmented,
+                &mut seen,
+                &mut dnssec_state.dnssec_augmented,
+            );
+            self.push_nsec3_for_name(
+                &closest_encloser,
+                qclass,
+                true,
+                &mut augmented,
+                &mut seen,
+                dnssec_state,
+            );
+            if let Some(next_closer) = next_closer_name(qname, &closest_encloser) {
+                self.push_nsec3_for_name(
+                    &next_closer,
+                    qclass,
+                    false,
+                    &mut augmented,
+                    &mut seen,
+                    dnssec_state,
+                );
+            }
+            self.push_nsec3_for_name(
+                &closest_encloser.wildcard_child(),
+                qclass,
+                false,
+                &mut augmented,
+                &mut seen,
+                dnssec_state,
+            );
+        }
+        augmented
+    }
+
+    fn add_wildcard_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        wildcard_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) -> Vec<ResourceRecord> {
+        if !wildcard_candidate {
+            return authorities;
+        }
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        self.push_nsec_covering_name(
+            qname,
+            qclass,
+            &mut augmented,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        self.push_nsec3_for_name(
+            qname,
+            qclass,
+            false,
+            &mut augmented,
+            &mut seen,
+            dnssec_state,
+        );
+        augmented
+    }
+
+    fn push_nsec_covering_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        records: &mut Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_augmented: &mut bool,
+    ) {
+        let Some(nsec_rrset) = self.nsec_rrset_covering_name(name, qclass) else {
+            return;
+        };
+        push_rrset_records(nsec_rrset, records, seen, dnssec_augmented);
+    }
+
+    fn nsec_rrset_covering_name(&self, name: &DomainName, qclass: u16) -> Option<&Rrset> {
+        let class = if qclass == 255 { 1 } else { qclass };
+        let key = self.denial_indexes.nsec_candidate(name, class)?;
+        let rrset = self.rrsets.get(key)?;
+        rrset
+            .rdatas
+            .iter()
+            .any(|rdata| nsec_covers_name(&rrset.owner, rdata, name))
+            .then_some(rrset)
+    }
+
+    fn push_nsec3_for_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        require_exact: bool,
+        records: &mut Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) {
+        let Some(nsec3_rrset) = self.nsec3_rrset_for_name(
+            name,
+            qclass,
+            require_exact,
+            &mut dnssec_state.nsec3_iterations_exceeded,
+            dnssec_state.nsec3_max_iterations,
+        ) else {
+            return;
+        };
+        push_rrset_records(
+            nsec3_rrset,
+            records,
+            seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+    }
+
+    fn nsec3_rrset_for_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        require_exact: bool,
+        nsec3_iterations_exceeded: &mut bool,
+        nsec3_max_iterations: u16,
+    ) -> Option<&Rrset> {
+        let class = if qclass == 255 { 1 } else { qclass };
+        let params = self.active_nsec3_params(class)?;
+        if params.iterations > nsec3_max_iterations {
+            *nsec3_iterations_exceeded = true;
+            return None;
+        }
+        let hash = nsec3_hash_name(name, &params)?;
+        let key = self.denial_indexes.nsec3_candidate(&hash, class, &params)?;
+        let rrset = self.rrsets.get(key)?;
+        let owner_hash = nsec3_owner_hash_label(&rrset.owner, &self.origin)?;
+        rrset
+            .rdatas
+            .iter()
+            .any(|rdata| {
+                nsec3_params_from_rdata(rdata).as_ref() == Some(&params)
+                    && nsec3_next_hash_label(rdata).is_some_and(|next_hash| {
+                        hash == owner_hash
+                            || (!require_exact
+                                && nsec3_range_covers_hash(&owner_hash, &next_hash, &hash))
+                    })
+            })
+            .then_some(rrset)
+    }
+
+    fn active_nsec3_params(&self, class: u16) -> Option<Nsec3Params> {
+        let rrset = self.rrsets.get(&RrsetKey::from_name_key(
+            self.origin_key.clone(),
+            RecordType::Nsec3Param as u16,
+            class,
+        ))?;
+        rrset.rdatas.iter().find_map(|rdata| {
+            let params = nsec3param_params_from_rdata(rdata)?;
+            self.denial_indexes
+                .nsec3_param_counts
+                .contains_key(&(class, params.clone()))
+                .then_some(params)
+        })
+    }
+
+    fn add_rrsig_augmentations(
+        &self,
+        records: Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        let mut augmented = records.clone();
+        for record in &records {
+            if record.rr_type == RecordType::Rrsig as u16 {
+                continue;
+            }
+            let Some(rrsig_rrset) =
+                self.rrset(&record.owner, RecordType::Rrsig as u16, record.class)
+            else {
+                continue;
+            };
+            for rrsig in rrsig_rrset.records() {
+                if rrsig_type_covered(&rrsig.rdata) != Some(record.rr_type) {
+                    continue;
+                }
+                if seen.insert(record_identity(&rrsig)) {
+                    augmented.push(rrsig);
+                    *dnssec_augmented = true;
+                }
+            }
+        }
+        augmented
+    }
+
     fn closest_encloser(&self, qname: &DomainName, qclass: u16) -> Option<DomainName> {
         let mut candidate = qname.parent()?;
         loop {
@@ -839,9 +1888,8 @@ impl ZoneSnapshot {
     fn rrset_by_name_key(&self, owner_key: &str, rr_type: u16, qclass: u16) -> Option<&Rrset> {
         if qclass == 255 {
             self.rrsets
-                .iter()
-                .find(|(key, rrset)| key.owner.as_ref() == owner_key && rrset.rr_type == rr_type)
-                .map(|(_, rrset)| rrset)
+                .values_at_owner(owner_key)
+                .find(|rrset| rrset.rr_type == rr_type)
         } else {
             self.rrsets
                 .get(&RrsetKey::new_from_key(owner_key, rr_type, qclass))
@@ -855,14 +1903,8 @@ impl ZoneSnapshot {
 
     fn rrsets_at_name_key(&self, owner_key: &str, qclass: u16) -> Vec<&Rrset> {
         self.rrsets
-            .iter()
-            .filter_map(|(key, rrset)| {
-                if key.owner.as_ref() == owner_key && (qclass == 255 || rrset.class == qclass) {
-                    Some(rrset)
-                } else {
-                    None
-                }
-            })
+            .values_at_owner(owner_key)
+            .filter(|rrset| qclass == 255 || rrset.class == qclass)
             .collect()
     }
 
@@ -939,20 +1981,12 @@ impl ZoneSnapshotOfflineOracle<'_> {
         max_cname_chain: usize,
         any_response: AnyResponseMode,
     ) -> LookupResult {
-        self.snapshot.offline_oracle_lookup_with_options(
-            qname,
-            qtype,
-            qclass,
-            max_cname_chain,
-            any_response,
-        )
+        self.snapshot
+            .lookup_with_options(qname, qtype, qclass, max_cname_chain, any_response)
     }
 }
 
-fn soa_timers_from_rrsets(
-    origin_key: &NameKey,
-    rrsets: &HashMap<RrsetKey, Rrset>,
-) -> Option<SoaTimers> {
+fn soa_timers_from_rrsets(origin_key: &NameKey, rrsets: &ShardedRrsets) -> Option<SoaTimers> {
     let soa = rrsets.get(&RrsetKey::from_name_key(
         origin_key.clone(),
         RecordType::Soa as u16,
@@ -987,6 +2021,94 @@ fn bucketize_zone_shape_values(
         .collect()
 }
 
+fn rrset_rdata_count_frequencies(rrsets: &ShardedRrsets) -> BTreeMap<usize, usize> {
+    let mut frequencies = BTreeMap::new();
+    for rrset in rrsets.values() {
+        *frequencies.entry(rrset.rdatas.len()).or_insert(0) += 1;
+    }
+    frequencies
+}
+
+fn remove_rrset_from_shape(
+    summary: &mut ZoneShapeSummary,
+    rdata_count_frequencies: &mut BTreeMap<usize, usize>,
+    rrset: &Rrset,
+) {
+    let rdata_count = rrset.rdatas.len();
+    summary.rrset_count = summary.rrset_count.saturating_sub(1);
+    summary.rdata_count = summary.rdata_count.saturating_sub(rdata_count);
+    summary.rdata_payload_bytes = summary
+        .rdata_payload_bytes
+        .saturating_sub(rrset.rdatas.iter().map(Vec::len).sum::<usize>());
+    summary.name_key_logical_bytes = summary
+        .name_key_logical_bytes
+        .saturating_sub(rrset.owner.canonical_key().len());
+    if rdata_count == 1 {
+        summary.single_rdata_rrset_count = summary.single_rdata_rrset_count.saturating_sub(1);
+    } else if rdata_count > 1 {
+        summary.multi_rdata_rrset_count = summary.multi_rdata_rrset_count.saturating_sub(1);
+    }
+    if rrset.rdatas.spilled() {
+        summary.spilled_rdata_rrset_count = summary.spilled_rdata_rrset_count.saturating_sub(1);
+    }
+    if let Some(frequency) = rdata_count_frequencies.get_mut(&rdata_count) {
+        if *frequency > 1 {
+            *frequency -= 1;
+        } else {
+            rdata_count_frequencies.remove(&rdata_count);
+        }
+    }
+}
+
+fn add_rrset_to_shape(
+    summary: &mut ZoneShapeSummary,
+    rdata_count_frequencies: &mut BTreeMap<usize, usize>,
+    rrset: &Rrset,
+) {
+    let rdata_count = rrset.rdatas.len();
+    summary.rrset_count += 1;
+    summary.rdata_count += rdata_count;
+    summary.rdata_payload_bytes += rrset.rdatas.iter().map(Vec::len).sum::<usize>();
+    summary.name_key_logical_bytes += rrset.owner.canonical_key().len();
+    if rdata_count == 1 {
+        summary.single_rdata_rrset_count += 1;
+    } else if rdata_count > 1 {
+        summary.multi_rdata_rrset_count += 1;
+    }
+    if rrset.rdatas.spilled() {
+        summary.spilled_rdata_rrset_count += 1;
+    }
+    *rdata_count_frequencies.entry(rdata_count).or_insert(0) += 1;
+}
+
+fn update_name_shape_membership(
+    summary: &mut ZoneShapeSummary,
+    name: &str,
+    old_owner: bool,
+    new_owner: bool,
+    old_empty_non_terminal: bool,
+    new_empty_non_terminal: bool,
+) {
+    let name_len = name.len();
+    let old_logical_copies = usize::from(old_owner) + usize::from(old_empty_non_terminal);
+    let new_logical_copies = usize::from(new_owner) + usize::from(new_empty_non_terminal);
+    summary.name_key_logical_bytes = summary
+        .name_key_logical_bytes
+        .saturating_sub(old_logical_copies.saturating_mul(name_len))
+        .saturating_add(new_logical_copies.saturating_mul(name_len));
+
+    match (
+        old_owner || old_empty_non_terminal,
+        new_owner || new_empty_non_terminal,
+    ) {
+        (false, true) => summary.name_key_unique_bytes += name_len,
+        (true, false) => {
+            summary.name_key_unique_bytes = summary.name_key_unique_bytes.saturating_sub(name_len)
+        }
+        _ => {}
+    }
+}
+
 fn parent_name_key(name_key: &str) -> Option<String> {
     let without_root = name_key.strip_suffix('.')?;
     let (_, parent) = without_root.split_once('.')?;
@@ -996,70 +2118,105 @@ fn parent_name_key(name_key: &str) -> Option<String> {
 struct ZoneSnapshotIndexes {
     name_classes: NameClassIndex,
     empty_non_terminal_classes: NameClassIndex,
-    delegation_rrsets: Vec<RrsetKey>,
-    dname_rrsets: Vec<RrsetKey>,
+    delegation_rrsets: ShardedRrsetKeys,
+    dname_rrsets: ShardedRrsetKeys,
 }
 
+#[cfg(test)]
 type ClassSet = SmallVec<[u16; 1]>;
+type ClassCounts = SmallVec<[(u16, u32); 1]>;
 type NameKey = Arc<str>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NameClassIndex {
-    InOnly(HashSet<NameKey>),
-    MultiClass(HashMap<NameKey, ClassSet>),
+    InOnly(ShardedInClassCounts),
+    MultiClass(ShardedMultiClassCounts),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShardedInClassCounts {
+    shards: Box<[Arc<HashMap<NameKey, u32>>]>,
+    len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShardedMultiClassCounts {
+    shards: Box<[Arc<HashMap<NameKey, ClassCounts>>]>,
+    len: usize,
 }
 
 impl NameClassIndex {
     fn in_only() -> Self {
-        Self::InOnly(HashSet::new())
+        Self::InOnly(ShardedInClassCounts::new(1))
     }
 
-    fn for_rrsets(rrsets: &HashMap<RrsetKey, Rrset>) -> Self {
+    fn for_rrsets(rrsets: &ShardedRrsets) -> Self {
         if rrsets.values().all(|rrset| rrset.class == 1) {
-            Self::in_only()
+            Self::InOnly(ShardedInClassCounts::new(rrsets.shards.len()))
         } else {
-            Self::MultiClass(HashMap::new())
+            Self::MultiClass(ShardedMultiClassCounts::new(rrsets.shards.len()))
         }
     }
 
     fn insert(&mut self, name: NameKey, class: u16) {
+        if class != 1 && matches!(self, Self::InOnly(_)) {
+            self.promote_to_multi_class();
+        }
         match self {
-            Self::InOnly(names) => {
+            Self::InOnly(counts) => {
                 debug_assert_eq!(class, 1);
-                names.insert(name);
+                counts.increment(name);
             }
-            Self::MultiClass(names) => {
-                names
-                    .entry(name)
-                    .and_modify(|classes| insert_class(classes, class))
-                    .or_insert_with(|| class_set(class));
+            Self::MultiClass(counts) => {
+                counts.increment(name, class);
             }
+        }
+    }
+
+    fn remove(&mut self, name: &str, class: u16) {
+        match self {
+            Self::InOnly(counts) => {
+                debug_assert_eq!(class, 1);
+                counts.decrement(name);
+            }
+            Self::MultiClass(counts) => counts.decrement(name, class),
         }
     }
 
     fn contains(&self, name: &str, qclass: u16) -> bool {
         match self {
-            Self::InOnly(names) => matches!(qclass, 1 | 255) && names.contains(name),
-            Self::MultiClass(names) => names
-                .get(name)
-                .is_some_and(|classes| classes_match(classes, qclass)),
+            Self::InOnly(counts) => matches!(qclass, 1 | 255) && counts.contains(name),
+            Self::MultiClass(counts) => counts.contains(name, qclass),
+        }
+    }
+
+    fn contains_name(&self, name: &str) -> bool {
+        match self {
+            Self::InOnly(counts) => {
+                let shard = rrset_shard_index(name, counts.shards.len());
+                counts.shards[shard].contains_key(name)
+            }
+            Self::MultiClass(counts) => {
+                let shard = rrset_shard_index(name, counts.shards.len());
+                counts.shards[shard].contains_key(name)
+            }
         }
     }
 
     fn len(&self) -> usize {
         match self {
-            Self::InOnly(names) => names.len(),
-            Self::MultiClass(names) => names.len(),
+            Self::InOnly(counts) => counts.len,
+            Self::MultiClass(counts) => counts.len,
         }
     }
 
     fn keys(&self) -> impl Iterator<Item = &NameKey> {
         let in_only = match self {
-            Self::InOnly(names) => Some(names.iter()),
+            Self::InOnly(counts) => Some(counts.keys()),
             Self::MultiClass(_) => None,
         };
         let multi_class = match self {
-            Self::MultiClass(names) => Some(names.keys()),
+            Self::MultiClass(counts) => Some(counts.keys()),
             Self::InOnly(_) => None,
         };
         in_only
@@ -1070,34 +2227,148 @@ impl NameClassIndex {
 
     fn value_bytes_saved(&self) -> usize {
         match self {
-            Self::InOnly(names) => names.len().saturating_mul(mem::size_of::<ClassSet>()),
+            Self::InOnly(counts) => counts
+                .len
+                .saturating_mul(mem::size_of::<SmallVec<[u16; 1]>>()),
             Self::MultiClass(_) => 0,
         }
+    }
+
+    fn promote_to_multi_class(&mut self) {
+        let Self::InOnly(in_only) = self else {
+            return;
+        };
+        let mut multi = ShardedMultiClassCounts::new(in_only.shards.len());
+        for shard in &in_only.shards {
+            for (name, count) in shard.iter() {
+                multi.insert_count(name.clone(), 1, *count);
+            }
+        }
+        *self = Self::MultiClass(multi);
+    }
+}
+
+impl ShardedInClassCounts {
+    fn new(shard_count: usize) -> Self {
+        Self {
+            shards: (0..shard_count).map(|_| Arc::new(HashMap::new())).collect(),
+            len: 0,
+        }
+    }
+
+    fn increment(&mut self, name: NameKey) {
+        let shard = rrset_shard_index(name.as_ref(), self.shards.len());
+        let counts = Arc::make_mut(&mut self.shards[shard]);
+        let count = counts.entry(name).or_insert(0);
+        if *count == 0 {
+            self.len += 1;
+        }
+        *count = count.saturating_add(1);
+    }
+
+    fn decrement(&mut self, name: &str) {
+        let shard = rrset_shard_index(name, self.shards.len());
+        let counts = Arc::make_mut(&mut self.shards[shard]);
+        let Some(count) = counts.get_mut(name) else {
+            return;
+        };
+        if *count > 1 {
+            *count -= 1;
+        } else {
+            counts.remove(name);
+            self.len -= 1;
+        }
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        let shard = rrset_shard_index(name, self.shards.len());
+        self.shards[shard].contains_key(name)
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &NameKey> {
+        self.shards.iter().flat_map(|shard| shard.keys())
+    }
+}
+
+impl ShardedMultiClassCounts {
+    fn new(shard_count: usize) -> Self {
+        Self {
+            shards: (0..shard_count).map(|_| Arc::new(HashMap::new())).collect(),
+            len: 0,
+        }
+    }
+
+    fn increment(&mut self, name: NameKey, class: u16) {
+        self.insert_count(name, class, 1);
+    }
+
+    fn insert_count(&mut self, name: NameKey, class: u16, amount: u32) {
+        let shard = rrset_shard_index(name.as_ref(), self.shards.len());
+        let counts = Arc::make_mut(&mut self.shards[shard]);
+        let classes = counts.entry(name).or_insert_with(|| {
+            self.len += 1;
+            SmallVec::new()
+        });
+        if let Some((_, count)) = classes.iter_mut().find(|(existing, _)| *existing == class) {
+            *count = count.saturating_add(amount);
+        } else {
+            classes.push((class, amount));
+        }
+    }
+
+    fn decrement(&mut self, name: &str, class: u16) {
+        let shard = rrset_shard_index(name, self.shards.len());
+        let counts = Arc::make_mut(&mut self.shards[shard]);
+        let Some(classes) = counts.get_mut(name) else {
+            return;
+        };
+        if let Some(index) = classes.iter().position(|(existing, _)| *existing == class) {
+            if classes[index].1 > 1 {
+                classes[index].1 -= 1;
+            } else {
+                classes.swap_remove(index);
+            }
+        }
+        if classes.is_empty() {
+            counts.remove(name);
+            self.len -= 1;
+        }
+    }
+
+    fn contains(&self, name: &str, qclass: u16) -> bool {
+        let shard = rrset_shard_index(name, self.shards.len());
+        self.shards[shard].get(name).is_some_and(|classes| {
+            qclass == 255 || classes.iter().any(|(class, _)| *class == qclass)
+        })
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &NameKey> {
+        self.shards.iter().flat_map(|shard| shard.keys())
     }
 }
 
 impl ZoneSnapshotIndexes {
     fn build(
         origin: &DomainName,
-        rrsets: &HashMap<RrsetKey, Rrset>,
+        rrsets: &ShardedRrsets,
         name_interner: &mut NameInterner,
     ) -> Self {
         let mut indexes = Self {
             name_classes: NameClassIndex::for_rrsets(rrsets),
             empty_non_terminal_classes: NameClassIndex::for_rrsets(rrsets),
-            delegation_rrsets: Vec::new(),
-            dname_rrsets: Vec::new(),
+            delegation_rrsets: ShardedRrsetKeys::new(rrsets.shards.len()),
+            dname_rrsets: ShardedRrsetKeys::new(rrsets.shards.len()),
         };
         let origin_key = origin.canonical_key();
 
-        for (key, rrset) in rrsets {
+        for (key, rrset) in rrsets.iter() {
             indexes.name_classes.insert(key.owner.clone(), rrset.class);
             indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class, name_interner);
 
             if rrset.rr_type == RecordType::Ns as u16 && key.owner.as_ref() != origin_key {
-                indexes.delegation_rrsets.push(key.clone());
+                indexes.delegation_rrsets.insert(key.clone());
             } else if rrset.rr_type == RecordType::Dname as u16 {
-                indexes.dname_rrsets.push(key.clone());
+                indexes.dname_rrsets.insert(key.clone());
             }
         }
 
@@ -1149,26 +2420,6 @@ impl NameInterner {
     }
 }
 
-fn classes_match(classes: &ClassSet, qclass: u16) -> bool {
-    qclass == 255 || classes.contains(&qclass)
-}
-
-fn class_set(class: u16) -> ClassSet {
-    let mut classes = SmallVec::new();
-    classes.push(class);
-    classes
-}
-
-fn insert_class(classes: &mut ClassSet, class: u16) {
-    if !classes.contains(&class) {
-        classes.push(class);
-    }
-}
-
-fn qclass_matches(class: u16, qclass: u16) -> bool {
-    qclass == 255 || class == qclass
-}
-
 fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
     let (_, consumed_mname) = DomainName::parse(rdata, 0).ok()?;
     let rname_offset = consumed_mname;
@@ -1206,10 +2457,345 @@ fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
     })
 }
 
+fn rrsig_type_covered(rdata: &[u8]) -> Option<u16> {
+    (rdata.len() >= 2).then(|| u16::from_be_bytes([rdata[0], rdata[1]]))
+}
+
+fn nsec_covers_name(owner: &DomainName, rdata: &[u8], name: &DomainName) -> bool {
+    let Ok((next_owner, _)) = DomainName::parse(rdata, 0) else {
+        return false;
+    };
+    canonical_nsec_range_covers(owner, &next_owner, name)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Nsec3Params {
+    hash_algorithm: u8,
+    iterations: u16,
+    salt: Vec<u8>,
+}
+
+impl DenialIndexes {
+    fn build(rrsets: &ShardedRrsets, origin: &DomainName) -> Self {
+        let mut indexes = Self::default();
+        for (key, rrset) in rrsets.iter() {
+            indexes.insert_rrset(key, rrset, origin);
+        }
+        indexes
+    }
+
+    fn updated(
+        &self,
+        previous: &ShardedRrsets,
+        current: &ShardedRrsets,
+        origin: &DomainName,
+    ) -> Self {
+        if previous.shards.len() != current.shards.len() {
+            return Self::build(current, origin);
+        }
+        let mut indexes = self.clone();
+        for (old_shard, current_shard) in previous.shards.iter().zip(&current.shards) {
+            if Arc::ptr_eq(old_shard, current_shard) {
+                continue;
+            }
+            for (key, old_rrset) in old_shard.iter() {
+                if !is_denial_rr_type(old_rrset.rr_type) {
+                    continue;
+                }
+                if current_shard.get(key) != Some(old_rrset) {
+                    indexes.remove_rrset(key, old_rrset, origin);
+                    if let Some(new_rrset) = current_shard.get(key) {
+                        indexes.insert_rrset(key, new_rrset, origin);
+                    }
+                }
+            }
+            for (key, rrset) in current_shard.iter() {
+                if is_denial_rr_type(rrset.rr_type) && !old_shard.contains_key(key) {
+                    indexes.insert_rrset(key, rrset, origin);
+                }
+            }
+        }
+        indexes
+    }
+
+    fn insert_rrset(&mut self, key: &RrsetKey, rrset: &Rrset, origin: &DomainName) {
+        if rrset.rr_type == RecordType::Nsec as u16 {
+            self.nsec.insert(
+                NsecOrderKey {
+                    class: rrset.class,
+                    owner: canonical_order_key(&rrset.owner),
+                },
+                key.clone(),
+            );
+        } else if rrset.rr_type == RecordType::Nsec3 as u16 {
+            let Some(owner_hash) = nsec3_owner_hash_label(&rrset.owner, origin) else {
+                return;
+            };
+            for rdata in &rrset.rdatas {
+                let Some(params) = nsec3_params_from_rdata(rdata) else {
+                    continue;
+                };
+                self.nsec3.insert(
+                    Nsec3OrderKey {
+                        class: rrset.class,
+                        params: params.clone(),
+                        owner_hash: owner_hash.clone(),
+                    },
+                    key.clone(),
+                );
+                let counts = Arc::make_mut(&mut self.nsec3_param_counts);
+                *counts.entry((rrset.class, params)).or_insert(0) += 1;
+            }
+        }
+    }
+
+    fn remove_rrset(&mut self, _key: &RrsetKey, rrset: &Rrset, origin: &DomainName) {
+        if rrset.rr_type == RecordType::Nsec as u16 {
+            self.nsec.remove(&NsecOrderKey {
+                class: rrset.class,
+                owner: canonical_order_key(&rrset.owner),
+            });
+        } else if rrset.rr_type == RecordType::Nsec3 as u16 {
+            let Some(owner_hash) = nsec3_owner_hash_label(&rrset.owner, origin) else {
+                return;
+            };
+            for rdata in &rrset.rdatas {
+                let Some(params) = nsec3_params_from_rdata(rdata) else {
+                    continue;
+                };
+                self.nsec3.remove(&Nsec3OrderKey {
+                    class: rrset.class,
+                    params: params.clone(),
+                    owner_hash: owner_hash.clone(),
+                });
+                let counts = Arc::make_mut(&mut self.nsec3_param_counts);
+                if let Some(count) = counts.get_mut(&(rrset.class, params.clone())) {
+                    if *count > 1 {
+                        *count -= 1;
+                    } else {
+                        counts.remove(&(rrset.class, params));
+                    }
+                }
+            }
+        }
+    }
+
+    fn nsec_candidate(&self, name: &DomainName, class: u16) -> Option<&RrsetKey> {
+        let target = NsecOrderKey {
+            class,
+            owner: canonical_order_key(name),
+        };
+        if let Some((key, value)) = self.nsec.predecessor(&target)
+            && key.class == class
+        {
+            return Some(value);
+        }
+        let upper = NsecOrderKey {
+            class: class.saturating_add(1),
+            owner: Vec::new(),
+        };
+        self.nsec
+            .last_before(&upper)
+            .and_then(|(key, value)| (key.class == class).then_some(value))
+    }
+
+    fn nsec3_candidate(&self, hash: &str, class: u16, params: &Nsec3Params) -> Option<&RrsetKey> {
+        let target = Nsec3OrderKey {
+            class,
+            params: params.clone(),
+            owner_hash: hash.to_owned(),
+        };
+        if let Some((key, value)) = self.nsec3.predecessor(&target)
+            && key.class == class
+            && key.params == *params
+        {
+            return Some(value);
+        }
+        let upper = Nsec3OrderKey {
+            class,
+            params: params.clone(),
+            owner_hash: "\u{7f}".to_owned(),
+        };
+        self.nsec3
+            .last_before(&upper)
+            .and_then(|(key, value)| (key.class == class && key.params == *params).then_some(value))
+    }
+}
+
+fn is_denial_rr_type(rr_type: u16) -> bool {
+    rr_type == RecordType::Nsec as u16 || rr_type == RecordType::Nsec3 as u16
+}
+
+fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
+    if rdata.len() < 5 {
+        return None;
+    }
+    let salt_len = rdata[4] as usize;
+    if rdata.len() < 5 + salt_len + 1 {
+        return None;
+    }
+    Some(Nsec3Params {
+        hash_algorithm: rdata[0],
+        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
+        salt: rdata[5..5 + salt_len].to_vec(),
+    })
+}
+
+fn nsec3param_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
+    if rdata.len() < 5 || rdata[1] != 0 {
+        return None;
+    }
+    let salt_len = rdata[4] as usize;
+    (rdata.len() == 5 + salt_len).then(|| Nsec3Params {
+        hash_algorithm: rdata[0],
+        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
+        salt: rdata[5..].to_vec(),
+    })
+}
+
+fn nsec3_next_hash_label(rdata: &[u8]) -> Option<String> {
+    let params = nsec3_params_from_rdata(rdata)?;
+    let hash_len_offset = 5 + params.salt.len();
+    let hash_len = *rdata.get(hash_len_offset)? as usize;
+    let hash_start = hash_len_offset + 1;
+    let hash_end = hash_start.checked_add(hash_len)?;
+    (hash_end <= rdata.len()).then(|| base32hex_no_padding_lower(&rdata[hash_start..hash_end]))
+}
+
+fn nsec3_hash_name(name: &DomainName, params: &Nsec3Params) -> Option<String> {
+    if params.hash_algorithm != 1 {
+        return None;
+    }
+    let canonical = DomainName::from_absolute_str(&name.canonical_key())
+        .ok()?
+        .to_wire();
+    let mut digest = Sha1::new();
+    digest.update(&canonical);
+    digest.update(&params.salt);
+    let mut hash = digest.finalize().to_vec();
+    for _ in 0..params.iterations {
+        let mut digest = Sha1::new();
+        digest.update(&hash);
+        digest.update(&params.salt);
+        hash = digest.finalize().to_vec();
+    }
+    Some(base32hex_no_padding_lower(&hash))
+}
+
+fn nsec3_owner_hash_label(owner: &DomainName, origin: &DomainName) -> Option<String> {
+    let owner_key = owner.canonical_key();
+    let origin_key = origin.canonical_key();
+    let prefix = owner_key.strip_suffix(&origin_key)?;
+    let hash_label = prefix.strip_suffix('.')?;
+    (!hash_label.is_empty() && !hash_label.contains('.')).then(|| hash_label.to_owned())
+}
+
+fn nsec3_range_covers_hash(owner_hash: &str, next_hash: &str, hash: &str) -> bool {
+    if owner_hash < next_hash {
+        owner_hash < hash && hash < next_hash
+    } else if owner_hash > next_hash {
+        owner_hash < hash || hash < next_hash
+    } else {
+        hash != owner_hash
+    }
+}
+
+fn base32hex_no_padding_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+    let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buffer = 0u16;
+    let mut bits = 0u8;
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((buffer >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index] as char);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        let index = ((buffer << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index] as char);
+    }
+    out
+}
+
+fn canonical_nsec_range_covers(
+    owner: &DomainName,
+    next_owner: &DomainName,
+    name: &DomainName,
+) -> bool {
+    let owner_key = canonical_order_key(owner);
+    let next_key = canonical_order_key(&next_owner);
+    let name_key = canonical_order_key(name);
+    if owner_key < next_key {
+        owner_key < name_key && name_key < next_key
+    } else {
+        owner_key < name_key || name_key < next_key
+    }
+}
+
+fn next_closer_name(qname: &DomainName, closest_encloser: &DomainName) -> Option<DomainName> {
+    let mut candidate = qname.clone();
+    loop {
+        let parent = candidate.parent()?;
+        if parent == *closest_encloser {
+            return Some(candidate);
+        }
+        candidate = parent;
+    }
+}
+
+fn canonical_order_key(name: &DomainName) -> Vec<u8> {
+    let mut key = Vec::with_capacity(name.wire_len());
+    for label in name.labels().iter().rev() {
+        key.push(label.len() as u8);
+        key.extend(label.iter().map(u8::to_ascii_lowercase));
+    }
+    key.push(0);
+    key
+}
+
+fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {
+    (
+        record.owner.canonical_key(),
+        record.rr_type,
+        record.class,
+        record.rdata.clone(),
+    )
+}
+
+fn push_rrset_records(
+    rrset: &Rrset,
+    records: &mut Vec<ResourceRecord>,
+    seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+    dnssec_augmented: &mut bool,
+) {
+    for record in rrset.records() {
+        if seen.insert(record_identity(&record)) {
+            records.push(record);
+            *dnssec_augmented = true;
+        }
+    }
+}
+
 fn is_dnssec_proof_or_signature_type(rr_type: u16) -> bool {
     rr_type == RecordType::Rrsig as u16
         || rr_type == RecordType::Nsec as u16
         || rr_type == RecordType::Nsec3 as u16
+}
+
+fn is_dnssec_rr_type(rr_type: u16) -> bool {
+    matches!(
+        rr_type,
+        value if value == RecordType::Ds as u16
+            || value == RecordType::Rrsig as u16
+            || value == RecordType::Nsec as u16
+            || value == RecordType::Dnskey as u16
+            || value == RecordType::Nsec3 as u16
+            || value == RecordType::Nsec3Param as u16
+    )
 }
 
 fn cname_target(record: &ResourceRecord) -> Option<DomainName> {
@@ -1331,6 +2917,8 @@ pub struct ZoneStore {
     zones: Arc<ArcSwap<ZoneDirectory>>,
     publish_lock: Arc<Mutex<()>>,
     next_incarnation: Arc<AtomicU64>,
+    publication_policy: ZonePublicationPolicy,
+    compacting_zones: Arc<Mutex<HashSet<String>>>,
     #[cfg(test)]
     publication_clone_work: Arc<AtomicUsize>,
 }
@@ -1418,7 +3006,7 @@ impl OfflineZoneSnapshot {
 #[derive(Debug, Clone, Copy)]
 pub struct CatalogZoneView<'a> {
     origin: &'a DomainName,
-    rrsets: &'a HashMap<RrsetKey, Rrset>,
+    rrsets: &'a ShardedRrsets,
 }
 
 impl<'a> CatalogZoneView<'a> {
@@ -1442,6 +3030,8 @@ struct ZoneStoreEntry {
     soa_timers: Option<SoaTimers>,
     snapshot: Arc<ZoneSnapshot>,
     image: Option<Arc<ZoneImage>>,
+    image_snapshot: Option<Arc<ZoneSnapshot>>,
+    overlay_dirty: Option<Arc<ZoneOverlayDirty>>,
     shape: Option<ZoneShapeSummary>,
     shape_histograms: Option<ZoneShapeHistogramSummary>,
     hidden: bool,
@@ -1454,6 +3044,8 @@ impl Default for ZoneStore {
             zones: Arc::new(ArcSwap::from_pointee(ZoneDirectory::default())),
             publish_lock: Arc::new(Mutex::new(())),
             next_incarnation: Arc::new(AtomicU64::new(0)),
+            publication_policy: ZonePublicationPolicy::default(),
+            compacting_zones: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
             publication_clone_work: Arc::new(AtomicUsize::new(0)),
         }
@@ -1463,6 +3055,171 @@ impl Default for ZoneStore {
 impl ZoneStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_publication_policy(publication_policy: ZonePublicationPolicy) -> Self {
+        Self {
+            publication_policy,
+            ..Self::default()
+        }
+    }
+
+    pub fn overlay_compaction_due(&self, origin: &DomainName) -> bool {
+        let threshold = self
+            .publication_policy
+            .overlay_compaction_dirty_owner_threshold;
+        if threshold == 0 {
+            return false;
+        }
+        self.zones
+            .load()
+            .get(&origin.canonical_key())
+            .and_then(|entry| entry.overlay_dirty.as_deref())
+            .is_some_and(|dirty| dirty.changed_owners.len >= threshold)
+    }
+
+    /// Compile a new compact base outside the publication lock, then rebase
+    /// any IXFRs that arrived during compilation onto that base. At most two
+    /// passes are attempted so a continuously changing zone cannot monopolize
+    /// a blocking worker indefinitely.
+    pub fn compact_overlay_if_due(
+        &self,
+        origin: &DomainName,
+    ) -> Result<ZoneOverlayCompactionOutcome, ZoneImageBuildError> {
+        let key = origin.canonical_key();
+        {
+            let mut running = self
+                .compacting_zones
+                .lock()
+                .expect("zone compaction set lock poisoned");
+            if !running.insert(key.clone()) {
+                return Ok(ZoneOverlayCompactionOutcome::AlreadyRunning);
+            }
+        }
+
+        let result = (|| {
+            let mut outcome = ZoneOverlayCompactionOutcome::NotNeeded;
+            for _ in 0..2 {
+                outcome = self.compact_overlay_once_if_due(&key)?;
+                let ZoneOverlayCompactionOutcome::Compacted {
+                    remaining_dirty_owners,
+                } = outcome
+                else {
+                    break;
+                };
+                let threshold = self
+                    .publication_policy
+                    .overlay_compaction_dirty_owner_threshold;
+                if threshold == 0 || remaining_dirty_owners < threshold {
+                    break;
+                }
+            }
+            Ok(outcome)
+        })();
+
+        self.compacting_zones
+            .lock()
+            .expect("zone compaction set lock poisoned")
+            .remove(&key);
+        result
+    }
+
+    fn compact_overlay_once_if_due(
+        &self,
+        key: &str,
+    ) -> Result<ZoneOverlayCompactionOutcome, ZoneImageBuildError> {
+        let threshold = self
+            .publication_policy
+            .overlay_compaction_dirty_owner_threshold;
+        if threshold == 0 {
+            return Ok(ZoneOverlayCompactionOutcome::NotNeeded);
+        }
+        let candidate = {
+            let directory = self.zones.load();
+            let Some(entry) = directory.get(key) else {
+                return Ok(ZoneOverlayCompactionOutcome::Obsolete);
+            };
+            let Some(dirty) = entry.overlay_dirty.as_deref() else {
+                return Ok(ZoneOverlayCompactionOutcome::NotNeeded);
+            };
+            if dirty.changed_owners.len < threshold {
+                return Ok(ZoneOverlayCompactionOutcome::NotNeeded);
+            }
+            (entry.snapshot.clone(), entry.incarnation)
+        };
+
+        let compact_image = Arc::new(ZoneImage::compile(&candidate.0)?);
+        Ok(self.publish_compacted_base(key, &candidate.0, candidate.1, compact_image))
+    }
+
+    fn publish_compacted_base(
+        &self,
+        key: &str,
+        candidate_snapshot: &Arc<ZoneSnapshot>,
+        candidate_incarnation: u64,
+        compact_image: Arc<ZoneImage>,
+    ) -> ZoneOverlayCompactionOutcome {
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current_directory = self.zones.load_full();
+        let Some(current) = current_directory.get(key) else {
+            return ZoneOverlayCompactionOutcome::Obsolete;
+        };
+        if current.incarnation != candidate_incarnation
+            || current.state != ZoneState::Active
+            || current.overlay_dirty.is_none()
+        {
+            return ZoneOverlayCompactionOutcome::Obsolete;
+        }
+
+        let Some(changes) = current.snapshot.changed_rrset_keys_from(candidate_snapshot) else {
+            return ZoneOverlayCompactionOutcome::Obsolete;
+        };
+        let overlay_dirty = (!changes.is_empty()).then(|| {
+            Arc::new(ZoneOverlayDirty::with_changes(
+                None,
+                &changes,
+                key,
+                current.snapshot.rrsets.shards.len(),
+                &current.snapshot,
+                candidate_snapshot,
+                &compact_image,
+            ))
+        });
+        let remaining_dirty_owners = overlay_dirty
+            .as_deref()
+            .map_or(0, |dirty| dirty.changed_owners.len);
+        let replacement = Arc::new(ZoneStoreEntry {
+            origin: current.origin.clone(),
+            origin_label_count: current.origin_label_count,
+            origin_key: current.origin_key.clone(),
+            origin_name: current.origin_name.clone(),
+            state: current.state,
+            serial: current.serial,
+            soa_timers: current.soa_timers,
+            snapshot: current.snapshot.clone(),
+            image: Some(compact_image),
+            image_snapshot: Some(candidate_snapshot.clone()),
+            overlay_dirty,
+            shape: current.shape,
+            shape_histograms: None,
+            hidden: current.hidden,
+            incarnation: current.incarnation,
+        });
+        let mut next = self.clone_directory_for_publication(current_directory.as_ref());
+        next.insert(key.to_owned(), replacement);
+        self.zones.store(Arc::new(next));
+        info!(
+            event = "zone_overlay_compacted",
+            zone = %current.origin,
+            remaining_dirty_owners,
+            "rebased incremental zone overlay onto a newly compiled compact image"
+        );
+        ZoneOverlayCompactionOutcome::Compacted {
+            remaining_dirty_owners,
+        }
     }
 
     pub fn insert_loading(&self, origin: DomainName) {
@@ -1923,11 +3680,13 @@ impl ZoneStore {
             );
         }
         let mut next = self.clone_directory_for_publication(current.as_ref());
-        let entry = Arc::new(ZoneStoreEntry::try_new(
+        let entry = Arc::new(ZoneStoreEntry::try_new_replacing(
             key.clone(),
             snapshot,
             hidden,
             incarnation,
+            current.get(&key).map(Arc::as_ref),
+            self.publication_policy,
         )?);
         next.insert(key.clone(), entry.clone());
         self.zones.store(Arc::new(next));
@@ -2003,6 +3762,21 @@ pub trait PublishedZoneView {
     fn state(&self) -> ZoneState;
 
     fn active_zone_image_ref(&self) -> &ZoneImage;
+
+    fn active_snapshot_ref(&self) -> &ZoneSnapshot;
+
+    fn has_incremental_overlay(&self) -> bool;
+
+    fn overlay_allows_compact_direct_shape(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool;
+
+    fn overlay_allows_compact_plan(&self, plan: &ZoneImageLookupPlan) -> bool;
+
+    fn overlay_allows_compact_response_plan(&self, plan: &ZoneImageLookupPlan) -> bool;
 }
 
 impl PublishedZone {
@@ -2043,6 +3817,61 @@ impl PublishedZone {
             .as_deref()
             .expect("active published zone must include a compiled ZoneImage")
     }
+
+    pub fn active_snapshot_ref(&self) -> &ZoneSnapshot {
+        debug_assert_eq!(self.entry.state, ZoneState::Active);
+        &self.entry.snapshot
+    }
+
+    pub fn has_incremental_overlay(&self) -> bool {
+        self.entry.overlay_dirty.is_some()
+    }
+
+    pub fn overlay_allows_compact_direct(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool {
+        let Some(dirty) = self.entry.overlay_dirty.as_deref() else {
+            return false;
+        };
+        if !dirty.allows_compact_direct_shape(&self.entry.snapshot, qname, qtype, qclass) {
+            return false;
+        }
+        let ZoneImageLookupOutcome::Found(plan) = self
+            .active_zone_image_ref()
+            .lookup_exact_plan(qname, qtype, qclass)
+        else {
+            return true;
+        };
+        dirty.allows_compact_plan(&plan)
+    }
+
+    pub fn overlay_allows_compact_direct_shape(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool {
+        self.entry.overlay_dirty.as_deref().is_some_and(|dirty| {
+            dirty.allows_compact_direct_shape(&self.entry.snapshot, qname, qtype, qclass)
+        })
+    }
+
+    pub fn overlay_allows_compact_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        self.entry
+            .overlay_dirty
+            .as_deref()
+            .is_some_and(|dirty| dirty.allows_compact_plan(plan))
+    }
+
+    pub fn overlay_allows_compact_response_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        self.entry
+            .overlay_dirty
+            .as_deref()
+            .is_some_and(|dirty| dirty.allows_compact_response_plan(plan))
+    }
 }
 
 impl PublishedZoneView for PublishedZone {
@@ -2072,6 +3901,31 @@ impl PublishedZoneView for PublishedZone {
 
     fn active_zone_image_ref(&self) -> &ZoneImage {
         PublishedZone::active_zone_image_ref(self)
+    }
+
+    fn active_snapshot_ref(&self) -> &ZoneSnapshot {
+        PublishedZone::active_snapshot_ref(self)
+    }
+
+    fn has_incremental_overlay(&self) -> bool {
+        PublishedZone::has_incremental_overlay(self)
+    }
+
+    fn overlay_allows_compact_direct_shape(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool {
+        PublishedZone::overlay_allows_compact_direct_shape(self, qname, qtype, qclass)
+    }
+
+    fn overlay_allows_compact_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        PublishedZone::overlay_allows_compact_plan(self, plan)
+    }
+
+    fn overlay_allows_compact_response_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        PublishedZone::overlay_allows_compact_response_plan(self, plan)
     }
 }
 
@@ -2106,6 +3960,40 @@ impl PublishedZoneView for PublishedZoneRef<'_> {
             .image
             .as_deref()
             .expect("active published zone must include a compiled ZoneImage")
+    }
+
+    fn active_snapshot_ref(&self) -> &ZoneSnapshot {
+        debug_assert_eq!(self.entry.state, ZoneState::Active);
+        &self.entry.snapshot
+    }
+
+    fn has_incremental_overlay(&self) -> bool {
+        self.entry.overlay_dirty.is_some()
+    }
+
+    fn overlay_allows_compact_direct_shape(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool {
+        self.entry.overlay_dirty.as_deref().is_some_and(|dirty| {
+            dirty.allows_compact_direct_shape(&self.entry.snapshot, qname, qtype, qclass)
+        })
+    }
+
+    fn overlay_allows_compact_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        self.entry
+            .overlay_dirty
+            .as_deref()
+            .is_some_and(|dirty| dirty.allows_compact_plan(plan))
+    }
+
+    fn overlay_allows_compact_response_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        self.entry
+            .overlay_dirty
+            .as_deref()
+            .is_some_and(|dirty| dirty.allows_compact_response_plan(plan))
     }
 }
 
@@ -2258,28 +4146,88 @@ impl ZoneStoreEntry {
         hidden: bool,
         incarnation: u64,
     ) -> Result<Self, ZoneImageBuildError> {
-        let image = if snapshot.state == ZoneState::Active {
-            let image = ZoneImage::compile(&snapshot)?;
-            let stats = image.stats();
-            info!(
-                zone = %snapshot.origin,
-                nsec_indexed_groups = stats.nsec_indexed_range_group_count,
-                nsec_fallback_groups = stats
-                    .nsec_range_group_count
-                    .saturating_sub(stats.nsec_indexed_range_group_count),
-                nsec3_indexed_groups = stats.nsec3_indexed_range_group_count,
-                nsec3_fallback_groups = stats
-                    .nsec3_range_group_count
-                    .saturating_sub(stats.nsec3_indexed_range_group_count),
-                "compiled ZoneImage DNSSEC denial lookup indexes"
-            );
-            Some(Arc::new(image))
-        } else {
-            None
-        };
+        Self::try_new_replacing(
+            origin_key,
+            snapshot,
+            hidden,
+            incarnation,
+            None,
+            ZonePublicationPolicy::default(),
+        )
+    }
+
+    fn try_new_replacing(
+        origin_key: String,
+        snapshot: Arc<ZoneSnapshot>,
+        hidden: bool,
+        incarnation: u64,
+        previous: Option<&Self>,
+        publication_policy: ZonePublicationPolicy,
+    ) -> Result<Self, ZoneImageBuildError> {
+        let incremental = (snapshot.state == ZoneState::Active)
+            .then(|| {
+                let previous = previous.filter(|entry| entry.state == ZoneState::Active)?;
+                let use_overlay = match publication_policy.strategy {
+                    ZonePublicationStrategy::Compact => false,
+                    ZonePublicationStrategy::Sharded => true,
+                    ZonePublicationStrategy::Auto => {
+                        snapshot.rrsets.len() >= publication_policy.sharded_rrset_threshold
+                    }
+                };
+                if !use_overlay {
+                    return None;
+                }
+                let changes = snapshot.changed_rrset_keys_from(&previous.snapshot)?;
+                if changes.is_empty() {
+                    return None;
+                }
+                let base_image = previous.image.clone()?;
+                let image_snapshot = previous.image_snapshot.clone()?;
+                let dirty = ZoneOverlayDirty::with_changes(
+                    previous.overlay_dirty.as_deref(),
+                    &changes,
+                    &origin_key,
+                    snapshot.rrsets.shards.len(),
+                    &snapshot,
+                    &image_snapshot,
+                    &base_image,
+                );
+                Some((base_image, image_snapshot, Arc::new(dirty)))
+            })
+            .flatten();
+        let overlay_published = incremental.is_some();
+        let (image, image_snapshot, overlay_dirty) =
+            if let Some((image, image_snapshot, dirty)) = incremental {
+                info!(
+                    event = "zone_overlay_publication",
+                    zone = %snapshot.origin,
+                    signed = snapshot.has_dnssec_rrsets(),
+                    dirty_rrsets = dirty.changed_rrset_count,
+                    "publishing structurally shared IXFR overlay"
+                );
+                (Some(image), Some(image_snapshot), Some(dirty))
+            } else if snapshot.state == ZoneState::Active {
+                let image = ZoneImage::compile(&snapshot)?;
+                let stats = image.stats();
+                info!(
+                    zone = %snapshot.origin,
+                    nsec_indexed_groups = stats.nsec_indexed_range_group_count,
+                    nsec_fallback_groups = stats
+                        .nsec_range_group_count
+                        .saturating_sub(stats.nsec_indexed_range_group_count),
+                    nsec3_indexed_groups = stats.nsec3_indexed_range_group_count,
+                    nsec3_fallback_groups = stats
+                        .nsec3_range_group_count
+                        .saturating_sub(stats.nsec3_indexed_range_group_count),
+                    "compiled ZoneImage DNSSEC denial lookup indexes"
+                );
+                (Some(Arc::new(image)), Some(snapshot.clone()), None)
+            } else {
+                (None, None, None)
+            };
         let shape = (snapshot.state == ZoneState::Active).then(|| snapshot.shape_summary());
-        let shape_histograms =
-            (snapshot.state == ZoneState::Active).then(|| snapshot.shape_histogram_summary());
+        let shape_histograms = (snapshot.state == ZoneState::Active && !overlay_published)
+            .then(|| snapshot.shape_histogram_summary());
         Ok(Self {
             origin: snapshot.origin.clone(),
             origin_label_count: snapshot.origin.label_count(),
@@ -2290,6 +4238,8 @@ impl ZoneStoreEntry {
             soa_timers: snapshot.soa_timers,
             snapshot,
             image,
+            image_snapshot,
+            overlay_dirty,
             shape,
             shape_histograms,
             hidden,
@@ -2344,6 +4294,8 @@ impl ZoneStoreEntry {
             soa_timers: self.soa_timers,
             snapshot: self.snapshot.clone(),
             image: self.image.clone(),
+            image_snapshot: self.image_snapshot.clone(),
+            overlay_dirty: self.overlay_dirty.clone(),
             shape: self.shape,
             shape_histograms: self.shape_histograms.clone(),
             hidden,
@@ -2363,6 +4315,12 @@ impl ZoneStoreEntry {
             snapshot: self.snapshot.clone(),
             image: (state == ZoneState::Active)
                 .then(|| self.image.clone())
+                .flatten(),
+            image_snapshot: (state == ZoneState::Active)
+                .then(|| self.image_snapshot.clone())
+                .flatten(),
+            overlay_dirty: (state == ZoneState::Active)
+                .then(|| self.overlay_dirty.clone())
                 .flatten(),
             shape: (state == ZoneState::Active).then_some(self.shape).flatten(),
             shape_histograms: (state == ZoneState::Active)
@@ -2446,6 +4404,384 @@ struct RrsetKey {
     class: u16,
 }
 
+const RRSET_SHARD_TARGET_LEN: usize = 256;
+const RRSET_SHARD_MIN_TOTAL_LEN: usize = 65_536;
+const RRSET_SHARD_MAX_COUNT: usize = 262_144;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShardedRrsets {
+    shards: Box<[Arc<HashMap<RrsetKey, Rrset>>]>,
+    len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShardedRrsetKeys {
+    shards: Box<[Arc<HashSet<RrsetKey>>]>,
+}
+
+#[derive(Debug, Clone)]
+struct ZoneOverlayDirty {
+    changed_owners: ShardedNameSet,
+    changed_direct_rrsets: ShardedRrsetIdBitset,
+    changed_cut_owners: ShardedNameSet,
+    changed_rrset_count: usize,
+    structure_or_denial_changed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ShardedNameSet {
+    shards: Box<[Arc<HashMap<u64, SmallVec<[NameKey; 1]>>>]>,
+    len: usize,
+    bloom: [u64; 4],
+}
+
+#[derive(Debug, Clone)]
+struct ShardedRrsetIdBitset {
+    pages: Box<[Arc<[u64; Self::WORDS_PER_PAGE]>]>,
+}
+
+impl ZoneOverlayDirty {
+    fn with_changes(
+        previous: Option<&Self>,
+        changes: &[RrsetKey],
+        origin_key: &str,
+        shard_count: usize,
+        current_snapshot: &ZoneSnapshot,
+        image_snapshot: &ZoneSnapshot,
+        image: &ZoneImage,
+    ) -> Self {
+        let mut dirty = previous.cloned().unwrap_or_else(|| Self {
+            changed_owners: ShardedNameSet::new(shard_count),
+            changed_direct_rrsets: ShardedRrsetIdBitset::new(image.stats().rrset_count),
+            changed_cut_owners: ShardedNameSet::new(shard_count),
+            changed_rrset_count: 0,
+            structure_or_denial_changed: false,
+        });
+        for key in changes {
+            dirty.changed_owners.insert(key.owner.clone());
+            let current_rrset = current_snapshot.rrsets.get(key);
+            let image_rrset = image_snapshot.rrsets.get(key);
+            dirty.structure_or_denial_changed |= current_rrset.is_some() != image_rrset.is_some()
+                || matches!(
+                    key.rr_type,
+                    rr_type if rr_type == RecordType::Nsec as u16
+                        || rr_type == RecordType::Nsec3 as u16
+                        || rr_type == RecordType::Nsec3Param as u16
+                        || rr_type == RecordType::Dname as u16
+                );
+            if let Some(rrset) = current_rrset.or(image_rrset)
+                && let ZoneImageLookupOutcome::Found(plan) =
+                    image.lookup_exact_plan(&rrset.owner, key.rr_type, key.class)
+            {
+                for rrset_id in plan.answer_rrsets() {
+                    dirty.changed_direct_rrsets.insert(*rrset_id);
+                }
+            }
+            if key.rr_type == RecordType::Dname as u16
+                || (key.rr_type == RecordType::Ns as u16 && key.owner.as_ref() != origin_key)
+            {
+                dirty.changed_cut_owners.insert(key.owner.clone());
+            }
+        }
+        dirty.changed_rrset_count = dirty.changed_rrset_count.saturating_add(changes.len());
+        dirty
+    }
+
+    fn allows_compact_direct_shape(
+        &self,
+        snapshot: &ZoneSnapshot,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> bool {
+        if qclass != 1
+            || !matches!(
+                qtype,
+                rr_type if rr_type == RecordType::A as u16
+                    || rr_type == RecordType::Aaaa as u16
+                    || rr_type == RecordType::Txt as u16
+            )
+        {
+            return false;
+        }
+        if self.changed_cut_owners.len != 0 {
+            let origin_labels = snapshot.origin.label_count();
+            for suffix_start in 0..=qname.label_count().saturating_sub(origin_labels) {
+                if self
+                    .changed_cut_owners
+                    .contains_domain_suffix(qname, suffix_start)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn allows_compact_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        plan.answer_rrsets()
+            .iter()
+            .all(|rrset_id| !self.changed_direct_rrsets.contains(rrset_id))
+    }
+
+    fn allows_compact_response_plan(&self, plan: &ZoneImageLookupPlan) -> bool {
+        !self.structure_or_denial_changed
+            && plan
+                .referenced_rrsets()
+                .all(|rrset_id| !self.changed_direct_rrsets.contains(&rrset_id))
+    }
+}
+
+impl ShardedNameSet {
+    fn new(shard_count: usize) -> Self {
+        Self {
+            shards: (0..shard_count).map(|_| Arc::new(HashMap::new())).collect(),
+            len: 0,
+            bloom: [0; 4],
+        }
+    }
+
+    fn insert(&mut self, name: NameKey) {
+        let digest = canonical_name_hash_str(name.as_ref());
+        self.bloom_insert(digest);
+        let shard = digest as usize & (self.shards.len() - 1);
+        let names = Arc::make_mut(&mut self.shards[shard])
+            .entry(digest)
+            .or_default();
+        if !names.iter().any(|existing| existing == &name) {
+            names.push(name);
+            self.len += 1;
+        }
+    }
+
+    fn contains_domain_suffix(&self, name: &DomainName, suffix_start: usize) -> bool {
+        let digest = canonical_domain_suffix_hash(name, suffix_start);
+        if !self.bloom_may_contain(digest) {
+            return false;
+        }
+        let shard = digest as usize & (self.shards.len() - 1);
+        let Some(candidates) = self.shards[shard].get(&digest) else {
+            return false;
+        };
+        let canonical = canonical_domain_suffix_key(name, suffix_start);
+        candidates
+            .iter()
+            .any(|candidate| candidate.as_ref() == canonical)
+    }
+
+    fn bloom_insert(&mut self, digest: u64) {
+        for bit in [digest as usize & 255, digest.rotate_left(29) as usize & 255] {
+            self.bloom[bit / 64] |= 1u64 << (bit % 64);
+        }
+    }
+
+    fn bloom_may_contain(&self, digest: u64) -> bool {
+        [digest as usize & 255, digest.rotate_left(29) as usize & 255]
+            .into_iter()
+            .all(|bit| self.bloom[bit / 64] & (1u64 << (bit % 64)) != 0)
+    }
+}
+
+impl ShardedRrsetIdBitset {
+    const WORDS_PER_PAGE: usize = 64;
+    const BITS_PER_PAGE: usize = Self::WORDS_PER_PAGE * u64::BITS as usize;
+
+    fn new(rrset_count: usize) -> Self {
+        let page_count = rrset_count.div_ceil(Self::BITS_PER_PAGE);
+        Self {
+            pages: (0..page_count)
+                .map(|_| Arc::new([0; Self::WORDS_PER_PAGE]))
+                .collect(),
+        }
+    }
+
+    fn insert(&mut self, value: ZoneImageRrsetId) {
+        let value = value.index() as usize;
+        let page = value / Self::BITS_PER_PAGE;
+        let within_page = value % Self::BITS_PER_PAGE;
+        let word = within_page / u64::BITS as usize;
+        let bit = within_page % u64::BITS as usize;
+        Arc::make_mut(&mut self.pages[page])[word] |= 1u64 << bit;
+    }
+
+    fn contains(&self, value: &ZoneImageRrsetId) -> bool {
+        let value = value.index() as usize;
+        let page = value / Self::BITS_PER_PAGE;
+        let within_page = value % Self::BITS_PER_PAGE;
+        let word = within_page / u64::BITS as usize;
+        let bit = within_page % u64::BITS as usize;
+        self.pages
+            .get(page)
+            .is_some_and(|page| page[word] & (1u64 << bit) != 0)
+    }
+}
+
+impl ShardedRrsetKeys {
+    fn new(shard_count: usize) -> Self {
+        Self {
+            shards: (0..shard_count).map(|_| Arc::new(HashSet::new())).collect(),
+        }
+    }
+
+    fn insert(&mut self, key: RrsetKey) {
+        let shard = rrset_shard_index(key.owner.as_ref(), self.shards.len());
+        Arc::make_mut(&mut self.shards[shard]).insert(key);
+    }
+
+    fn remove(&mut self, key: &RrsetKey) {
+        let shard = rrset_shard_index(key.owner.as_ref(), self.shards.len());
+        Arc::make_mut(&mut self.shards[shard]).remove(key);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &RrsetKey> {
+        self.shards.iter().flat_map(|shard| shard.iter())
+    }
+}
+
+impl ShardedRrsets {
+    fn empty() -> Self {
+        Self {
+            shards: vec![Arc::new(HashMap::new())].into_boxed_slice(),
+            len: 0,
+        }
+    }
+
+    fn from_rrsets(rrsets: Vec<Rrset>, name_interner: &mut NameInterner) -> Self {
+        let shard_count = rrset_shard_count(rrsets.len());
+        let capacity = rrsets.len().div_ceil(shard_count);
+        let mut shards = (0..shard_count)
+            .map(|_| HashMap::with_capacity(capacity))
+            .collect::<Vec<_>>();
+        for rrset in rrsets {
+            let key =
+                RrsetKey::new_interned(&rrset.owner, rrset.rr_type, rrset.class, name_interner);
+            let shard = rrset_shard_index(key.owner.as_ref(), shard_count);
+            shards[shard].insert(key, rrset);
+        }
+        let len = shards.iter().map(HashMap::len).sum();
+        Self {
+            shards: shards.into_iter().map(Arc::new).collect(),
+            len,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn get(&self, key: &RrsetKey) -> Option<&Rrset> {
+        let shard = rrset_shard_index(key.owner.as_ref(), self.shards.len());
+        self.shards[shard].get(key)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Rrset> {
+        self.shards.iter().flat_map(|shard| shard.values())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&RrsetKey, &Rrset)> {
+        self.shards.iter().flat_map(|shard| shard.iter())
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &RrsetKey> {
+        self.shards.iter().flat_map(|shard| shard.keys())
+    }
+
+    fn values_at_owner(&self, owner_key: &str) -> impl Iterator<Item = &Rrset> {
+        let shard = rrset_shard_index(owner_key, self.shards.len());
+        self.shards[shard]
+            .iter()
+            .filter_map(move |(key, rrset)| (key.owner.as_ref() == owner_key).then_some(rrset))
+    }
+
+    fn with_replacements(&self, replacements: Vec<(String, u16, u16, Option<Rrset>)>) -> Self {
+        let mut shards = self.shards.to_vec();
+        let mut len = self.len;
+        for (owner_key, rr_type, class, replacement) in replacements {
+            let shard = rrset_shard_index(&owner_key, shards.len());
+            let shard = Arc::make_mut(&mut shards[shard]);
+            let key = RrsetKey::new_from_key(&owner_key, rr_type, class);
+            match replacement {
+                Some(rrset) => {
+                    if shard.insert(key, rrset).is_none() {
+                        len += 1;
+                    }
+                }
+                None => {
+                    if shard.remove(&key).is_some() {
+                        len -= 1;
+                    }
+                }
+            }
+        }
+        Self {
+            shards: shards.into_boxed_slice(),
+            len,
+        }
+    }
+}
+
+fn rrset_shard_count(rrset_count: usize) -> usize {
+    if rrset_count < RRSET_SHARD_MIN_TOTAL_LEN {
+        return 1;
+    }
+    rrset_count
+        .div_ceil(RRSET_SHARD_TARGET_LEN)
+        .next_power_of_two()
+        .min(RRSET_SHARD_MAX_COUNT)
+}
+
+fn rrset_shard_index(owner_key: &str, shard_count: usize) -> usize {
+    debug_assert!(shard_count.is_power_of_two());
+    canonical_name_hash_str(owner_key) as usize & (shard_count - 1)
+}
+
+fn canonical_name_hash_str(owner_key: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut digest = FNV_OFFSET;
+    for byte in owner_key.bytes() {
+        digest ^= u64::from(byte);
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    digest
+}
+
+fn canonical_domain_suffix_hash(name: &DomainName, suffix_start: usize) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut digest = FNV_OFFSET;
+    for label in &name.labels()[suffix_start..] {
+        for byte in label {
+            let byte = byte.to_ascii_lowercase();
+            if matches!(byte, b'\\' | b'.' | 0x00..=0x20 | 0x7f..=0xff) {
+                for escaped in [
+                    b'\\',
+                    b'0' + byte / 100,
+                    b'0' + (byte / 10) % 10,
+                    b'0' + byte % 10,
+                ] {
+                    digest ^= u64::from(escaped);
+                    digest = digest.wrapping_mul(FNV_PRIME);
+                }
+            } else {
+                digest ^= u64::from(byte);
+                digest = digest.wrapping_mul(FNV_PRIME);
+            }
+        }
+        digest ^= u64::from(b'.');
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    if suffix_start == name.label_count() {
+        digest ^= u64::from(b'.');
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    digest
+}
+
+fn canonical_domain_suffix_key(name: &DomainName, suffix_start: usize) -> String {
+    canonical_name_key_from_labels(name.labels()[suffix_start..].iter().map(Vec::as_slice))
+}
+
 impl RrsetKey {
     fn new_from_key(owner_key: &str, rr_type: u16, class: u16) -> Self {
         Self {
@@ -2519,7 +4855,10 @@ mod tests {
                 vec![soa_rdata()],
             )],
         );
-        assert!(matches!(in_only.name_classes, NameClassIndex::InOnly(_)));
+        assert!(matches!(
+            in_only.name_classes.as_ref(),
+            NameClassIndex::InOnly(_)
+        ));
         assert!(in_only.name_exists(&origin, 1));
         assert!(in_only.name_exists(&origin, 255));
         assert!(!in_only.name_exists(&origin, 3));
@@ -2544,7 +4883,7 @@ mod tests {
             ],
         );
         assert!(matches!(
-            multiclass.name_classes,
+            multiclass.name_classes.as_ref(),
             NameClassIndex::MultiClass(_)
         ));
         assert!(multiclass.name_exists(&chaos, 3));
@@ -2628,6 +4967,329 @@ mod tests {
     }
 
     #[test]
+    fn sharded_publication_reuses_compact_image_and_gates_dirty_direct_answers() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let unchanged = DomainName::from_absolute_str("unchanged.example.test.").unwrap();
+        let changed = DomainName::from_absolute_str("changed.example.test.").unwrap();
+        let base = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("ns.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    unchanged.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1]],
+                ),
+                Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 2]],
+                ),
+            ],
+        );
+        let store = ZoneStore::with_publication_policy(ZonePublicationPolicy {
+            strategy: ZonePublicationStrategy::Sharded,
+            sharded_rrset_threshold: 1,
+            ..ZonePublicationPolicy::default()
+        });
+        store.insert_snapshot(base.clone());
+        let base_image = store
+            .find_published_zone(&unchanged)
+            .unwrap()
+            .active_zone_image_ref() as *const ZoneImage;
+
+        let mut soa2 = soa_rdata();
+        soa2[44..48].copy_from_slice(&2u32.to_be_bytes());
+        let updated = base.with_cow_rrset_replacements(
+            2,
+            vec![
+                (
+                    origin.canonical_key(),
+                    RecordType::Soa as u16,
+                    1,
+                    Some(Rrset::new(
+                        origin,
+                        RecordType::Soa as u16,
+                        1,
+                        300,
+                        vec![soa2],
+                    )),
+                ),
+                (
+                    changed.canonical_key(),
+                    RecordType::A as u16,
+                    1,
+                    Some(Rrset::new(
+                        changed.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![vec![198, 51, 100, 2]],
+                    )),
+                ),
+            ],
+        );
+        let updated_shape = updated.shape_summary();
+        store.insert_snapshot(updated);
+
+        let published = store.find_published_zone(&unchanged).unwrap();
+        assert!(published.has_incremental_overlay());
+        assert_eq!(published.serial(), Some(2));
+        assert_eq!(published.active_zone_image_ref().serial(), Some(1));
+        assert_eq!(
+            published.active_zone_image_ref() as *const ZoneImage,
+            base_image
+        );
+        assert!(published.overlay_allows_compact_direct(&unchanged, RecordType::A as u16, 1));
+        assert!(!published.overlay_allows_compact_direct(&changed, RecordType::A as u16, 1));
+        assert!(!published.overlay_allows_compact_direct(&unchanged, RecordType::Mx as u16, 1));
+        let metadata = store
+            .zone_metadata()
+            .into_iter()
+            .find(|metadata| metadata.origin == base.origin)
+            .expect("overlay metadata");
+        assert_eq!(metadata.shape, Some(updated_shape));
+        assert!(metadata.shape_histograms.is_none());
+    }
+
+    #[test]
+    fn due_overlay_compaction_installs_current_compact_image() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let changed = DomainName::from_absolute_str("changed.example.test.").unwrap();
+        let base = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1]],
+                ),
+            ],
+        );
+        let store = ZoneStore::with_publication_policy(ZonePublicationPolicy {
+            strategy: ZonePublicationStrategy::Sharded,
+            sharded_rrset_threshold: 1,
+            overlay_compaction_dirty_owner_threshold: 1,
+        });
+        store.insert_snapshot(base.clone());
+        let updated = base.with_cow_rrset_replacements(
+            2,
+            vec![(
+                changed.canonical_key(),
+                RecordType::A as u16,
+                1,
+                Some(Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![198, 51, 100, 1]],
+                )),
+            )],
+        );
+        store.insert_snapshot(updated);
+        assert!(store.overlay_compaction_due(&origin));
+
+        assert_eq!(
+            store.compact_overlay_if_due(&origin).unwrap(),
+            ZoneOverlayCompactionOutcome::Compacted {
+                remaining_dirty_owners: 0,
+            }
+        );
+        assert!(!store.overlay_compaction_due(&origin));
+        let published = store.find_published_zone(&changed).unwrap();
+        assert!(!published.has_incremental_overlay());
+        assert_eq!(published.serial(), Some(2));
+        assert_eq!(published.active_zone_image_ref().serial(), Some(2));
+    }
+
+    #[test]
+    fn new_owner_overlay_skips_dirty_hash_and_relies_on_compact_exact_gate() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let wildcard = DomainName::from_absolute_str("*.example.test.").unwrap();
+        let ordinary_new = DomainName::from_absolute_str("new.example.test.").unwrap();
+        let wildcard_new = DomainName::from_absolute_str("covered.example.test.").unwrap();
+        for (base_extra, added) in [
+            (None, ordinary_new),
+            (
+                Some(Rrset::new(
+                    wildcard,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 9]],
+                )),
+                wildcard_new,
+            ),
+        ] {
+            let mut rrsets = vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )];
+            rrsets.extend(base_extra);
+            let base = ZoneSnapshot::active(origin.clone(), Some(1), rrsets);
+            let store = ZoneStore::with_publication_policy(ZonePublicationPolicy {
+                strategy: ZonePublicationStrategy::Sharded,
+                sharded_rrset_threshold: 1,
+                ..ZonePublicationPolicy::default()
+            });
+            store.insert_snapshot(base.clone());
+            let updated = base.with_cow_rrset_replacements(
+                2,
+                vec![(
+                    added.canonical_key(),
+                    RecordType::A as u16,
+                    1,
+                    Some(Rrset::new(
+                        added.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![vec![198, 51, 100, 1]],
+                    )),
+                )],
+            );
+            store.insert_snapshot(updated);
+            let published = store.find_published_zone(&added).unwrap();
+            assert!(published.overlay_allows_compact_direct(&added, RecordType::A as u16, 1,));
+            assert!(!matches!(
+                published.active_zone_image_ref().lookup_exact_plan(
+                    &added,
+                    RecordType::A as u16,
+                    1
+                ),
+                ZoneImageLookupOutcome::Found(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn completed_compaction_rebases_ixfr_that_arrived_during_rebuild() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let changed = DomainName::from_absolute_str("changed.example.test.").unwrap();
+        let base = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1]],
+                ),
+            ],
+        );
+        let store = ZoneStore::with_publication_policy(ZonePublicationPolicy {
+            strategy: ZonePublicationStrategy::Sharded,
+            sharded_rrset_threshold: 1,
+            overlay_compaction_dirty_owner_threshold: 1,
+        });
+        store.insert_snapshot(base.clone());
+        let version_two = Arc::new(base.with_cow_rrset_replacements(
+            2,
+            vec![(
+                changed.canonical_key(),
+                RecordType::A as u16,
+                1,
+                Some(Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![198, 51, 100, 2]],
+                )),
+            )],
+        ));
+        store
+            .insert_snapshot_arc_for_transfer(version_two.clone())
+            .unwrap();
+        let candidate_incarnation = store
+            .zones
+            .load()
+            .get(&origin.canonical_key())
+            .unwrap()
+            .incarnation;
+        let candidate_image = Arc::new(ZoneImage::compile(&version_two).unwrap());
+
+        let version_three = version_two.with_cow_rrset_replacements(
+            3,
+            vec![(
+                changed.canonical_key(),
+                RecordType::A as u16,
+                1,
+                Some(Rrset::new(
+                    changed.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![203, 0, 113, 3]],
+                )),
+            )],
+        );
+        store.insert_snapshot(version_three);
+
+        assert_eq!(
+            store.publish_compacted_base(
+                &origin.canonical_key(),
+                &version_two,
+                candidate_incarnation,
+                candidate_image,
+            ),
+            ZoneOverlayCompactionOutcome::Compacted {
+                remaining_dirty_owners: 1,
+            }
+        );
+        let published = store.find_published_zone(&changed).unwrap();
+        assert_eq!(published.serial(), Some(3));
+        assert_eq!(published.active_zone_image_ref().serial(), Some(2));
+        assert!(published.has_incremental_overlay());
+        assert!(!published.overlay_allows_compact_direct(&changed, RecordType::A as u16, 1));
+    }
+
+    #[test]
     fn shape_summary_reports_rrset_and_name_key_distribution() {
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let www = DomainName::from_absolute_str("www.example.test.").unwrap();
@@ -2663,6 +5325,89 @@ mod tests {
             shape.name_key_deduplicated_bytes,
             shape.name_key_logical_bytes - shape.name_key_unique_bytes
         );
+    }
+
+    #[test]
+    fn cow_replacements_keep_exact_cached_shape_summary() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let multi = DomainName::from_absolute_str("multi.example.test.").unwrap();
+        let delegated = DomainName::from_absolute_str("delegated.example.test.").unwrap();
+        let old_leaf = DomainName::from_absolute_str("old.deep.example.test.").unwrap();
+        let base = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    multi.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1], vec![192, 0, 2, 2]],
+                ),
+                Rrset::new(
+                    delegated.clone(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("ns.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    old_leaf.clone(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![vec![3, b'o', b'l', b'd']],
+                ),
+            ],
+        );
+        let new_leaf = DomainName::from_absolute_str("new.other.example.test.").unwrap();
+        let updated = base.with_cow_rrset_replacements(
+            2,
+            vec![
+                (
+                    multi.canonical_key(),
+                    RecordType::A as u16,
+                    1,
+                    Some(Rrset::new(
+                        multi,
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![vec![198, 51, 100, 1]],
+                    )),
+                ),
+                (delegated.canonical_key(), RecordType::Ns as u16, 1, None),
+                (old_leaf.canonical_key(), RecordType::Txt as u16, 1, None),
+                (
+                    new_leaf.canonical_key(),
+                    RecordType::Aaaa as u16,
+                    1,
+                    Some(Rrset::new(
+                        new_leaf,
+                        RecordType::Aaaa as u16,
+                        1,
+                        300,
+                        vec![vec![0; 16], vec![1; 16], vec![2; 16]],
+                    )),
+                ),
+            ],
+        );
+        let fresh =
+            ZoneSnapshot::active(origin, Some(2), updated.rrsets.values().cloned().collect());
+
+        assert_eq!(updated.shape_summary(), updated.compute_shape_summary());
+        assert_eq!(updated.shape_summary(), fresh.shape_summary());
     }
 
     #[test]

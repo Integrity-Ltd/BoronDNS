@@ -124,13 +124,10 @@ fn maximum_zsm_positive_jitter_keeps_monotonic_and_unix_deadlines_consistent() {
     fn state_before_sample(sample: u64) -> u64 {
         let mut inverse = 1u64;
         for _ in 0..6 {
-            inverse = inverse.wrapping_mul(
-                2u64.wrapping_sub(JITTER_MULTIPLIER.wrapping_mul(inverse)),
-            );
+            inverse =
+                inverse.wrapping_mul(2u64.wrapping_sub(JITTER_MULTIPLIER.wrapping_mul(inverse)));
         }
-        sample
-            .wrapping_sub(JITTER_INCREMENT)
-            .wrapping_mul(inverse)
+        sample.wrapping_sub(JITTER_INCREMENT).wrapping_mul(inverse)
     }
 
     let configured_max = std::time::Duration::from_secs(MAX_RUNTIME_DURATION_SECS);
@@ -140,8 +137,7 @@ fn maximum_zsm_positive_jitter_keeps_monotonic_and_unix_deadlines_consistent() {
     assert!(jittered > configured_max);
     let now = std::time::Instant::now();
     let unix_secs = 1_700_000_000;
-    let (expected_deadline, effective) =
-        runtime_deadline_with_effective_duration(now, jittered);
+    let (expected_deadline, effective) = runtime_deadline_with_effective_duration(now, jittered);
     assert_eq!(effective, jittered);
 
     let registry = ZoneRefreshRegistry::new(
@@ -779,12 +775,9 @@ async fn paused_same_zone_attempt_cannot_publish_after_a_newer_refresh() {
     });
 
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(20),
-            &mut newer_acquired_rx
-        )
-        .await
-        .is_err(),
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut newer_acquired_rx)
+            .await
+            .is_err(),
         "newer refresh must remain paused behind the older zone owner"
     );
 
@@ -923,8 +916,16 @@ async fn removed_zone_rejects_paused_attempt_success_without_requeue() {
     registry.remove_zone(&origin);
     assert!(!attempt.record_success(&metadata));
     attempt.finish();
-    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
-    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+    assert!(
+        !registry
+            .snapshots_by_zone()
+            .contains_key(&origin.canonical_key())
+    );
+    assert!(
+        registry
+            .start_due_refreshes(std::time::Instant::now())
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -940,8 +941,16 @@ async fn removed_zone_rejects_paused_attempt_failure_without_requeue() {
 
     registry.remove_zone(&origin);
     attempt.record_failure(None, Some("paused failure".to_owned()));
-    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
-    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+    assert!(
+        !registry
+            .snapshots_by_zone()
+            .contains_key(&origin.canonical_key())
+    );
+    assert!(
+        registry
+            .start_due_refreshes(std::time::Instant::now())
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -956,8 +965,16 @@ async fn stale_queued_refresh_cannot_reregister_removed_zone() {
     registry.remove_zone(&origin);
 
     assert!(registry.begin_registered_attempt(&origin).await.is_none());
-    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
-    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+    assert!(
+        !registry
+            .snapshots_by_zone()
+            .contains_key(&origin.canonical_key())
+    );
+    assert!(
+        registry
+            .start_due_refreshes(std::time::Instant::now())
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -978,8 +995,16 @@ async fn old_attempt_cannot_mutate_readded_zone_generation() {
     assert!(!old_attempt.record_success(&metadata));
     old_attempt.finish();
 
-    assert!(registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
-    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+    assert!(
+        registry
+            .snapshots_by_zone()
+            .contains_key(&origin.canonical_key())
+    );
+    assert!(
+        registry
+            .start_due_refreshes(std::time::Instant::now())
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1061,7 +1086,8 @@ fn ixfr_cooldown_registry_retains_all_live_keys_and_purges_removed_or_expired_zo
             .len(),
         0
     );
-    let last = DomainName::from_absolute_str(&format!("member-{}.catalog.test.", count - 1)).unwrap();
+    let last =
+        DomainName::from_absolute_str(&format!("member-{}.catalog.test.", count - 1)).unwrap();
     assert!(!registry.is_disabled_at(&last, primary, now));
     assert!(
         !registry
@@ -1079,9 +1105,7 @@ fn ixfr_bulk_catalog_cleanup_visits_each_live_key_once_at_20k_scale() {
     let primary: std::net::SocketAddr = "192.0.2.53:53".parse().unwrap();
     let count = 20_000usize;
     let zones = (0..count)
-        .map(|index| {
-            DomainName::from_absolute_str(&format!("bulk-{index}.catalog.test.")).unwrap()
-        })
+        .map(|index| DomainName::from_absolute_str(&format!("bulk-{index}.catalog.test.")).unwrap())
         .collect::<Vec<_>>();
     for zone in &zones {
         registry.record_unsupported_at(zone, primary, now);
@@ -1096,8 +1120,7 @@ fn ixfr_bulk_catalog_cleanup_visits_each_live_key_once_at_20k_scale() {
         .collect::<Vec<_>>();
 
     let started = std::time::Instant::now();
-    let (visited, removed) =
-        registry.reconcile_catalog_generations(&removed_zones, &changed_plans);
+    let (visited, removed) = registry.reconcile_catalog_generations(&removed_zones, &changed_plans);
     let elapsed = started.elapsed();
 
     assert_eq!(visited, count, "bulk cleanup performs one registry scan");
@@ -1122,12 +1145,7 @@ fn ixfr_retained_plan_generation_churn_keeps_one_live_generation() {
         assert!(visited <= 2);
         assert!(removed <= 1);
         assert_eq!(registry.disabled_until.lock().unwrap().len(), 1);
-        assert!(registry.is_disabled_for_generation_at(
-            &zone,
-            primary,
-            generation,
-            now,
-        ));
+        assert!(registry.is_disabled_for_generation_at(&zone, primary, generation, now,));
     }
 }
 
@@ -1601,14 +1619,12 @@ async fn closed_refresh_admission_discards_buffered_work_without_starting_a_tran
         .in_progress = true;
 
     let (tx, rx) = mpsc::channel(1);
-    let mut request = RefreshRequest::new(
-        origin.clone(),
-        Some(2),
-        super::RefreshReason::Notify,
-    )
-    .with_plan_generation(&plan);
+    let mut request = RefreshRequest::new(origin.clone(), Some(2), super::RefreshReason::Notify)
+        .with_plan_generation(&plan);
     request.retry_after_queue_drop = Some(super::RefreshReason::Notify);
-    tx.send(request).await.expect("buffer refresh before shutdown");
+    tx.send(request)
+        .await
+        .expect("buffer refresh before shutdown");
     let admission = RefreshAdmission::new();
     admission.close();
     let metrics = RuntimeMetrics::new();
@@ -1700,7 +1716,8 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -1790,13 +1807,15 @@ async fn notify_serial_hint_still_requires_primary_soa_poll() {
         .expect("SOA primary should send peer address");
 
     assert_eq!(metadata.serial, Some(2));
-    assert_eq!(peer.ip(), std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    assert_eq!(
+        peer.ip(),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    );
 }
 
 #[tokio::test]
 async fn notify_refresh_polls_the_notifying_primary_first() {
-    let (stale_primary, stale_rx) =
-        spawn_soa_primary_recording_peer_on("127.0.0.1:0", 10).await;
+    let (stale_primary, stale_rx) = spawn_soa_primary_recording_peer_on("127.0.0.1:0", 10).await;
     let (notifying_primary, notifying_rx) =
         spawn_soa_primary_recording_peer_on("127.0.0.2:0", 10).await;
     let config = ServerConfig::from_toml_str(&format!(
@@ -1865,8 +1884,7 @@ async fn notify_refresh_polls_the_notifying_primary_first() {
 
 #[tokio::test]
 async fn notify_serial_hint_requires_soa_poll_over_xot_primary() {
-    let (primary, trust_anchor, observed_qtype) =
-        spawn_xot_soa_primary_recording_query(2).await;
+    let (primary, trust_anchor, observed_qtype) = spawn_xot_soa_primary_recording_query(2).await;
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
@@ -1925,7 +1943,10 @@ async fn notify_serial_hint_requires_soa_poll_over_xot_primary() {
         .expect("XoT primary should report the query type");
 
     assert_eq!(qtype, RecordType::Soa as u16);
-    assert_eq!(metadata.expect("XoT SOA poll confirms current").serial, Some(2));
+    assert_eq!(
+        metadata.expect("XoT SOA poll confirms current").serial,
+        Some(2)
+    );
 }
 
 #[tokio::test]
@@ -1983,7 +2004,10 @@ async fn expired_zone_is_not_reactivated_by_unvalidated_notify_serial_hint() {
     )
     .await;
 
-    assert!(metadata.is_none(), "the unreachable primary did not confirm freshness");
+    assert!(
+        metadata.is_none(),
+        "the unreachable primary did not confirm freshness"
+    );
     let expired = zones
         .exact_snapshot_for_transfer(&apex)
         .expect("expired retained snapshot remains available for refresh");
@@ -2078,10 +2102,7 @@ async fn malformed_catalog_axfr_is_rejected_before_publication_and_success() {
         .exact_snapshot_for_transfer(&origin)
         .expect("last known-good catalog remains installed");
     assert_eq!(current.metadata().serial, Some(1));
-    assert!(Arc::ptr_eq(
-        &retained,
-        current.snapshot_arc_for_transfer()
-    ));
+    assert!(Arc::ptr_eq(&retained, current.snapshot_arc_for_transfer()));
     assert_eq!(metrics.snapshot().axfr_started, 1);
     assert_eq!(metrics.snapshot().axfr_succeeded, 0);
     assert_eq!(metrics.snapshot().axfr_failed, 1);
@@ -2128,7 +2149,8 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -2193,7 +2215,8 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -2324,7 +2347,8 @@ async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(50),
             axfr_timeout: std::time::Duration::from_millis(50),
             tcp_connect_timeout: std::time::Duration::from_millis(50),
@@ -2384,7 +2408,8 @@ async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -2443,7 +2468,8 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -2507,7 +2533,8 @@ async fn refresh_xot_rejects_tls12_only_primary_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -2567,7 +2594,8 @@ async fn refresh_xot_rejects_untrusted_certificate_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -2626,7 +2654,8 @@ async fn refresh_xot_rejects_expired_certificate_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -2688,7 +2717,8 @@ async fn refresh_xot_uses_configured_client_certificate() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -2745,7 +2775,8 @@ async fn refresh_xot_rejects_missing_client_certificate_before_query() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -3142,10 +3173,7 @@ fn runtime_config_warnings_report_expiring_profile_backed_xot_trust_anchors() {
 #[test]
 fn profile_backed_expiry_warnings_use_captured_certificates_after_source_mutation() {
     for mutation in ["replacement", "removal", "malformed"] {
-        let root = unique_test_path(
-            &format!("borondns-xot-profile-warning-{mutation}"),
-            "dir",
-        );
+        let root = unique_test_path(&format!("borondns-xot-profile-warning-{mutation}"), "dir");
         let (trust_anchor, key_path) =
             write_expiring_self_signed_xot_cert_files_for_name("primary.example.test");
         let snapshot_anchor = copy_secret_store_file(&root, &trust_anchor, "trust-anchor.pem");
@@ -3192,7 +3220,8 @@ fn profile_backed_expiry_warnings_use_captured_certificates_after_source_mutatio
                 replacement_material = Some((replacement, replacement_key));
             }
             "removal" => {
-                std::fs::remove_file(&snapshot_anchor).expect("remove captured trust-anchor source");
+                std::fs::remove_file(&snapshot_anchor)
+                    .expect("remove captured trust-anchor source");
             }
             "malformed" => {
                 std::fs::write(&snapshot_anchor, b"not a certificate\n")
@@ -3201,14 +3230,10 @@ fn profile_backed_expiry_warnings_use_captured_certificates_after_source_mutatio
             _ => unreachable!(),
         }
 
-        let warnings = runtime_config_warnings_with_secrets_at(
-            &config,
-            &secrets,
-            1_779_667_200,
-        )
-        .unwrap_or_else(|error| {
-            panic!("{mutation} source must not affect captured warning material: {error}")
-        });
+        let warnings = runtime_config_warnings_with_secrets_at(&config, &secrets, 1_779_667_200)
+            .unwrap_or_else(|error| {
+                panic!("{mutation} source must not affect captured warning material: {error}")
+            });
         assert_eq!(warnings.len(), 1, "mutation {mutation}");
         assert_eq!(warnings[0].code, "xot_trust_anchor_expiring_soon");
 
@@ -3253,6 +3278,12 @@ fn runtime_config_validation_rejects_missing_xot_trust_anchor_file() {
 fn runtime_config_validation_rejects_malformed_xot_trust_anchor_file() {
     let trust_anchor = unique_test_path("malformed-xot-ca", "pem");
     std::fs::write(&trust_anchor, b"not a certificate").expect("write malformed trust anchor");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trust_anchor, std::fs::Permissions::from_mode(0o644))
+            .expect("read-only malformed trust anchor mode");
+    }
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
@@ -3299,8 +3330,8 @@ fn runtime_rejects_invalid_xot_config_before_startup() {
     ))
     .expect("schema-valid config");
 
-    let error = Runtime::new(config)
-        .expect_err("runtime must reject invalid XoT TLS files before startup");
+    let error =
+        Runtime::new(config).expect_err("runtime must reject invalid XoT TLS files before startup");
 
     assert!(matches!(error, RuntimeError::InvalidRuntimeConfig(_)));
 }
@@ -3321,8 +3352,8 @@ fn runtime_revalidates_tcp_inflight_capacity_before_binding_or_spawning_tasks() 
     .expect("baseline config validates");
     config.limits.max_tcp_inflight_queries_per_connection = usize::MAX;
 
-    let error = Runtime::new(config)
-        .expect_err("runtime must reject unsafe TCP capacity before binding");
+    let error =
+        Runtime::new(config).expect_err("runtime must reject unsafe TCP capacity before binding");
 
     let RuntimeError::InvalidRuntimeConfig(message) = error else {
         panic!("expected startup configuration error, got {error}");
@@ -3366,7 +3397,8 @@ async fn refresh_axfr_uses_xot_tls_transport() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -3512,7 +3544,8 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -3531,7 +3564,8 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
-            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),

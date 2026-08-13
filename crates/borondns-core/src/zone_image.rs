@@ -159,6 +159,13 @@ enum ZoneImageDirectRrsetBody<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ZoneImageRrsetId(u32);
 
+impl ZoneImageRrsetId {
+    #[doc(hidden)]
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneImageLookupPlan {
     rcode: Rcode,
@@ -5055,6 +5062,29 @@ impl ZoneImageLookupPlan {
 
     pub fn additional_rrsets(&self) -> &[ZoneImageRrsetId] {
         &self.additional_rrsets
+    }
+
+    pub(crate) fn referenced_rrsets(&self) -> impl Iterator<Item = ZoneImageRrsetId> + '_ {
+        self.answer_rrsets
+            .iter()
+            .copied()
+            .chain(self.authority_rrsets.iter().copied())
+            .chain(self.additional_rrsets.iter().copied())
+            .chain(
+                self.additional_rrsets_with_owner
+                    .iter()
+                    .map(|(rrset, _)| *rrset),
+            )
+            .chain(
+                self.selected_authorities
+                    .iter()
+                    .map(|record| record.rrset_id),
+            )
+            .chain(
+                self.selected_additionals
+                    .iter()
+                    .map(|record| record.rrset_id),
+            )
     }
 }
 

@@ -209,6 +209,26 @@ def open_archive(path: str, max_compressed_bytes: int) -> tuple[int, os.stat_res
     return descriptor, archive_stat
 
 
+def stable_archive_identity(value: os.stat_result) -> tuple[int, ...]:
+    """Return fields that identify the opened inode and detect content mutation.
+
+    Access time is intentionally excluded: reading the archive may update it on
+    relatime/strictatime filesystems without changing the inode or its content.
+    Modification and change times remain part of the mutation boundary.
+    """
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
 def stage_archive(
     source_fd: int, source_stat: os.stat_result, deadline: int
 ) -> BinaryIO:
@@ -226,7 +246,9 @@ def stage_archive(
             require_before_deadline(deadline)
         staged.flush()
         os.fsync(staged.fileno())
-        if os.fstat(source_fd) != source_stat:
+        if stable_archive_identity(os.fstat(source_fd)) != stable_archive_identity(
+            source_stat
+        ):
             fail("archive identity changed while staging private verification input")
         return staged
     except BaseException:
@@ -491,7 +513,9 @@ def main() -> None:
                 write_all_before_deadline(sys.stdout.fileno(), chunk, deadline)
                 offset += len(chunk)
                 require_before_deadline(deadline)
-            if os.fstat(archive_fd) != archive_stat:
+            if stable_archive_identity(os.fstat(archive_fd)) != stable_archive_identity(
+                archive_stat
+            ):
                 fail("archive identity changed while streaming verified bytes")
         else:
             print(result)

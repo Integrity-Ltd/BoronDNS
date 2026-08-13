@@ -335,6 +335,17 @@ for checked_binary in "$run_staging/bin/borondns" "$run_staging/bin/boron-gun"; 
     printf 'warning: static linking not confirmed for %s; inspect %s and %s\n' "$checked_binary" "$run_staging/ldd.txt" "$run_staging/file.txt" >&2
 done
 
+# Package modes must not inherit the caller's umask.  Preserve only the
+# reviewed executable bit from installed inputs while making every directory
+# traversable and every ordinary data file readable in the published archive.
+if find "$run_staging" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+    printf 'installer staging tree contains an unsupported file type\n' >&2
+    exit 1
+fi
+find "$run_staging" -type d -exec chmod 0755 {} +
+find "$run_staging" -type f -perm /0111 -exec chmod 0755 {} +
+find "$run_staging" -type f ! -perm /0111 -exec chmod 0644 {} +
+
 verify_source_identity "before artifact publication"
 
 install -m 0755 "$binary" "$run_binary_asset"

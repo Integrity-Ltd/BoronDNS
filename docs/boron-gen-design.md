@@ -22,9 +22,12 @@ zones from interoperable authoritative implementations.
   under TCP backpressure.
 - After a transfer, the process retains only the scenario configuration,
   counters, serial, and bounded per-connection buffers.
-- SOA polling returns the stable configured serial. IXFR for the unchanged
-  serial returns the single current SOA, so a filled secondary does not require
-  another full transfer.
+- With churn disabled, SOA polling returns the stable configured serial and
+  IXFR for that serial returns the single current SOA.
+- With churn enabled, the serial advances from a monotonic clock and BoronGen
+  streams deterministic replace-only IXFR generations on demand. It retains no
+  per-generation zone image or journal. Requests outside the configured
+  generation window fall back to a fresh AXFR.
 - Concurrent connections are bounded. Configuration and aggregate record-count
   arithmetic are checked before the listener starts; per-record/message
   wire-size arithmetic remains checked while streaming and fails the affected
@@ -43,10 +46,12 @@ and the final record points to the first. The resulting ring is correctly
 ordered, fully linked, and suitable for BoronDNS's NSEC3 range indexing,
 binary-search lookup, and denial-response performance paths.
 
-The hashes are generated directly across the 160-bit namespace. They are not
-claimed to be SHA-1 preimages of the generated ordinary owner names. RRSIG
-records are structurally valid opaque load-test data, not cryptographic
-signatures. The manifest and startup log must identify both properties.
+The ring contains the real SHA-1 NSEC3 hash of the apex so BoronDNS can exercise
+its actual closest-encloser and NXDOMAIN proof path. The remaining hashes are
+generated directly across the 160-bit namespace and are not claimed to be
+preimages of the generated ordinary owner names. RRSIG records are structurally
+valid opaque load-test data, not cryptographic signatures. The manifest and
+startup log identify all three properties.
 
 This mode avoids an in-memory or on-disk `O(number of names)` hash sort. A
 separate small-corpus validity mode may later calculate real NSEC3 hashes, sort
@@ -66,10 +71,18 @@ apex NSEC3PARAM record.
 
 ## Protocol scope
 
-The first implementation serves UDP and TCP SOA, TCP AXFR, and the unchanged
-single-SOA IXFR response. It serves an RFC 9432 version 2 catalog zone and its
-formula-derived member zones. NOTIFY, serial advancement, changed IXFR
-histories, XoT, and per-member catalog transfer overrides are follow-up work.
+The implementation serves UDP and TCP SOA, TCP AXFR, unchanged single-SOA IXFR,
+and deterministic changed IXFR. `ixfr_delta_rrsets` selects fixed RRsets whose
+old and new values are derived from the generation serial;
+`ixfr_churn_interval_ms` advances the serial;
+`ixfr_churn_start_delay_ms` leaves time for the initial AXFR; and
+`ixfr_max_generations` bounds one response before AXFR fallback. Multiple missed
+generations are emitted in RFC 1995 order without retaining zone history.
+
+The catalog SOA serial stays fixed because churn changes member contents, not
+catalog membership. BoronGen also serves an RFC 9432 version 2 catalog zone and
+its formula-derived member zones. NOTIFY, XoT, and per-member catalog transfer
+overrides remain outside its scope.
 
 ## Resource-safety layers
 
@@ -100,6 +113,8 @@ it is never labelled as successful publication.
 - Message tests prove configured and DNS/TCP frame bounds.
 - Small unsigned and TSIG AXFR streams parse through BoronDNS's production
   transfer parser.
+- Changed single- and multi-generation TSIG IXFR streams parse through the
+  production parser and produce the same snapshot as a fresh generation.
 - Small generated corpora are independently inspected with standard DNS tools.
 - BoronGen RSS remains approximately constant while transferring successively
   larger corpora at fixed concurrency.
@@ -116,10 +131,10 @@ it is never labelled as successful publication.
   section-count width as a zone-storage limit.
 - A deliberately undersized cgroup proves that allocator exhaustion remains
   confined to BoronDNS and does not kill BoronGen or destabilize the host.
-- Only after the current fuzz campaign is complete, collected, and its terminal
-  status is explicitly dispositioned does the local load test advance to the
-  final 32 GiB-capped stage. The load result must not be presented as evidence
-  that a non-clean fuzz campaign passed.
+- Differential fuzzing applies generated IXFR streams to the incremental path
+  and compares each resulting snapshot and query image with a fresh rebuild.
+- Large campaigns run under cgroup v2/systemd-oomd containment and use a second
+  physical host for request-rate measurements while churn is active.
 
 ## BoronDNS large-transfer prerequisite
 

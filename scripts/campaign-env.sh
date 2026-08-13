@@ -3940,7 +3940,45 @@ campaign_remove_private_temporary_tree() {
     local journal_path="${CAMPAIGN_CLEANUP_IDENTITIES["$identity_prefix:journal_path"]:-}"
     local quarantine_name=""
     local mutation_deadline="$absolute_deadline"
+    local lock_state_present=0
+    local automatic_cleanup_timeout="${BORONDNS_CAMPAIGN_AUTOMATIC_TREE_CLEANUP_TIMEOUT_SECONDS:-30}"
     [[ "${CAMPAIGN_CLEANUP_IDENTITIES["$identity_prefix:kind"]:-}" == tree ]] || return 1
+    if [[ -n "${campaign_lock_pid:-}" || -n "${campaign_lock_control_fd:-}" ||
+        -n "${campaign_lock_response_fd:-}" || -n "${campaign_lock_owner_pid:-}" ||
+        -n "${campaign_lock_operation_deadline:-}" ||
+        -n "${campaign_lock_cleanup_deadline:-}" ||
+        -n "${campaign_lock_deadline_bounded:-}" ]]; then
+        lock_state_present=1
+    fi
+    # This tree can exist before the caller's publication lock does. Acquire a
+    # narrow lock rooted in the automatic-tree family so the ordinary
+    # identity-bound removal path retains its mutation-boundary guarantees.
+    # Recursing once keeps all lock-present behavior on the single path below.
+    if ((!lock_state_present)); then
+        [[ "$automatic_cleanup_timeout" =~ ^[1-9][0-9]*$ ]] || {
+            printf 'invalid automatic-tree cleanup timeout: %s\n' \
+                "$automatic_cleanup_timeout" >&2
+            return 1
+        }
+        local cleanup_deadline
+        if [[ -z "$mutation_deadline" ]]; then
+            mutation_deadline="$(campaign_deadline_from_timeout_seconds \
+                "$automatic_cleanup_timeout")" || return 1
+            cleanup_deadline=$((mutation_deadline + 2000000000))
+        else
+            cleanup_deadline="$mutation_deadline"
+        fi
+        campaign_acquire_private_lock "$(dirname "$path")" \
+            "$path:automatic-cleanup" "$label cleanup" \
+            "$mutation_deadline" "$cleanup_deadline" || return 1
+        local cleanup_status=0
+        campaign_remove_private_temporary_tree "$path" "$identity_prefix" \
+            "$label" "$mutation_deadline" || cleanup_status=$?
+        campaign_release_private_lock "$cleanup_deadline" || {
+            ((cleanup_status != 0)) || cleanup_status=1
+        }
+        return "$cleanup_status"
+    fi
     if [[ ! -e "$path" && ! -L "$path" ]]; then
         # Absence is not proof of removal: the captured inode may have been
         # renamed away. Retain the identity journal and fail closed so callers

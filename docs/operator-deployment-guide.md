@@ -318,6 +318,19 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   ephemeral source-port selection. `interfaces.notify` is rejected by current
   builds; it is not a fourth interface role.
 - `[query]`: query response policy, including QTYPE ANY behavior.
+- `[zone_publication]`: memory layout and IXFR publication policy. The default
+  `strategy = "auto"` keeps the compact, precompiled query image below
+  `sharded_rrset_threshold = 1000000` RRsets and uses structurally shared
+  overlays for larger zones. `compact` always rebuilds the complete image after
+  IXFR; this has the lowest steady-state query overhead but its update time
+  grows with total zone size. `sharded` always permits overlays after the
+  initial publication; this makes small changes to very large zones catch up
+  quickly at the cost of an extra dependency check and occasional snapshot
+  fallback on the query path. `overlay_compaction_dirty_owner_threshold =
+  100000` schedules a bounded background compact rebuild after that many
+  distinct owners differ from the base. Set it to zero only when an external
+  maintenance plan owns compaction. These choices affect performance and
+  memory layout, never DNS contents or atomic generation visibility.
 - `[edns]`: EDNS diagnostics. `extended_dns_errors = "off"` is the default;
   `minimal` enables RFC 8914 EDE INFO-CODE 14 for not-ready zones and
   INFO-CODE 27 for fail-closed NSEC3 iteration-cap responses when the client sent an OPT

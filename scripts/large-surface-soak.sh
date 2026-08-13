@@ -2115,6 +2115,39 @@ reconcile_retained_docker_cleanup_failures() {
     return "$aggregate_status"
 }
 
+run_timeout_with_process_group_cleanup() {
+    local timeout_pid timeout_pgid caller_pgid timeout_status=0
+
+    timeout "$@" &
+    timeout_pid=$!
+    timeout_pgid="$(ps -o pgid= -p "$timeout_pid")" || {
+        wait "$timeout_pid" || true
+        printf 'failed to determine timeout process group: pid=%s\n' "$timeout_pid" >&2
+        return 70
+    }
+    timeout_pgid="${timeout_pgid//[[:space:]]/}"
+    caller_pgid="$(ps -o pgid= -p "$BASHPID")" || {
+        wait "$timeout_pid" || true
+        printf 'failed to determine scenario runner process group\n' >&2
+        return 70
+    }
+    caller_pgid="${caller_pgid//[[:space:]]/}"
+    if [[ ! "$timeout_pgid" =~ ^[1-9][0-9]*$ || "$timeout_pgid" == "$caller_pgid" ]]; then
+        wait "$timeout_pid" || true
+        printf 'timeout did not establish an isolated process group: timeout_pid=%s timeout_pgid=%s caller_pgid=%s\n' \
+            "$timeout_pid" "$timeout_pgid" "$caller_pgid" >&2
+        return 70
+    fi
+
+    wait "$timeout_pid" || timeout_status=$?
+    # GNU timeout normally signals the complete command process group.  Some
+    # compatible implementations signal only the immediate command, allowing
+    # grandchildren to survive after the timeout process exits.  Reap anything
+    # still in the authenticated, isolated group before returning to the soak.
+    kill -KILL -- "-$timeout_pgid" 2>/dev/null || true
+    return "$timeout_status"
+}
+
 run_bounded_scenario_command() {
     local timeout_seconds="$1"
     local kill_after_seconds="$2"
@@ -2201,14 +2234,16 @@ run_bounded_scenario_command() {
 
     command_started_nanoseconds="$(monotonic_nanoseconds)"
     if ((deadline_limited)); then
-        if timeout --kill-after="$kill_after_seconds" "$timeout_seconds" \
+        if run_timeout_with_process_group_cleanup \
+            --kill-after="$kill_after_seconds" "$timeout_seconds" \
             "${command_env[@]}" "$command"; then
             command_status=0
         else
             command_status=$?
         fi
     else
-        if timeout --preserve-status --kill-after="$kill_after_seconds" "$timeout_seconds" \
+        if run_timeout_with_process_group_cleanup \
+            --preserve-status --kill-after="$kill_after_seconds" "$timeout_seconds" \
             "${command_env[@]}" "$command"; then
             command_status=0
         else

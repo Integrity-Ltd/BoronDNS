@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use borondns_core::{
@@ -23,7 +23,10 @@ use tracing::{info, warn};
 
 use crate::{
     scenario::{Scenario, ScenarioError, ZoneKind},
-    wire::{AxfrMessageStream, ParsedQuery, WireError, parse_query, single_answer_response},
+    wire::{
+        AxfrMessageStream, IxfrMessageStream, ParsedQuery, WireError, parse_query,
+        single_answer_response,
+    },
 };
 
 const MAX_CONNECTIONS: usize = 65_535;
@@ -34,6 +37,9 @@ pub struct ServerConfig {
     pub message_bytes: usize,
     pub max_connections: usize,
     pub tsig_key: Option<TsigKey>,
+    pub ixfr_churn_interval_ms: u64,
+    pub ixfr_churn_start_delay_ms: u64,
+    pub ixfr_max_generations: u32,
 }
 
 #[derive(Debug, Error)]
@@ -42,6 +48,8 @@ pub enum ServerError {
     InvalidConnections(usize),
     #[error("configured DNS message target {0} is outside 512..=64000")]
     InvalidMessageBytes(usize),
+    #[error("ixfr_max_generations must be greater than zero")]
+    InvalidIxfrMaxGenerations,
     #[error("failed to bind {transport} listener at {addr}: {source}")]
     Bind {
         transport: &'static str,
@@ -67,6 +75,10 @@ struct ServerStatsInner {
     axfr_completed: AtomicU64,
     axfr_messages: AtomicU64,
     axfr_records: AtomicU64,
+    ixfr_completed: AtomicU64,
+    ixfr_messages: AtomicU64,
+    ixfr_records: AtomicU64,
+    ixfr_axfr_fallbacks: AtomicU64,
     rejected: AtomicU64,
     tcp_overload_drops: AtomicU64,
 }
@@ -78,6 +90,10 @@ pub struct ServerStats {
     pub axfr_completed: u64,
     pub axfr_messages: u64,
     pub axfr_records: u64,
+    pub ixfr_completed: u64,
+    pub ixfr_messages: u64,
+    pub ixfr_records: u64,
+    pub ixfr_axfr_fallbacks: u64,
     pub rejected: u64,
     pub tcp_overload_drops: u64,
 }
@@ -90,6 +106,10 @@ impl ServerStatsInner {
             axfr_completed: self.axfr_completed.load(Ordering::Relaxed),
             axfr_messages: self.axfr_messages.load(Ordering::Relaxed),
             axfr_records: self.axfr_records.load(Ordering::Relaxed),
+            ixfr_completed: self.ixfr_completed.load(Ordering::Relaxed),
+            ixfr_messages: self.ixfr_messages.load(Ordering::Relaxed),
+            ixfr_records: self.ixfr_records.load(Ordering::Relaxed),
+            ixfr_axfr_fallbacks: self.ixfr_axfr_fallbacks.load(Ordering::Relaxed),
             rejected: self.rejected.load(Ordering::Relaxed),
             tcp_overload_drops: self.tcp_overload_drops.load(Ordering::Relaxed),
         }
@@ -104,7 +124,40 @@ pub struct BoundServer {
     connections: Arc<Semaphore>,
     tsig_key: Option<Arc<TsigKey>>,
     stats: Arc<ServerStatsInner>,
+    serial_clock: Arc<SerialClock>,
+    ixfr_max_generations: u32,
     local_addr: SocketAddr,
+}
+
+#[derive(Debug)]
+struct SerialClock {
+    base_serial: u32,
+    started: Instant,
+    interval: Option<Duration>,
+    start_delay: Duration,
+}
+
+impl SerialClock {
+    fn new(base_serial: u32, interval_ms: u64, start_delay_ms: u64) -> Self {
+        Self {
+            base_serial,
+            started: Instant::now(),
+            interval: (interval_ms != 0).then(|| Duration::from_millis(interval_ms)),
+            start_delay: Duration::from_millis(start_delay_ms),
+        }
+    }
+
+    fn current_serial(&self) -> u32 {
+        let Some(interval) = self.interval else {
+            return self.base_serial;
+        };
+        let Some(active_elapsed) = self.started.elapsed().checked_sub(self.start_delay) else {
+            return self.base_serial;
+        };
+        let generations = active_elapsed.as_millis() / interval.as_millis();
+        self.base_serial
+            .wrapping_add(generations.min(u128::from(u32::MAX)) as u32)
+    }
 }
 
 impl BoundServer {
@@ -114,6 +167,9 @@ impl BoundServer {
         }
         if !(512..=64_000).contains(&config.message_bytes) {
             return Err(ServerError::InvalidMessageBytes(config.message_bytes));
+        }
+        if config.ixfr_max_generations == 0 {
+            return Err(ServerError::InvalidIxfrMaxGenerations);
         }
 
         let tcp = TcpListener::bind(config.listen)
@@ -132,6 +188,7 @@ impl BoundServer {
                 source,
             })?;
 
+        let base_serial = scenario.config().serial;
         Ok(Self {
             tcp,
             udp,
@@ -140,6 +197,12 @@ impl BoundServer {
             connections: Arc::new(Semaphore::new(config.max_connections)),
             tsig_key: config.tsig_key.map(Arc::new),
             stats: Arc::new(ServerStatsInner::default()),
+            serial_clock: Arc::new(SerialClock::new(
+                base_serial,
+                config.ixfr_churn_interval_ms,
+                config.ixfr_churn_start_delay_ms,
+            )),
+            ixfr_max_generations: config.ixfr_max_generations,
             local_addr,
         })
     }
@@ -164,6 +227,8 @@ impl BoundServer {
             connections,
             tsig_key,
             stats,
+            serial_clock,
+            ixfr_max_generations,
             local_addr,
         } = self;
         info!(
@@ -183,8 +248,10 @@ impl BoundServer {
             connections,
             tsig_key.clone(),
             stats.clone(),
+            serial_clock.clone(),
+            ixfr_max_generations,
         );
-        let udp_loop = udp_receive_loop(udp, scenario, tsig_key, stats.clone());
+        let udp_loop = udp_receive_loop(udp, scenario, tsig_key, stats.clone(), serial_clock);
         tokio::pin!(tcp_loop);
         tokio::pin!(udp_loop);
 
@@ -223,6 +290,8 @@ async fn tcp_accept_loop(
     connections: Arc<Semaphore>,
     tsig_key: Option<Arc<TsigKey>>,
     stats: Arc<ServerStatsInner>,
+    serial_clock: Arc<SerialClock>,
+    ixfr_max_generations: u32,
 ) -> Result<(), ServerError> {
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -240,6 +309,7 @@ async fn tcp_accept_loop(
         let scenario = scenario.clone();
         let tsig_key = tsig_key.clone();
         let stats = stats.clone();
+        let serial_clock = serial_clock.clone();
         tokio::spawn(async move {
             let _permit = permit;
             if let Err(error) = handle_tcp(
@@ -249,6 +319,8 @@ async fn tcp_accept_loop(
                 message_bytes,
                 tsig_key.as_deref(),
                 &stats,
+                &serial_clock,
+                ixfr_max_generations,
             )
             .await
             {
@@ -270,6 +342,7 @@ async fn udp_receive_loop(
     scenario: Arc<Scenario>,
     tsig_key: Option<Arc<TsigKey>>,
     stats: Arc<ServerStatsInner>,
+    serial_clock: Arc<SerialClock>,
 ) -> Result<(), ServerError> {
     let mut buffer = vec![0u8; u16::MAX as usize];
     loop {
@@ -280,6 +353,7 @@ async fn udp_receive_loop(
                 answer_single_query(
                     &scenario,
                     &authenticated.query,
+                    serial_clock.current_serial(),
                     tsig_key.as_deref(),
                     authenticated.request_mac.as_deref(),
                 )
@@ -311,6 +385,8 @@ async fn handle_tcp(
     message_bytes: usize,
     tsig_key: Option<&TsigKey>,
     stats: &ServerStatsInner,
+    serial_clock: &SerialClock,
+    ixfr_max_generations: u32,
 ) -> Result<(), ServerError> {
     let mut length_prefix = [0u8; 2];
     stream.read_exact(&mut length_prefix).await?;
@@ -340,10 +416,11 @@ async fn handle_tcp(
         write_tcp_message(&mut stream, &response).await?;
         return Ok(());
     }
+    let current_serial = served_serial(scenario, zone, serial_clock);
 
     match query.qtype {
-        qtype if qtype == RecordType::Soa as u16 || qtype == RecordType::Ixfr as u16 => {
-            let soa = scenario.soa(zone)?;
+        qtype if qtype == RecordType::Soa as u16 => {
+            let soa = scenario.soa_at_serial(zone, current_serial)?;
             let response = sign_single_response(
                 single_answer_response(&query, Some(&soa), Rcode::NoError)?,
                 tsig_key,
@@ -363,6 +440,23 @@ async fn handle_tcp(
                 tsig_key,
                 request_mac.as_deref(),
                 stats,
+                current_serial,
+            )
+            .await?;
+        }
+        qtype if qtype == RecordType::Ixfr as u16 => {
+            stream_ixfr(
+                &mut stream,
+                peer,
+                scenario,
+                zone,
+                query,
+                message_bytes,
+                tsig_key,
+                request_mac.as_deref(),
+                stats,
+                current_serial,
+                ixfr_max_generations,
             )
             .await?;
         }
@@ -389,12 +483,17 @@ async fn stream_axfr(
     tsig_key: Option<&TsigKey>,
     request_mac: Option<&[u8]>,
     stats: &ServerStatsInner,
+    serial: u32,
 ) -> Result<(), ServerError> {
     let expected_records = match zone {
         ZoneKind::Catalog => scenario.manifest().catalog_axfr_records,
         ZoneKind::Member(_) => scenario.manifest().member_axfr_records_each,
     };
-    let mut messages = AxfrMessageStream::new(query, scenario.records(zone)?, message_bytes)?;
+    let mut messages = AxfrMessageStream::new(
+        query,
+        scenario.records_at_serial(zone, serial)?,
+        message_bytes,
+    )?;
     let mut prior_mac = None;
     let mut message_count = 0u64;
     while let Some(message) = messages.next_message() {
@@ -440,6 +539,105 @@ async fn stream_axfr(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn stream_ixfr(
+    stream: &mut TcpStream,
+    peer: SocketAddr,
+    scenario: &Scenario,
+    zone: ZoneKind,
+    query: ParsedQuery,
+    message_bytes: usize,
+    tsig_key: Option<&TsigKey>,
+    request_mac: Option<&[u8]>,
+    stats: &ServerStatsInner,
+    current_serial: u32,
+    max_generations: u32,
+) -> Result<(), ServerError> {
+    let requested_serial = query.ixfr_serial.ok_or(WireError::UnsupportedQuery)?;
+    let Some(generations) =
+        ixfr_generation_count(requested_serial, current_serial, max_generations)
+    else {
+        stats.ixfr_axfr_fallbacks.fetch_add(1, Ordering::Relaxed);
+        return stream_axfr(
+            stream,
+            peer,
+            scenario,
+            zone,
+            query,
+            message_bytes,
+            tsig_key,
+            request_mac,
+            stats,
+            current_serial,
+        )
+        .await;
+    };
+
+    let expected_records = if generations == 0 {
+        1
+    } else {
+        2u64.saturating_add(u64::from(generations).saturating_mul(
+            2u64.saturating_add(scenario.ixfr_delta_rrsets(zone).saturating_mul(2)),
+        ))
+    };
+    let mut messages = IxfrMessageStream::new(
+        query,
+        scenario.ixfr_records(zone, requested_serial, current_serial)?,
+        message_bytes,
+    )?;
+    let mut prior_mac = None;
+    let mut message_count = 0u64;
+    while let Some(message) = messages.next_message() {
+        let mut message = message?;
+        if let Some(key) = tsig_key {
+            let signed = if let Some(prior_mac) = prior_mac.as_deref() {
+                key.sign_tcp_response_continuation(
+                    &message,
+                    prior_mac,
+                    unix_time(),
+                    DEFAULT_TSIG_FUDGE_SECS,
+                )?
+            } else {
+                key.sign_response(
+                    &message,
+                    request_mac.ok_or(TsigError::MissingTsig)?,
+                    unix_time(),
+                    DEFAULT_TSIG_FUDGE_SECS,
+                )?
+            };
+            prior_mac = Some(signed.mac);
+            message = signed.message;
+        }
+        write_tcp_message(stream, &message).await?;
+        message_count += 1;
+    }
+    stats.ixfr_completed.fetch_add(1, Ordering::Relaxed);
+    stats
+        .ixfr_messages
+        .fetch_add(message_count, Ordering::Relaxed);
+    stats
+        .ixfr_records
+        .fetch_add(expected_records, Ordering::Relaxed);
+    info!(
+        event = "boron_gen_ixfr_complete",
+        peer_ip = %peer.ip(),
+        peer_port = peer.port(),
+        ?zone,
+        requested_serial,
+        current_serial,
+        generations,
+        records = expected_records,
+        messages = message_count,
+        "synthetic on-the-fly IXFR completed"
+    );
+    Ok(())
+}
+
+fn ixfr_generation_count(requested: u32, current: u32, maximum: u32) -> Option<u32> {
+    let generations = current.wrapping_sub(requested);
+    (generations < 0x8000_0000 && generations <= maximum).then_some(generations)
+}
+
 struct AuthenticatedQuery {
     query: ParsedQuery,
     request_mac: Option<Vec<u8>>,
@@ -472,6 +670,7 @@ fn prepare_query(
 fn answer_single_query(
     scenario: &Scenario,
     query: &ParsedQuery,
+    serial: u32,
     tsig_key: Option<&TsigKey>,
     request_mac: Option<&[u8]>,
 ) -> Result<Vec<u8>, ServerError> {
@@ -489,12 +688,23 @@ fn answer_single_query(
             request_mac,
         );
     }
-    let soa = scenario.soa(zone)?;
+    let serial = match zone {
+        ZoneKind::Catalog => scenario.config().serial,
+        ZoneKind::Member(_) => serial,
+    };
+    let soa = scenario.soa_at_serial(zone, serial)?;
     sign_single_response(
         single_answer_response(query, Some(&soa), Rcode::NoError)?,
         tsig_key,
         request_mac,
     )
+}
+
+fn served_serial(scenario: &Scenario, zone: ZoneKind, serial_clock: &SerialClock) -> u32 {
+    match zone {
+        ZoneKind::Catalog => scenario.config().serial,
+        ZoneKind::Member(_) => serial_clock.current_serial(),
+    }
 }
 
 fn sign_single_response(
@@ -552,6 +762,28 @@ mod tests {
         .unwrap()
     }
 
+    async fn read_tcp_messages(stream: &mut TcpStream) -> Vec<Vec<u8>> {
+        let mut messages = Vec::new();
+        loop {
+            let mut prefix = [0u8; 2];
+            match stream.read_exact(&mut prefix).await {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(error) => panic!("read response prefix: {error}"),
+            }
+            let mut message = vec![0u8; u16::from_be_bytes(prefix) as usize];
+            stream.read_exact(&mut message).await.unwrap();
+            messages.push(message);
+        }
+        messages
+    }
+
+    #[test]
+    fn serial_clock_holds_the_base_serial_during_start_delay() {
+        let clock = SerialClock::new(7, 1, 60_000);
+        assert_eq!(clock.current_serial(), 7);
+    }
+
     #[tokio::test]
     async fn signed_axfr_and_unchanged_ixfr_round_trip_through_production_parsers() {
         let scenario = Scenario::new(ScenarioConfig {
@@ -569,6 +801,9 @@ mod tests {
                 message_bytes: 1_500,
                 max_connections: 2,
                 tsig_key: Some(test_key()),
+                ixfr_churn_interval_ms: 0,
+                ixfr_churn_start_delay_ms: 0,
+                ixfr_max_generations: 1_024,
             },
         )
         .await
@@ -653,6 +888,9 @@ mod tests {
                 message_bytes: 4_096,
                 max_connections: 1,
                 tsig_key: None,
+                ixfr_churn_interval_ms: 0,
+                ixfr_churn_start_delay_ms: 0,
+                ixfr_max_generations: 1_024,
             },
         )
         .await
@@ -677,6 +915,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timed_server_generates_changed_ixfr_without_retained_zone_history() {
+        let scenario = Scenario::new(ScenarioConfig {
+            profile: ContentProfile::Mixed,
+            names_per_zone: 31,
+            records_per_name: 2,
+            structural_rrsigs: false,
+            ixfr_delta_rrsets: 7,
+            ..ScenarioConfig::default()
+        })
+        .unwrap();
+        let origin = scenario.zone_origin(0).unwrap();
+        let axfr_query = parse_query(&build_axfr_query(0x6262, &origin, 1)).unwrap();
+        let mut axfr = AxfrMessageStream::new(
+            axfr_query,
+            scenario.records_at_serial(ZoneKind::Member(0), 1).unwrap(),
+            1_200,
+        )
+        .unwrap();
+        let axfr_messages = std::iter::from_fn(|| axfr.next_message())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let base = parse_axfr_response(0x6262, &origin, 1, &axfr_messages).unwrap();
+        let server = BoundServer::bind(
+            scenario,
+            ServerConfig {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                message_bytes: 1_200,
+                max_connections: 2,
+                tsig_key: None,
+                ixfr_churn_interval_ms: 50,
+                ixfr_churn_start_delay_ms: 0,
+                ixfr_max_generations: 1_024,
+            },
+        )
+        .await
+        .unwrap();
+        let address = server.local_addr();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_task = tokio::spawn(server.run_until(async {
+            let _ = shutdown_rx.await;
+        }));
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let query =
+            build_ixfr_query_from_soa_view(0x6363, &origin, 1, base.soa_record_view(1).unwrap())
+                .unwrap();
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(&frame_tcp_message(&query).unwrap())
+            .await
+            .unwrap();
+        let messages = read_tcp_messages(&mut stream).await;
+        let response = parse_ixfr_response(0x6363, &origin, 1, &base, &messages).unwrap();
+        let IxfrResponse::Updated(updated) = response else {
+            panic!("timed server should advance beyond the base serial")
+        };
+        assert!(updated.serial.unwrap() >= 2);
+        assert_eq!(updated.rdata_record_count(), base.rdata_record_count());
+
+        let _ = shutdown_tx.send(());
+        let stats = server_task.await.unwrap().unwrap();
+        assert_eq!(stats.ixfr_completed, 1);
+        assert!(stats.ixfr_records > 1);
+        assert_eq!(stats.ixfr_axfr_fallbacks, 0);
+    }
+
+    #[tokio::test]
     async fn connection_limit_is_validated_before_listener_allocation() {
         let scenario = Scenario::new(ScenarioConfig::default()).unwrap();
         for max_connections in [0, MAX_CONNECTIONS + 1] {
@@ -687,6 +992,9 @@ mod tests {
                     message_bytes: 4_096,
                     max_connections,
                     tsig_key: None,
+                    ixfr_churn_interval_ms: 0,
+                    ixfr_churn_start_delay_ms: 0,
+                    ixfr_max_generations: 1_024,
                 },
             )
             .await;
@@ -703,5 +1011,15 @@ mod tests {
             test_key().name,
             DomainName::from_absolute_str("transfer-key.").unwrap()
         );
+    }
+
+    #[test]
+    fn ixfr_generation_window_is_serial_arithmetic_aware_and_bounded() {
+        assert_eq!(ixfr_generation_count(7, 7, 100), Some(0));
+        assert_eq!(ixfr_generation_count(7, 10, 100), Some(3));
+        assert_eq!(ixfr_generation_count(u32::MAX, 1, 100), Some(2));
+        assert_eq!(ixfr_generation_count(7, 108, 100), None);
+        assert_eq!(ixfr_generation_count(10, 7, 100), None);
+        assert_eq!(ixfr_generation_count(0, 0x8000_0000, u32::MAX), None);
     }
 }

@@ -789,7 +789,12 @@ ln -s -- "$build_dir" "$source_snapshot/target"
     exit 1
 }
 sudo chown -R root:root "$source_snapshot"
-sudo chmod -R a-w "$source_snapshot"
+# A restrictive caller umask can make Git-created directories searchable only
+# by their original owner.  Normalize read/search access before removing every
+# write bit so the unprivileged service can consume the root-owned snapshot.
+# `X` preserves non-executable regular files while restoring traversal on
+# directories and execution on files that Git checked out as executable.
+sudo chmod -R a+rX,a-w "$source_snapshot"
 sudo chmod 0555 "$source_snapshot"
 [[ "$(stat -c %u "$source_snapshot")" == 0 ]] || { printf 'large-soak source snapshot is not root-owned: %s\n' "$source_snapshot" >&2; exit 1; }
 [[ "$(stat -c %u "$(dirname "$source_snapshot")")" == 0 ]] || { printf 'large-soak source parent is not root-owned: %s\n' "$source_snapshot" >&2; exit 1; }

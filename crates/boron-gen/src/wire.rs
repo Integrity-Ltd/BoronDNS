@@ -1,10 +1,10 @@
 use borondns_core::{
-    dns::{DNS_HEADER_LEN, DomainName, Header, Question, Rcode},
+    dns::{DNS_HEADER_LEN, DomainName, Header, Question, Rcode, RecordType},
     zone::ResourceRecord,
 };
 use thiserror::Error;
 
-use crate::scenario::{GeneratedRecord, ScenarioError, ZoneRecordIter};
+use crate::scenario::{GeneratedRecord, IxfrRecordIter, ScenarioError, ZoneRecordIter};
 
 const RESPONSE_FLAGS_AUTHORITATIVE: u16 = 0x8400;
 
@@ -14,6 +14,7 @@ pub struct ParsedQuery {
     pub qname: DomainName,
     pub qtype: u16,
     pub qclass: u16,
+    pub ixfr_serial: Option<u32>,
 }
 
 #[derive(Debug, Error)]
@@ -47,12 +48,72 @@ pub fn parse_query(message: &[u8]) -> Result<ParsedQuery, WireError> {
         return Err(WireError::UnsupportedQuery);
     }
     let question = Question::parse(message).map_err(|_| WireError::MalformedQuery)?;
+    let ixfr_serial = if question.qtype == RecordType::Ixfr as u16 {
+        Some(parse_ixfr_authority_serial(message, &header, &question)?)
+    } else {
+        None
+    };
     Ok(ParsedQuery {
         id: header.id,
         qname: question.qname,
         qtype: question.qtype,
         qclass: question.qclass,
+        ixfr_serial,
     })
+}
+
+fn parse_ixfr_authority_serial(
+    message: &[u8],
+    header: &Header,
+    question: &Question,
+) -> Result<u32, WireError> {
+    if header.ancount != 0 || header.nscount != 1 {
+        return Err(WireError::UnsupportedQuery);
+    }
+    let (_, qname_len) =
+        DomainName::parse(message, DNS_HEADER_LEN).map_err(|_| WireError::MalformedQuery)?;
+    let mut offset = DNS_HEADER_LEN
+        .checked_add(qname_len)
+        .and_then(|value| value.checked_add(4))
+        .ok_or(WireError::MalformedQuery)?;
+    let (owner, owner_len) =
+        DomainName::parse(message, offset).map_err(|_| WireError::MalformedQuery)?;
+    offset = offset
+        .checked_add(owner_len)
+        .ok_or(WireError::MalformedQuery)?;
+    let fixed = message
+        .get(offset..offset + 10)
+        .ok_or(WireError::MalformedQuery)?;
+    let rr_type = u16::from_be_bytes([fixed[0], fixed[1]]);
+    let class = u16::from_be_bytes([fixed[2], fixed[3]]);
+    let rdlength = u16::from_be_bytes([fixed[8], fixed[9]]) as usize;
+    if owner != question.qname || rr_type != RecordType::Soa as u16 || class != question.qclass {
+        return Err(WireError::UnsupportedQuery);
+    }
+    let rdata_start = offset + 10;
+    let rdata_end = rdata_start
+        .checked_add(rdlength)
+        .filter(|end| *end <= message.len())
+        .ok_or(WireError::MalformedQuery)?;
+    let (_, mname_len) =
+        DomainName::parse(message, rdata_start).map_err(|_| WireError::MalformedQuery)?;
+    let rname_start = rdata_start
+        .checked_add(mname_len)
+        .ok_or(WireError::MalformedQuery)?;
+    let (_, rname_len) =
+        DomainName::parse(message, rname_start).map_err(|_| WireError::MalformedQuery)?;
+    let serial_start = rname_start
+        .checked_add(rname_len)
+        .ok_or(WireError::MalformedQuery)?;
+    if serial_start.checked_add(20) != Some(rdata_end) {
+        return Err(WireError::MalformedQuery);
+    }
+    let serial = message
+        .get(serial_start..serial_start + 4)
+        .ok_or(WireError::MalformedQuery)?;
+    Ok(u32::from_be_bytes([
+        serial[0], serial[1], serial[2], serial[3],
+    ]))
 }
 
 pub fn single_answer_response(
@@ -69,19 +130,25 @@ pub fn single_answer_response(
     Ok(message)
 }
 
-pub struct AxfrMessageStream<'a> {
+pub type AxfrMessageStream<'a> = GeneratedMessageStream<ZoneRecordIter<'a>>;
+pub type IxfrMessageStream<'a> = GeneratedMessageStream<IxfrRecordIter<'a>>;
+
+pub struct GeneratedMessageStream<I> {
     query: ParsedQuery,
-    records: ZoneRecordIter<'a>,
+    records: I,
     max_message_bytes: usize,
     pending: Option<GeneratedRecord>,
     message_index: u64,
     finished: bool,
 }
 
-impl<'a> AxfrMessageStream<'a> {
+impl<I> GeneratedMessageStream<I>
+where
+    I: Iterator<Item = Result<GeneratedRecord, ScenarioError>>,
+{
     pub fn new(
         query: ParsedQuery,
-        records: ZoneRecordIter<'a>,
+        records: I,
         max_message_bytes: usize,
     ) -> Result<Self, WireError> {
         if !(512..=64_000).contains(&max_message_bytes) {
@@ -221,7 +288,10 @@ impl From<&GeneratedRecord> for ResourceRecord {
 #[cfg(test)]
 mod tests {
     use borondns_core::{
-        axfr::{build_axfr_query, parse_axfr_response},
+        axfr::{
+            IxfrResponse, build_axfr_query, build_ixfr_query_from_soa_view, parse_axfr_response,
+            parse_ixfr_response,
+        },
         dns::Header,
     };
 
@@ -278,5 +348,53 @@ mod tests {
             .find_map(Result::err)
             .expect("oversized TXT record");
         assert!(matches!(error, WireError::RecordTooLarge { .. }));
+    }
+
+    #[test]
+    fn on_the_fly_multi_generation_ixfr_round_trips_through_production_parser() {
+        let scenario = Scenario::new(ScenarioConfig {
+            profile: ContentProfile::Mixed,
+            names_per_zone: 17,
+            records_per_name: 2,
+            structural_rrsigs: false,
+            serial: 3,
+            ixfr_delta_rrsets: 5,
+            ..ScenarioConfig::default()
+        })
+        .unwrap();
+        let origin = scenario.zone_origin(0).unwrap();
+        let axfr_query = parse_query(&build_axfr_query(0x6161, &origin, 1)).unwrap();
+        let mut axfr = AxfrMessageStream::new(
+            axfr_query,
+            scenario.records_at_serial(ZoneKind::Member(0), 1).unwrap(),
+            1_200,
+        )
+        .unwrap();
+        let axfr_messages = std::iter::from_fn(|| axfr.next_message())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let base = parse_axfr_response(0x6161, &origin, 1, &axfr_messages).unwrap();
+        assert_eq!(base.serial, Some(1));
+
+        let ixfr_query_wire =
+            build_ixfr_query_from_soa_view(0x6262, &origin, 1, base.soa_record_view(1).unwrap())
+                .unwrap();
+        let ixfr_query = parse_query(&ixfr_query_wire).unwrap();
+        assert_eq!(ixfr_query.ixfr_serial, Some(1));
+        let mut ixfr = IxfrMessageStream::new(
+            ixfr_query,
+            scenario.ixfr_records(ZoneKind::Member(0), 1, 3).unwrap(),
+            900,
+        )
+        .unwrap();
+        let ixfr_messages = std::iter::from_fn(|| ixfr.next_message())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let response = parse_ixfr_response(0x6262, &origin, 1, &base, &ixfr_messages).unwrap();
+        let IxfrResponse::Updated(updated) = response else {
+            panic!("expected generated IXFR update")
+        };
+        assert_eq!(updated.serial, Some(3));
+        assert_eq!(updated.rdata_record_count(), base.rdata_record_count());
     }
 }

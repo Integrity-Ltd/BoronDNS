@@ -10,6 +10,9 @@ configuration	[process].no_new_privileges	stable	0.1	config/borondns.example.tom
 configuration	[health].listeners	stable	0.1	config/borondns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/borondns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
 configuration	[metrics].hot_path_detail	stable	0.1.4	config/borondns.example.toml	minor-additive	Optional full reduced or off hot-path metrics detail; full is the default operational profile and off is saturation-benchmark only.
+configuration	[zone_publication].strategy	stable	0.9.1	config/borondns.example.toml	minor-additive	Compact sharded or auto zone publication layout; auto is the default and layout never changes DNS semantics.
+configuration	[zone_publication].sharded_rrset_threshold	stable	0.9.1	config/borondns.example.toml	minor-additive	Positive RRset threshold at which auto selects structurally shared IXFR overlays; default 1000000.
+configuration	[zone_publication].overlay_compaction_dirty_owner_threshold	stable	0.9.1	config/borondns.example.toml	minor-additive	Distinct dirty-owner threshold for bounded background compact rebuild; zero disables automatic compaction and default is 100000.
 configuration	[logging].format	stable	0.1	config/borondns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
 configuration	[limits].max_tcp_connections	stable	0.1	config/borondns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
 configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/borondns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.

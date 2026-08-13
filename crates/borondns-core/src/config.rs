@@ -16,6 +16,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::{
     dns::{AnyResponseMode, DomainName, ExtendedDnsErrorsMode},
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
+    zone::{ZonePublicationPolicy, ZonePublicationStrategy},
 };
 
 const MAX_LINUX_CPU_AFFINITY_INDEX: usize = 1024;
@@ -187,6 +188,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
+    pub zone_publication: ZonePublicationConfig,
+    #[serde(default)]
     pub edns: EdnsConfig,
     #[serde(default)]
     pub chaos: ChaosConfig,
@@ -293,6 +296,7 @@ impl ServerConfig {
         self.metrics.validate()?;
         self.observability.validate()?;
         self.control_plane.validate()?;
+        self.zone_publication.validate()?;
         self.chaos.validate()?;
         self.dnssec.validate()?;
 
@@ -1838,6 +1842,68 @@ impl Eq for LatencyHistogramBucketSeconds {}
 pub struct QuerySettings {
     #[serde(default)]
     pub any_response: AnyResponseConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ZonePublicationConfig {
+    #[serde(default)]
+    pub strategy: ZonePublicationStrategyConfig,
+    #[serde(default = "default_sharded_rrset_threshold")]
+    pub sharded_rrset_threshold: usize,
+    #[serde(default = "default_overlay_compaction_dirty_owner_threshold")]
+    pub overlay_compaction_dirty_owner_threshold: usize,
+}
+
+impl ZonePublicationConfig {
+    pub fn policy(&self) -> ZonePublicationPolicy {
+        ZonePublicationPolicy {
+            strategy: match self.strategy {
+                ZonePublicationStrategyConfig::Compact => ZonePublicationStrategy::Compact,
+                ZonePublicationStrategyConfig::Sharded => ZonePublicationStrategy::Sharded,
+                ZonePublicationStrategyConfig::Auto => ZonePublicationStrategy::Auto,
+            },
+            sharded_rrset_threshold: self.sharded_rrset_threshold,
+            overlay_compaction_dirty_owner_threshold: self.overlay_compaction_dirty_owner_threshold,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.sharded_rrset_threshold == 0 {
+            return Err(ConfigError::Invalid(
+                "zone_publication.sharded_rrset_threshold must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ZonePublicationConfig {
+    fn default() -> Self {
+        Self {
+            strategy: ZonePublicationStrategyConfig::Auto,
+            sharded_rrset_threshold: default_sharded_rrset_threshold(),
+            overlay_compaction_dirty_owner_threshold:
+                default_overlay_compaction_dirty_owner_threshold(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ZonePublicationStrategyConfig {
+    Compact,
+    Sharded,
+    #[default]
+    Auto,
+}
+
+fn default_sharded_rrset_threshold() -> usize {
+    1_000_000
+}
+
+fn default_overlay_compaction_dirty_owner_threshold() -> usize {
+    100_000
 }
 
 impl QuerySettings {

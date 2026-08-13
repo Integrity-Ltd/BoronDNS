@@ -119,10 +119,13 @@ async fn signed_axfr_authenticates_error_response_before_using_rcode() {
     .await
     .expect_err("unsigned REFUSED must not be accepted as an authenticated AXFR result");
 
-    assert!(matches!(
-        error,
-        TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
-    ), "unexpected AXFR error: {error:?}");
+    assert!(
+        matches!(
+            error,
+            TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
+        ),
+        "unexpected AXFR error: {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -149,10 +152,13 @@ async fn signed_ixfr_authenticates_error_response_before_using_rcode() {
     .await
     .expect_err("unsigned REFUSED must not be accepted as an authenticated IXFR result");
 
-    assert!(matches!(
-        error,
-        TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
-    ), "unexpected IXFR error: {error:?}");
+    assert!(
+        matches!(
+            error,
+            TransferError::Tsig(borondns_core::tsig::TsigError::MissingTsig)
+        ),
+        "unexpected IXFR error: {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -366,8 +372,8 @@ fn concurrent_transfer_sessions_each_retain_the_full_per_session_allowance() {
 fn derived_transfer_ingest_budget_saturates_instead_of_wrapping() {
     let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
     let budget = TransferIngestBudget::for_concurrent_sessions(u64::MAX, 2);
-    let mut ingest = TransferIngestTracker::new("AXFR", primary, u64::MAX)
-        .with_ingest_budget(Some(&budget));
+    let mut ingest =
+        TransferIngestTracker::new("AXFR", primary, u64::MAX).with_ingest_budget(Some(&budget));
 
     ingest
         .record_message(1)
@@ -920,11 +926,8 @@ fn xot_private_key_loader_checks_world_mode_symlinks_and_regular_file() {
 
     let directory = unique_test_path("borondns-xot-key-directory", "dir");
     std::fs::create_dir(&directory).expect("create private key directory");
-    let error = load_pem_private_key(
-        addr,
-        directory.to_str().expect("UTF-8 directory path"),
-    )
-    .expect_err("private key directory rejected");
+    let error = load_pem_private_key(addr, directory.to_str().expect("UTF-8 directory path"))
+        .expect_err("private key directory rejected");
     assert!(error.to_string().contains("must be a regular file"));
 
     let _ = std::fs::remove_file(link);
@@ -936,10 +939,7 @@ fn xot_private_key_loader_checks_world_mode_symlinks_and_regular_file() {
 #[cfg(unix)]
 #[test]
 fn direct_xot_material_loader_enforces_exact_limit_and_growth_fence() {
-    use std::{
-        io::Write,
-        os::unix::fs::PermissionsExt,
-    };
+    use std::{io::Write, os::unix::fs::PermissionsExt};
 
     let limit = crate::transfer::MAX_DIRECT_XOT_TLS_MATERIAL_BYTES;
     let certificate_path = unique_test_path("borondns-direct-xot-material-limit", "pem");
@@ -948,6 +948,8 @@ fn direct_xot_material_loader_enforces_exact_limit_and_growth_fence() {
         .set_len(limit as u64)
         .expect("size exact-limit TLS material file");
     drop(certificate);
+    std::fs::set_permissions(&certificate_path, std::fs::Permissions::from_mode(0o644))
+        .expect("certificate material mode");
     assert_eq!(
         crate::transfer::direct_xot_tls_material_len_after_open_for_test(
             certificate_path.to_str().expect("UTF-8 certificate path"),
@@ -1032,8 +1034,7 @@ fn direct_xot_material_loader_enforces_exact_limit_and_growth_fence() {
 #[test]
 fn direct_xot_material_loader_counts_repeated_files_against_profile_budget() {
     let file_limit = crate::transfer::MAX_DIRECT_XOT_TLS_MATERIAL_BYTES;
-    let profile_limit =
-        borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE;
+    let profile_limit = borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE;
     assert_eq!(profile_limit % file_limit, 0);
 
     let material_path = unique_test_path("borondns-direct-xot-aggregate", "pem");
@@ -1042,6 +1043,9 @@ fn direct_xot_material_loader_counts_repeated_files_against_profile_budget() {
         .set_len(file_limit as u64)
         .expect("size aggregate material");
     drop(material);
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&material_path, std::fs::Permissions::from_mode(0o644))
+        .expect("aggregate material mode");
     let material_path = material_path.to_str().expect("UTF-8 material path");
     let repeated = vec![material_path; profile_limit / file_limit];
     let addr = "192.0.2.53:853".parse().expect("valid primary address");
@@ -1054,6 +1058,8 @@ fn direct_xot_material_loader_counts_repeated_files_against_profile_budget() {
 
     let one_byte_path = unique_test_path("borondns-direct-xot-aggregate-plus-one", "pem");
     std::fs::write(&one_byte_path, [b'x']).expect("write one-byte aggregate material");
+    std::fs::set_permissions(&one_byte_path, std::fs::Permissions::from_mode(0o644))
+        .expect("one-byte aggregate material mode");
     let one_byte_path = one_byte_path.to_str().expect("UTF-8 one-byte path");
     let mut over_limit = repeated;
     over_limit.push(one_byte_path);
@@ -1096,9 +1102,8 @@ fn direct_xot_inline_private_key_enforces_exact_limit_before_clone_or_file_io() 
         "#,
     )
     .expect("baseline inline XoT schema validates without reading material");
-    config.zones[0].transfer_primaries[0].client_key_pem = Some(
-        ConfigSecretString::from_plaintext("x".repeat(limit + 1)),
-    );
+    config.zones[0].transfer_primaries[0].client_key_pem =
+        Some(ConfigSecretString::from_plaintext("x".repeat(limit + 1)));
     let error = Runtime::new(config)
         .expect_err("runtime rejects hostile inline key before reading missing files");
     let RuntimeError::InvalidRuntimeConfig(message) = error else {
