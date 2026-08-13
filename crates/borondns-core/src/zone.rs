@@ -1,9 +1,9 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    hash::{Hash, Hasher},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::RandomState},
+    hash::{BuildHasher, Hash, Hasher},
     mem,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -4732,24 +4732,22 @@ fn rrset_shard_count(rrset_count: usize) -> usize {
 
 fn rrset_shard_index(owner_key: &str, shard_count: usize) -> usize {
     debug_assert!(shard_count.is_power_of_two());
+    // A one-shard zone has no routing decision to make. Keep the common
+    // small-zone lookup path free of the keyed-hash cost.
+    if shard_count == 1 {
+        return 0;
+    }
     canonical_name_hash_str(owner_key) as usize & (shard_count - 1)
 }
 
 fn canonical_name_hash_str(owner_key: &str) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut digest = FNV_OFFSET;
-    for byte in owner_key.bytes() {
-        digest ^= u64::from(byte);
-        digest = digest.wrapping_mul(FNV_PRIME);
-    }
-    digest
+    let mut hasher = shard_hash_state().build_hasher();
+    hasher.write(owner_key.as_bytes());
+    hasher.finish()
 }
 
 fn canonical_domain_suffix_hash(name: &DomainName, suffix_start: usize) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut digest = FNV_OFFSET;
+    let mut hasher = shard_hash_state().build_hasher();
     for label in &name.labels()[suffix_start..] {
         for byte in label {
             let byte = byte.to_ascii_lowercase();
@@ -4760,22 +4758,23 @@ fn canonical_domain_suffix_hash(name: &DomainName, suffix_start: usize) -> u64 {
                     b'0' + (byte / 10) % 10,
                     b'0' + byte % 10,
                 ] {
-                    digest ^= u64::from(escaped);
-                    digest = digest.wrapping_mul(FNV_PRIME);
+                    hasher.write_u8(escaped);
                 }
             } else {
-                digest ^= u64::from(byte);
-                digest = digest.wrapping_mul(FNV_PRIME);
+                hasher.write_u8(byte);
             }
         }
-        digest ^= u64::from(b'.');
-        digest = digest.wrapping_mul(FNV_PRIME);
+        hasher.write_u8(b'.');
     }
     if suffix_start == name.label_count() {
-        digest ^= u64::from(b'.');
-        digest = digest.wrapping_mul(FNV_PRIME);
+        hasher.write_u8(b'.');
     }
-    digest
+    hasher.finish()
+}
+
+fn shard_hash_state() -> &'static RandomState {
+    static STATE: OnceLock<RandomState> = OnceLock::new();
+    STATE.get_or_init(RandomState::new)
 }
 
 fn canonical_domain_suffix_key(name: &DomainName, suffix_start: usize) -> String {
@@ -5324,6 +5323,39 @@ mod tests {
         assert_eq!(
             shape.name_key_deduplicated_bytes,
             shape.name_key_logical_bytes - shape.name_key_unique_bytes
+        );
+    }
+
+    #[test]
+    fn rrset_sharding_resists_names_colliding_under_the_legacy_unkeyed_hash() {
+        const SHARD_COUNT: usize = 256;
+        const COLLIDER_COUNT: usize = 256;
+        const LEGACY_FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const LEGACY_FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut occupancy = [0usize; SHARD_COUNT];
+        let mut colliders = 0usize;
+        for candidate in 0usize.. {
+            let owner = format!("host{candidate}.hostile.example.");
+            let mut legacy_digest = LEGACY_FNV_OFFSET;
+            for byte in owner.bytes() {
+                legacy_digest ^= u64::from(byte);
+                legacy_digest = legacy_digest.wrapping_mul(LEGACY_FNV_PRIME);
+            }
+            if legacy_digest as usize & (SHARD_COUNT - 1) != 0 {
+                continue;
+            }
+            occupancy[rrset_shard_index(&owner, SHARD_COUNT)] += 1;
+            colliders += 1;
+            if colliders == COLLIDER_COUNT {
+                break;
+            }
+        }
+
+        assert_eq!(colliders, COLLIDER_COUNT);
+        assert!(
+            occupancy.into_iter().max().unwrap_or(0) < COLLIDER_COUNT / 4,
+            "attacker-selected names must not retain their legacy deterministic shard collision"
         );
     }
 

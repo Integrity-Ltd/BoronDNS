@@ -5947,6 +5947,8 @@ async fn refresh_zone_from_primaries_with_snapshot(
         .exact_zone_control_metadata(&plan.origin)
         .and_then(|metadata| metadata.serial);
     let mut last_failure_cause = None;
+    let mut equal_primary_confirmed = false;
+    let mut newer_primary_observed = false;
     let transfer_ingest_budget = context.transfer_plan.ingest_budget();
 
     let primaries = plan
@@ -6015,62 +6017,20 @@ async fn refresh_zone_from_primaries_with_snapshot(
             )
             .await
             {
-                Ok(primary_serial) if !serial_after(primary_serial, current_serial) => {
+                Ok(primary_serial) if primary_serial == current_serial => {
+                    equal_primary_confirmed = true;
                     info!(
                         zone = %plan.origin,
                         %primary,
                         current_serial,
                         primary_serial,
                         reason = %context.reason,
-                        "SOA poll confirmed zone current"
-                    );
-                    match confirm_current_zone_for_serial_with_secret(
-                        zones,
-                        &context.transfer_plan,
-                        &context.secrets,
-                        plan,
-                        &secret_snapshot,
-                        current_serial,
-                    ) {
-                        Ok(metadata) => {
-                            return RefreshZoneOutcome::current(metadata);
-                        }
-                        Err(CurrentZoneConfirmationError::Obsolete) => {
-                            warn!(
-                                zone = %plan.origin,
-                                %primary,
-                                reason = %context.reason,
-                                "SOA poll current result discarded because zone no longer has the same transfer plan"
-                            );
-                            return RefreshZoneOutcome::obsolete();
-                        }
-                        Err(CurrentZoneConfirmationError::Missing) => {
-                            warn!(
-                                zone = %plan.origin,
-                                %primary,
-                                reason = %context.reason,
-                                "current zone disappeared after SOA poll"
-                            );
-                        }
-                        Err(CurrentZoneConfirmationError::PublicationFailed(error)) => {
-                            warn!(
-                                zone = %plan.origin,
-                                %primary,
-                                reason = %context.reason,
-                                %error,
-                                "failed to reactivate current zone after SOA poll"
-                            );
-                        }
-                    }
-                    warn!(
-                        zone = %plan.origin,
-                        %primary,
-                        reason = %context.reason,
-                        "SOA poll matched a zone that is no longer present; continuing refresh"
+                        "SOA poll matched the current zone serial; checking remaining primaries"
                     );
                     continue;
                 }
-                Ok(primary_serial) => {
+                Ok(primary_serial) if serial_after(primary_serial, current_serial) => {
+                    newer_primary_observed = true;
                     info!(
                         zone = %plan.origin,
                         %primary,
@@ -6079,6 +6039,20 @@ async fn refresh_zone_from_primaries_with_snapshot(
                         reason = %context.reason,
                         "SOA poll found newer primary serial"
                     );
+                }
+                Ok(primary_serial) => {
+                    last_failure_cause = Some(format!(
+                        "SOA poll found older or serial-arithmetic-ambiguous primary {primary}: current serial {current_serial}, primary serial {primary_serial}"
+                    ));
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        current_serial,
+                        primary_serial,
+                        reason = %context.reason,
+                        "SOA poll found stale primary serial; checking remaining primaries"
+                    );
+                    continue;
                 }
                 Err(error) => {
                     last_failure_cause =
@@ -6435,6 +6409,38 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     reason = %context.reason,
                     "AXFR failed"
                 );
+            }
+        }
+    }
+
+    if equal_primary_confirmed && !newer_primary_observed {
+        let current_serial =
+            current_serial.expect("equal SOA confirmation requires current serial");
+        match confirm_current_zone_for_serial_with_secret(
+            zones,
+            &context.transfer_plan,
+            &context.secrets,
+            plan,
+            &secret_snapshot,
+            current_serial,
+        ) {
+            Ok(metadata) => return RefreshZoneOutcome::current(metadata),
+            Err(CurrentZoneConfirmationError::Obsolete) => {
+                warn!(
+                    zone = %plan.origin,
+                    reason = %context.reason,
+                    "SOA current confirmations discarded because zone no longer has the same transfer plan"
+                );
+                return RefreshZoneOutcome::obsolete();
+            }
+            Err(CurrentZoneConfirmationError::Missing) => {
+                last_failure_cause =
+                    Some("current zone disappeared after all equal SOA confirmations".to_owned());
+            }
+            Err(CurrentZoneConfirmationError::PublicationFailed(error)) => {
+                last_failure_cause = Some(format!(
+                    "failed to reactivate current zone after equal SOA confirmations: {error}"
+                ));
             }
         }
     }
