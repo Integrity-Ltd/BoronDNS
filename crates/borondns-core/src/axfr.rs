@@ -11,6 +11,12 @@ use crate::{
     zone::{ResourceRecord, Rrset, SoaRecordView, ZoneSnapshot},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferExtendedDnsError {
+    pub info_code: u16,
+    pub extra_text: String,
+}
+
 // BDS-NFR-MAINT-004 principal functional requirement references for zone
 // transfer parsing, outbound response validation, unknown RR handling, and
 // transferred RR catalogue validation:
@@ -59,6 +65,12 @@ pub enum AxfrError {
 
     #[error("AXFR response returned error RCODE {0}")]
     ErrorRcode(u8),
+
+    #[error("AXFR response returned error RCODE {rcode} with EDE {ede:?}")]
+    ErrorRcodeWithEde {
+        rcode: u8,
+        ede: TransferExtendedDnsError,
+    },
 
     #[error("AXFR response question does not match the AXFR query")]
     MismatchedQuestion,
@@ -132,6 +144,12 @@ pub enum SoaQueryError {
     #[error("SOA response returned error RCODE {0}")]
     ErrorRcode(u8),
 
+    #[error("SOA response returned error RCODE {rcode} with EDE {ede:?}")]
+    ErrorRcodeWithEde {
+        rcode: u8,
+        ede: TransferExtendedDnsError,
+    },
+
     #[error("SOA response question does not match the SOA poll query")]
     MismatchedQuestion,
 
@@ -179,6 +197,12 @@ pub enum IxfrError {
 
     #[error("IXFR response returned error RCODE {0}")]
     ErrorRcode(u8),
+
+    #[error("IXFR response returned error RCODE {rcode} with EDE {ede:?}")]
+    ErrorRcodeWithEde {
+        rcode: u8,
+        ede: TransferExtendedDnsError,
+    },
 
     #[error("IXFR response question does not match the IXFR query")]
     MismatchedQuestion,
@@ -266,6 +290,19 @@ pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8
 
 pub fn build_soa_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
     build_query(qid, zone_apex, RecordType::Soa as u16, qclass)
+}
+
+/// Adds the EDNS(0) OPT required for DNS-over-TLS transfer requests by RFC 9103.
+/// Call this before appending TSIG so TSIG remains the final Additional record.
+pub fn append_xot_opt(message: &mut Vec<u8>) {
+    debug_assert!(message.len() >= DNS_HEADER_LEN);
+    let arcount = u16::from_be_bytes([message[10], message[11]]);
+    message[10..12].copy_from_slice(&arcount.saturating_add(1).to_be_bytes());
+    message.push(0);
+    message.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
+    message.extend_from_slice(&1232u16.to_be_bytes());
+    message.extend_from_slice(&0u32.to_be_bytes());
+    message.extend_from_slice(&0u16.to_be_bytes());
 }
 
 pub fn build_ixfr_query(
@@ -380,6 +417,37 @@ pub fn parse_axfr_response(
     parse_axfr_response_with_question(qid, zone_apex, qclass, RecordType::Axfr as u16, messages)
 }
 
+/// Revalidate records decoded from a durable last-good zone image before
+/// allowing them back into the authoritative store after restart.
+pub fn validated_persisted_zone_snapshot(
+    zone_apex: &DomainName,
+    qclass: u16,
+    serial: Option<u32>,
+    mut records: Vec<ResourceRecord>,
+) -> Result<ZoneSnapshot, AxfrError> {
+    for record in &mut records {
+        validate_record_scope(record, zone_apex, qclass)?;
+        normalize_record_owner(record);
+    }
+    validate_zone_record_set(zone_apex, &records)?;
+    let soa_serial = records
+        .iter()
+        .find(|record| {
+            record.rr_type == RecordType::Soa as u16
+                && record.owner.canonical_key() == zone_apex.canonical_key()
+        })
+        .ok_or(AxfrError::InvalidZoneSoa)
+        .and_then(|record| soa_serial(&record.rdata))?;
+    if serial != Some(soa_serial) {
+        return Err(AxfrError::InvalidZoneSoa);
+    }
+    Ok(ZoneSnapshot::active(
+        zone_apex.to_ascii_lowercased(),
+        Some(soa_serial),
+        rrsets_from_records(records),
+    ))
+}
+
 pub fn axfr_response_message_apex_soa_count(
     qid: u16,
     zone_apex: &DomainName,
@@ -416,7 +484,7 @@ pub fn axfr_response_message_probe(
     }
     let rcode = (header.flags & 0x000f) as u8;
     if rcode != 0 {
-        return Err(AxfrError::ErrorRcode(rcode));
+        return Err(axfr_rcode_error(rcode, message, &header));
     }
 
     let mut offset = validate_axfr_response_question(
@@ -474,7 +542,7 @@ fn parse_axfr_response_with_question(
         }
         let rcode = (header.flags & 0x000f) as u8;
         if rcode != 0 {
-            return Err(AxfrError::ErrorRcode(rcode));
+            return Err(axfr_rcode_error(rcode, message, &header));
         }
 
         let mut offset = validate_axfr_response_question(
@@ -519,7 +587,7 @@ fn parse_axfr_response_with_question(
                 zone_records.push(record);
             }
         }
-        ensure_no_authority_additional_or_trailing_bytes(
+        ensure_no_authority_and_only_opt_additional(
             message,
             offset,
             header.nscount,
@@ -563,7 +631,7 @@ pub fn parse_soa_response(
     }
     let rcode = (header.flags & 0x000f) as u8;
     if rcode != 0 {
-        return Err(SoaQueryError::ErrorRcode(rcode));
+        return Err(soa_rcode_error(rcode, message, &header));
     }
 
     let mut offset = validate_soa_response_question(message, header.qdcount, zone_apex, qclass)?;
@@ -617,7 +685,7 @@ pub fn parse_ixfr_response(
         }
         let rcode = (header.flags & 0x000f) as u8;
         if rcode != 0 {
-            return Err(IxfrError::ErrorRcode(rcode));
+            return Err(ixfr_rcode_error(rcode, message, &header));
         }
 
         let mut offset = validate_ixfr_response_question(
@@ -639,7 +707,7 @@ pub fn parse_ixfr_response(
             normalize_record_owner(&mut record);
             answers.push(record);
         }
-        ensure_no_authority_additional_or_trailing_bytes(
+        ensure_no_authority_and_only_opt_additional(
             message,
             offset,
             header.nscount,
@@ -706,7 +774,7 @@ pub fn ixfr_response_message_probe(
     }
     let rcode = (header.flags & 0x000f) as u8;
     if rcode != 0 {
-        return Err(IxfrError::ErrorRcode(rcode));
+        return Err(ixfr_rcode_error(rcode, message, &header));
     }
 
     let mut offset = validate_ixfr_response_question(
@@ -1088,6 +1156,7 @@ fn ixfr_scope_error(error: AxfrError) -> IxfrError {
     match error {
         AxfrError::MalformedMessage => IxfrError::MalformedMessage,
         AxfrError::ErrorRcode(rcode) => IxfrError::ErrorRcode(rcode),
+        AxfrError::ErrorRcodeWithEde { rcode, ede } => IxfrError::ErrorRcodeWithEde { rcode, ede },
         AxfrError::MissingInitialSoa => IxfrError::MissingInitialSoa,
         other => IxfrError::Axfr(other),
     }
@@ -1275,16 +1344,123 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
     ))
 }
 
-fn ensure_no_authority_additional_or_trailing_bytes(
+fn ensure_no_authority_and_only_opt_additional(
     message: &[u8],
-    offset: usize,
+    mut offset: usize,
     nscount: u16,
     arcount: u16,
 ) -> Result<(), DnsParseError> {
-    if nscount != 0 || arcount != 0 || offset != message.len() {
+    if nscount != 0 || arcount > 1 {
         return Err(DnsParseError::FormErr);
     }
-    Ok(())
+    if arcount == 1 {
+        let (owner, consumed) = DomainName::parse(message, offset)?;
+        offset += consumed;
+        if owner.label_count() != 0 || offset + 10 > message.len() {
+            return Err(DnsParseError::FormErr);
+        }
+        let rr_type = u16::from_be_bytes([message[offset], message[offset + 1]]);
+        let rdlength = u16::from_be_bytes([message[offset + 8], message[offset + 9]]) as usize;
+        offset += 10;
+        let rdata_end = offset
+            .checked_add(rdlength)
+            .filter(|end| *end <= message.len())
+            .ok_or(DnsParseError::FormErr)?;
+        if rr_type != RecordType::Opt as u16 {
+            return Err(DnsParseError::FormErr);
+        }
+        let mut option_offset = offset;
+        while option_offset < rdata_end {
+            if option_offset + 4 > rdata_end {
+                return Err(DnsParseError::FormErr);
+            }
+            let option_len =
+                u16::from_be_bytes([message[option_offset + 2], message[option_offset + 3]])
+                    as usize;
+            option_offset = option_offset
+                .checked_add(4 + option_len)
+                .filter(|end| *end <= rdata_end)
+                .ok_or(DnsParseError::FormErr)?;
+        }
+        offset = rdata_end;
+    }
+    (offset == message.len())
+        .then_some(())
+        .ok_or(DnsParseError::FormErr)
+}
+
+fn transfer_extended_dns_error(
+    message: &[u8],
+    header: &Header,
+) -> Option<TransferExtendedDnsError> {
+    let mut offset = DNS_HEADER_LEN;
+    for _ in 0..header.qdcount {
+        let (_, consumed) = DomainName::parse(message, offset).ok()?;
+        offset = offset.checked_add(consumed + 4)?;
+        if offset > message.len() {
+            return None;
+        }
+    }
+    for _ in 0..usize::from(header.ancount) + usize::from(header.nscount) {
+        offset = skip_raw_dns_record(message, offset)?;
+    }
+    for _ in 0..header.arcount {
+        let (owner, consumed) = DomainName::parse(message, offset).ok()?;
+        offset = offset.checked_add(consumed)?;
+        let fixed = message.get(offset..offset + 10)?;
+        let rr_type = u16::from_be_bytes([fixed[0], fixed[1]]);
+        let rdlength = u16::from_be_bytes([fixed[8], fixed[9]]) as usize;
+        offset = offset.checked_add(10)?;
+        let rdata = message.get(offset..offset.checked_add(rdlength)?)?;
+        offset += rdlength;
+        if owner.label_count() != 0 || rr_type != RecordType::Opt as u16 {
+            continue;
+        }
+        let mut option_offset = 0usize;
+        while option_offset < rdata.len() {
+            let option_header = rdata.get(option_offset..option_offset + 4)?;
+            let option_code = u16::from_be_bytes([option_header[0], option_header[1]]);
+            let option_len = u16::from_be_bytes([option_header[2], option_header[3]]) as usize;
+            option_offset += 4;
+            let option = rdata.get(option_offset..option_offset.checked_add(option_len)?)?;
+            option_offset += option_len;
+            if option_code == 15 && option.len() >= 2 {
+                return Some(TransferExtendedDnsError {
+                    info_code: u16::from_be_bytes([option[0], option[1]]),
+                    extra_text: std::str::from_utf8(&option[2..]).ok()?.to_owned(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn skip_raw_dns_record(message: &[u8], offset: usize) -> Option<usize> {
+    let (_, consumed) = DomainName::parse(message, offset).ok()?;
+    let fixed_offset = offset.checked_add(consumed)?;
+    let fixed = message.get(fixed_offset..fixed_offset + 10)?;
+    let rdlength = u16::from_be_bytes([fixed[8], fixed[9]]) as usize;
+    fixed_offset
+        .checked_add(10 + rdlength)
+        .filter(|end| *end <= message.len())
+}
+
+fn axfr_rcode_error(rcode: u8, message: &[u8], header: &Header) -> AxfrError {
+    transfer_extended_dns_error(message, header).map_or(AxfrError::ErrorRcode(rcode), |ede| {
+        AxfrError::ErrorRcodeWithEde { rcode, ede }
+    })
+}
+
+fn ixfr_rcode_error(rcode: u8, message: &[u8], header: &Header) -> IxfrError {
+    transfer_extended_dns_error(message, header).map_or(IxfrError::ErrorRcode(rcode), |ede| {
+        IxfrError::ErrorRcodeWithEde { rcode, ede }
+    })
+}
+
+fn soa_rcode_error(rcode: u8, message: &[u8], header: &Header) -> SoaQueryError {
+    transfer_extended_dns_error(message, header).map_or(SoaQueryError::ErrorRcode(rcode), |ede| {
+        SoaQueryError::ErrorRcodeWithEde { rcode, ede }
+    })
 }
 
 fn skip_authority_additional_and_ensure_end(
@@ -2052,6 +2228,39 @@ mod tests {
         append_wire_record(message, record);
     }
 
+    fn append_padding_opt(message: &mut Vec<u8>, padding_len: usize) {
+        let mut padding = vec![0, 12, 0, padding_len as u8];
+        padding.resize(4 + padding_len, 0);
+        append_additional_record(
+            message,
+            &ResourceRecord {
+                owner: DomainName::root(),
+                rr_type: RecordType::Opt as u16,
+                class: 1232,
+                ttl: 0,
+                rdata: padding,
+            },
+        );
+    }
+
+    fn append_ede_opt(message: &mut Vec<u8>, info_code: u16, text: &str) {
+        let mut ede = Vec::with_capacity(6 + text.len());
+        ede.extend_from_slice(&15u16.to_be_bytes());
+        ede.extend_from_slice(&(2u16 + text.len() as u16).to_be_bytes());
+        ede.extend_from_slice(&info_code.to_be_bytes());
+        ede.extend_from_slice(text.as_bytes());
+        append_additional_record(
+            message,
+            &ResourceRecord {
+                owner: DomainName::root(),
+                rr_type: RecordType::Opt as u16,
+                class: 1232,
+                ttl: 0,
+                rdata: ede,
+            },
+        );
+    }
+
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
         record_with_owner(
             DomainName::from_absolute_str(owner).unwrap(),
@@ -2243,6 +2452,23 @@ mod tests {
     }
 
     #[test]
+    fn xot_query_opt_is_added_before_tsig_position() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut query = build_axfr_query(0x1234, &apex, 1);
+        append_xot_opt(&mut query);
+
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(header.arcount, 1);
+        let mut offset = DNS_HEADER_LEN + apex.to_wire().len() + 4;
+        let (opt, consumed) = parse_record(&query, offset).unwrap();
+        offset += consumed;
+        assert_eq!(opt.owner, DomainName::root());
+        assert_eq!(opt.rr_type, RecordType::Opt as u16);
+        assert_eq!(opt.class, 1232);
+        assert_eq!(offset, query.len());
+    }
+
+    #[test]
     fn builds_ixfr_query_from_borrowed_soa_view() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2339,6 +2565,21 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn accepts_rfc9103_padded_axfr_messages_including_empty_continuation() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut first = axfr_message(0x1234, vec![soa.clone(), apex_ns()]);
+        append_padding_opt(&mut first, 16);
+        let mut empty = transfer_response_message_without_question(0x1234, vec![]);
+        append_padding_opt(&mut empty, 32);
+        let mut last = transfer_response_message_without_question(0x1234, vec![soa]);
+        append_padding_opt(&mut last, 8);
+
+        parse_axfr_response(0x1234, &apex, 1, &[first, empty, last])
+            .expect("RFC 9103 AXoT permits padded messages with no answer RRs");
     }
 
     #[test]
@@ -2869,6 +3110,25 @@ mod tests {
     }
 
     #[test]
+    fn axfr_error_preserves_rfc9103_extended_dns_error() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut response = axfr_message(0x1234, vec![]);
+        response[3] = 2;
+        append_ede_opt(&mut response, 22, "No Reachable Authority");
+
+        assert_eq!(
+            parse_axfr_response(0x1234, &apex, 1, &[response]),
+            Err(AxfrError::ErrorRcodeWithEde {
+                rcode: 2,
+                ede: TransferExtendedDnsError {
+                    info_code: 22,
+                    extra_text: "No Reachable Authority".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
     fn rejects_axfr_record_with_mismatched_class() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2901,6 +3161,25 @@ mod tests {
             parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![soa])).expect("SOA");
 
         assert_eq!(serial, 1);
+    }
+
+    #[test]
+    fn soa_error_preserves_rfc9103_extended_dns_error() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut response = soa_message(0x1234, vec![]);
+        response[3] = 2;
+        append_ede_opt(&mut response, 23, "Network Error");
+
+        assert_eq!(
+            parse_soa_response(0x1234, &apex, 1, &response),
+            Err(SoaQueryError::ErrorRcodeWithEde {
+                rcode: 2,
+                ede: TransferExtendedDnsError {
+                    info_code: 23,
+                    extra_text: "Network Error".to_owned(),
+                },
+            })
+        );
     }
 
     #[test]
@@ -2955,6 +3234,43 @@ mod tests {
         };
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
+    fn accepts_rfc9103_padding_on_ixfr_response_messages() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), old_a.clone()]);
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let mut response = ixfr_message(
+            0x1234,
+            vec![
+                new_soa.clone(),
+                current_soa,
+                old_a,
+                new_soa.clone(),
+                new_a,
+                new_soa,
+            ],
+        );
+        append_padding_opt(&mut response, 16);
+
+        parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect("RFC 9103 IXoT permits EDNS Padding");
     }
 
     #[test]
@@ -3178,6 +3494,27 @@ mod tests {
             .expect_err("IXFR error RCODE");
 
         assert_eq!(error, IxfrError::ErrorRcode(4));
+    }
+
+    #[test]
+    fn ixfr_error_preserves_rfc9103_extended_dns_error() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa, apex_ns()]);
+        let mut response = ixfr_message(0x1234, vec![]);
+        response[3] = 2;
+        append_ede_opt(&mut response, 24, "Invalid Data");
+
+        assert_eq!(
+            parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response]),
+            Err(IxfrError::ErrorRcodeWithEde {
+                rcode: 2,
+                ede: TransferExtendedDnsError {
+                    info_code: 24,
+                    extra_text: "Invalid Data".to_owned(),
+                },
+            })
+        );
     }
 
     #[test]

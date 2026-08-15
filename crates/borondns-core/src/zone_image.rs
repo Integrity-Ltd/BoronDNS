@@ -1649,7 +1649,7 @@ impl ZoneImage {
             self.negative_authority_soa_fixed_fields(soa_rrset),
             out,
         );
-        self.append_rrset_list_wire(rest, out);
+        self.append_negative_denial_rrset_list_wire(rest, soa_rrset, out);
     }
 
     fn append_authority_wire_with_indexed_soa(
@@ -1669,13 +1669,36 @@ impl ZoneImage {
             self.append_rrset_list_wire(&plan.authority_rrsets, out);
             return;
         };
-        self.append_rrset_list_wire(prefix, out);
+        self.append_negative_denial_rrset_list_wire(prefix, soa_rrset, out);
         self.append_rrset_wire_with_fixed_fields(
             soa_rrset,
             self.negative_authority_soa_fixed_fields(soa_rrset),
             out,
         );
-        self.append_rrset_list_wire(rest, out);
+        self.append_negative_denial_rrset_list_wire(rest, soa_rrset, out);
+    }
+
+    fn append_negative_denial_rrset_list_wire(
+        &self,
+        rrsets: &[ZoneImageRrsetId],
+        soa_rrset: ZoneImageRrsetId,
+        out: &mut Vec<u8>,
+    ) {
+        let negative_ttl = self.rrsets[soa_rrset.0 as usize].negative_ttl_bytes;
+        for rrset_id in rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if matches!(
+                rrset.rr_type(),
+                value if value == RecordType::Nsec as u16
+                    || value == RecordType::Nsec3 as u16
+            ) {
+                let mut fixed_fields = rrset.fixed_fields;
+                fixed_fields[4..8].copy_from_slice(&negative_ttl);
+                self.append_rrset_wire_with_fixed_fields(*rrset_id, fixed_fields, out);
+            } else {
+                self.append_rrset_wire(*rrset_id, out);
+            }
+        }
     }
 
     fn append_additional_wire(&self, plan: &ZoneImageLookupPlan, out: &mut Vec<u8>) {
@@ -1828,9 +1851,7 @@ impl ZoneImage {
             self.negative_authority_soa_fixed_fields(soa_rrset),
             visit,
         );
-        for rrset_id in rest {
-            self.visit_rrset_records(*rrset_id, visit);
-        }
+        self.visit_negative_denial_rrset_records(rest, soa_rrset, visit);
     }
 
     fn visit_authority_records_with_first_soa_removability<'a>(
@@ -1847,9 +1868,7 @@ impl ZoneImage {
             false,
             visit,
         );
-        for rrset_id in rest {
-            self.visit_rrset_records_with_removability(*rrset_id, true, visit);
-        }
+        self.visit_negative_denial_rrset_records_with_removability(rest, soa_rrset, visit);
     }
 
     fn visit_authority_records_with_indexed_soa<'a>(
@@ -1875,17 +1894,13 @@ impl ZoneImage {
             }
             return;
         };
-        for rrset_id in prefix {
-            self.visit_rrset_records(*rrset_id, visit);
-        }
+        self.visit_negative_denial_rrset_records(prefix, soa_rrset, visit);
         self.visit_rrset_records_with_fixed_fields_override(
             soa_rrset,
             self.negative_authority_soa_fixed_fields(soa_rrset),
             visit,
         );
-        for rrset_id in rest {
-            self.visit_rrset_records(*rrset_id, visit);
-        }
+        self.visit_negative_denial_rrset_records(rest, soa_rrset, visit);
     }
 
     fn visit_authority_records_with_indexed_soa_removability<'a>(
@@ -1911,17 +1926,64 @@ impl ZoneImage {
             }
             return;
         };
-        for rrset_id in prefix {
-            self.visit_rrset_records_with_removability(*rrset_id, true, visit);
-        }
+        self.visit_negative_denial_rrset_records_with_removability(prefix, soa_rrset, visit);
         self.visit_rrset_records_with_fixed_fields_override_removability(
             soa_rrset,
             self.negative_authority_soa_fixed_fields(soa_rrset),
             false,
             visit,
         );
-        for rrset_id in rest {
-            self.visit_rrset_records_with_removability(*rrset_id, true, visit);
+        self.visit_negative_denial_rrset_records_with_removability(rest, soa_rrset, visit);
+    }
+
+    fn visit_negative_denial_rrset_records<'a>(
+        &'a self,
+        rrsets: &[ZoneImageRrsetId],
+        soa_rrset: ZoneImageRrsetId,
+        visit: &mut impl FnMut(ZoneImageWireRecord<'a>),
+    ) {
+        let negative_ttl = self.rrsets[soa_rrset.0 as usize].negative_ttl_bytes;
+        for rrset_id in rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if matches!(
+                rrset.rr_type(),
+                value if value == RecordType::Nsec as u16
+                    || value == RecordType::Nsec3 as u16
+            ) {
+                let mut fixed_fields = rrset.fixed_fields;
+                fixed_fields[4..8].copy_from_slice(&negative_ttl);
+                self.visit_rrset_records_with_fixed_fields_override(*rrset_id, fixed_fields, visit);
+            } else {
+                self.visit_rrset_records(*rrset_id, visit);
+            }
+        }
+    }
+
+    fn visit_negative_denial_rrset_records_with_removability<'a>(
+        &'a self,
+        rrsets: &[ZoneImageRrsetId],
+        soa_rrset: ZoneImageRrsetId,
+        visit: &mut impl FnMut(ZoneImageWireRecord<'a>, bool),
+    ) {
+        let negative_ttl = self.rrsets[soa_rrset.0 as usize].negative_ttl_bytes;
+        for rrset_id in rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if matches!(
+                rrset.rr_type(),
+                value if value == RecordType::Nsec as u16
+                    || value == RecordType::Nsec3 as u16
+            ) {
+                let mut fixed_fields = rrset.fixed_fields;
+                fixed_fields[4..8].copy_from_slice(&negative_ttl);
+                self.visit_rrset_records_with_fixed_fields_override_removability(
+                    *rrset_id,
+                    fixed_fields,
+                    true,
+                    visit,
+                );
+            } else {
+                self.visit_rrset_records_with_removability(*rrset_id, true, visit);
+            }
         }
     }
 

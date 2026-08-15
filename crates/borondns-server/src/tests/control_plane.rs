@@ -561,8 +561,10 @@ fn control_plane_operation_client_honors_disabled_flag_with_credentials() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [control_plane.operations]
             enabled = false

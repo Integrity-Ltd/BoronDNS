@@ -3,6 +3,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -29,6 +30,7 @@
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -59,6 +61,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -88,6 +91,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -237,12 +241,12 @@
             })
             .collect::<String>();
         ServerConfig::from_toml_str(&format!(
-            "[server]\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = []\n{entries}[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
+            "[server]\nallow_non_rfc5936_cold_start = true\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = [\"127.0.0.1:5300\"]\n{entries}[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
         ))
         .expect("exact repeated-file static TSIG budget is accepted");
 
         let error = ServerConfig::from_toml_str(&format!(
-            "[server]\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = []\n{entries}[[tsig_keys]]\nname = \"over.\"\nalgorithm = \"hmac-sha256\"\nsecret = \"A\"\n[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
+            "[server]\nallow_non_rfc5936_cold_start = true\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = [\"127.0.0.1:5300\"]\n{entries}[[tsig_keys]]\nname = \"over.\"\nalgorithm = \"hmac-sha256\"\nsecret = \"A\"\n[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
         ))
         .expect_err("one encoded byte over static TSIG aggregate is rejected");
         assert!(error.to_string().contains("aggregate encoded TSIG material"));
@@ -259,7 +263,7 @@
             })
             .collect::<String>();
         let error = ServerConfig::from_toml_str(&format!(
-            "[server]\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = []\n{entries}[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
+            "[server]\nallow_non_rfc5936_cold_start = true\nlisten_udp = [\"127.0.0.1:5300\"]\nlisten_tcp = [\"127.0.0.1:5300\"]\n{entries}[[zones]]\nname = \"example.test.\"\nprimaries = [\"192.0.2.53:53\"]\n"
         ))
         .expect_err("static TSIG key count above snapshot limit is rejected");
         assert!(error
@@ -272,6 +276,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 nsid = "dns-bud-1"
 
@@ -302,6 +307,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -346,6 +352,7 @@
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -376,6 +383,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -401,6 +409,7 @@
             let config = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [[tsig_keys]]
@@ -426,6 +435,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -452,6 +462,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -483,6 +494,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -513,6 +525,7 @@
         let config_text = format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -596,6 +609,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -621,6 +635,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -639,6 +654,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]

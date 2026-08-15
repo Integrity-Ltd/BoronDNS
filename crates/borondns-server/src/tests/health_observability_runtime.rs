@@ -571,8 +571,10 @@ async fn observability_api_reports_profile_backed_xot_certificates_from_current_
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1116,8 +1118,10 @@ fn runtime_rejects_hostile_programmatic_health_connection_limits() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."
@@ -1807,8 +1811,10 @@ async fn management_listeners_share_metrics_and_observability_source_quotas() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [interfaces]
             mgmt = ["127.0.0.1:9443", "127.0.0.2:9443"]
@@ -1952,8 +1958,10 @@ async fn runtime_binds_health_while_initial_transfer_is_in_progress() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
                 health = "127.0.0.1:0"
 
                 [limits]
@@ -2000,8 +2008,10 @@ async fn runtime_does_not_open_health_listener_when_unconfigured() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["{udp_addr}"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 axfr_timeout_secs = 5
@@ -2039,8 +2049,10 @@ async fn runtime_binds_health_on_management_interface() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [interfaces]
                 mgmt = ["127.0.0.1:9443"]
@@ -2100,8 +2112,10 @@ async fn runtime_reports_draining_until_initial_transfer_releases() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
                 health = "127.0.0.1:0"
 
                 [limits]
@@ -2169,6 +2183,7 @@ async fn runtime_sigterm_stops_tcp_accept_and_drains_established_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = ["{dns_addr}"]
                 health = "127.0.0.1:0"
@@ -2248,6 +2263,7 @@ async fn runtime_sigterm_rejects_wholly_post_boundary_tcp_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = ["{dns_addr}"]
                 health = "127.0.0.1:0"
@@ -2326,6 +2342,7 @@ async fn runtime_sigterm_force_cancels_tcp_connection_after_grace() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = ["{dns_addr}"]
                 health = "127.0.0.1:0"
@@ -2406,8 +2423,10 @@ async fn runtime_shutdown_uses_one_deadline_for_first_phase_and_held_health_conn
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
                 health = "127.0.0.1:0"
 
                 [limits]
@@ -2487,6 +2506,7 @@ async fn runtime_sigterm_force_cancel_does_not_detach_backpressured_tcp_writer()
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = ["{dns_addr}"]
                 health = "127.0.0.1:0"
@@ -2577,8 +2597,10 @@ async fn runtime_keeps_serving_after_initial_transfer_completes() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
                 health = "127.0.0.1:0"
 
                 [[zones]]
@@ -2627,8 +2649,10 @@ async fn runtime_serves_queries_and_notify_on_configured_dns_interface() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = []
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
                 health = "127.0.0.1:0"
 
                 [interfaces]

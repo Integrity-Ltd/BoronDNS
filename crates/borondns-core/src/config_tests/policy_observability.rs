@@ -3,6 +3,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [rrl]
@@ -55,6 +56,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [rrl]
@@ -76,6 +78,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [rrl]
@@ -100,6 +103,7 @@
             let config = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
                     log_level = "debug"
                     log_format = "{format}"
@@ -121,6 +125,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 nsid = "dns-bud-1"
 
@@ -140,6 +145,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 nsid = "{nsid}"
 
@@ -161,6 +167,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -213,6 +220,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -233,6 +241,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [health]
@@ -257,6 +266,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [metrics]
@@ -289,6 +299,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [metrics]
@@ -309,6 +320,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [observability]
@@ -375,6 +387,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [observability]
@@ -413,6 +426,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [metrics]
@@ -437,6 +451,7 @@
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -471,6 +486,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [health]
@@ -495,6 +511,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [health]
@@ -520,6 +537,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [health]
@@ -540,6 +558,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = []
                 listen_tcp = []
 
@@ -565,6 +584,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [logging]
@@ -585,6 +605,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -609,6 +630,7 @@
         let invalid_hex = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -629,6 +651,7 @@
         let previous_without_current = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -649,6 +672,7 @@
         let random_rotation_with_shared_secret = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -660,12 +684,35 @@
                 primaries = ["192.0.2.53:53"]
             "#,
         )
-        .expect_err("random rotation with configured shared secret should fail");
-        assert!(
+        .expect("configured secret may bootstrap automatic RFC-bounded rotation");
+        assert_eq!(
             random_rotation_with_shared_secret
-                .to_string()
-                .contains("cookie.secret_rotation_interval_secs cannot be used")
+                .cookie
+                .secret_rotation_interval_secs,
+            60
         );
+    }
+
+    #[test]
+    fn rejects_cookie_secret_lifetimes_outside_rfc7873_limit() {
+        for interval in [0, 36 * 24 * 60 * 60 + 1] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+allow_non_rfc5936_cold_start = true
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [cookie]
+                    secret_rotation_interval_secs = {interval}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ))
+            .expect_err("enabled DNS Cookies require RFC-bounded secret rotation");
+            assert!(error.to_string().contains("RFC 7873"));
+        }
     }
 
     #[test]
@@ -673,6 +720,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 log_format = "syslog"
 
@@ -691,6 +739,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]

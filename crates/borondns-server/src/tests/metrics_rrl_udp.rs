@@ -2788,8 +2788,10 @@ async fn udp_tsig_authenticated_query_bypasses_rrl_and_signs_response() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "query-key."
@@ -2875,8 +2877,10 @@ async fn udp_tsig_does_not_apply_configured_padding_on_plaintext_transport() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "query-key."

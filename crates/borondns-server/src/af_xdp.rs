@@ -165,6 +165,7 @@ pub(crate) enum AfXdpFrameError {
     ShortIpv4,
     InvalidIpv4Header,
     InvalidIpv4Checksum,
+    InvalidSourceAddress,
     NotUdp,
     FragmentedIpv4,
     InvalidIpv4TotalLength,
@@ -189,6 +190,7 @@ impl fmt::Display for AfXdpFrameError {
             Self::ShortIpv4 => formatter.write_str("short IPv4 packet"),
             Self::InvalidIpv4Header => formatter.write_str("invalid IPv4 header"),
             Self::InvalidIpv4Checksum => formatter.write_str("invalid IPv4 header checksum"),
+            Self::InvalidSourceAddress => formatter.write_str("invalid IP source address"),
             Self::NotUdp => formatter.write_str("IPv4 packet is not UDP"),
             Self::FragmentedIpv4 => formatter.write_str("fragmented IPv4 UDP packet"),
             Self::InvalidIpv4TotalLength => formatter.write_str("invalid IPv4 total length"),
@@ -1544,6 +1546,10 @@ pub(crate) fn parse_udp_ipv4_frame(frame: &[u8]) -> Result<UdpIpv4Frame, AfXdpFr
     if frame[ipv4_header_offset + 9] != IP_PROTOCOL_UDP {
         return Err(AfXdpFrameError::NotUdp);
     }
+    let source = ipv4_addr_at(frame, ipv4_header_offset + 12);
+    if invalid_ipv4_source(source) {
+        return Err(AfXdpFrameError::InvalidSourceAddress);
+    }
 
     let fragment =
         u16::from_be_bytes([frame[ipv4_header_offset + 6], frame[ipv4_header_offset + 7]]);
@@ -1605,6 +1611,10 @@ pub(crate) fn parse_udp_ipv6_frame(frame: &[u8]) -> Result<UdpIpv6Frame, AfXdpFr
     let version = frame[ipv6_header_offset] >> 4;
     if version != 6 {
         return Err(AfXdpFrameError::ShortIpv6);
+    }
+    let source = ipv6_addr_at(frame, ipv6_header_offset + 8);
+    if source.is_unspecified() || source.is_multicast() || source.is_loopback() {
+        return Err(AfXdpFrameError::InvalidSourceAddress);
     }
     let payload_len = usize::from(u16::from_be_bytes([
         frame[ipv6_header_offset + 4],
@@ -1690,13 +1700,13 @@ pub(crate) fn rewrite_udp_ipv4_response_headers(
 
     // Do not reflect request-owned IPv4 state into the response. Keep the
     // parsed header width so the UDP payload remains in place, but make any
-    // request options an EOL followed by zero padding. An unfragmented DNS
-    // response does not need an identification value or inherited DF state.
+    // request options an EOL followed by zero padding. Mark the response atomic
+    // with DF so RFC 6864 permits an identification value of zero.
     frame[packet.ipv4_header_offset] =
         0x40 | u8::try_from(packet.ipv4_header_len / 4).expect("validated IPv4 IHL");
     frame[packet.ipv4_header_offset + 1] = 0;
     frame[packet.ipv4_header_offset + 4..packet.ipv4_header_offset + 8]
-        .copy_from_slice(&[0, 0, 0, 0]);
+        .copy_from_slice(&[0, 0, 0x40, 0]);
     frame[packet.ipv4_header_offset + 8] = RESPONSE_IP_HOP_LIMIT;
     frame[packet.ipv4_header_offset + 9] = IP_PROTOCOL_UDP;
     frame[packet.ipv4_header_offset + IPV4_MIN_HEADER_LEN
@@ -1712,6 +1722,14 @@ pub(crate) fn rewrite_udp_ipv4_response_headers(
         .to_be_bytes();
     frame[packet.udp_header_offset + 4..packet.udp_header_offset + 6].copy_from_slice(&udp_len);
     frame[packet.udp_header_offset + 6..packet.udp_header_offset + 8].copy_from_slice(&[0, 0]);
+    let udp_checksum = nonzero_udp_checksum(udp_ipv4_checksum(
+        frame,
+        packet.ipv4_header_offset,
+        packet.udp_header_offset,
+        UDP_HEADER_LEN + response_len,
+    ));
+    frame[packet.udp_header_offset + 6..packet.udp_header_offset + 8]
+        .copy_from_slice(&udp_checksum.to_be_bytes());
 
     frame[packet.ipv4_header_offset + 10..packet.ipv4_header_offset + 12].copy_from_slice(&[0, 0]);
     let checksum = ipv4_checksum(
@@ -1777,6 +1795,11 @@ pub(crate) fn rewrite_udp_ipv6_response_headers(
 
 fn nonzero_udp_checksum(checksum: u16) -> u16 {
     if checksum == 0 { u16::MAX } else { checksum }
+}
+
+fn invalid_ipv4_source(address: Ipv4Addr) -> bool {
+    let octets = address.octets();
+    address.is_unspecified() || address.is_multicast() || address.is_loopback() || octets[0] >= 240
 }
 
 pub(crate) fn write_udp_ipv4_response(
@@ -2919,14 +2942,15 @@ mod tests {
         assert_eq!(&frame[ip + 16..ip + 20], &[192, 0, 2, 1]);
         assert_eq!(u16::from_be_bytes([frame[ip + 2], frame[ip + 3]]), 34);
         assert_eq!(frame[ip + 1], 0);
-        assert_eq!(&frame[ip + 4..ip + 8], &[0, 0, 0, 0]);
+        assert_eq!(&frame[ip + 4..ip + 8], &[0, 0, 0x40, 0]);
         assert_eq!(frame[ip + 8], RESPONSE_IP_HOP_LIMIT);
         assert_eq!(ipv4_checksum(&frame[ip..ip + IPV4_MIN_HEADER_LEN]), 0);
         let udp = ip + IPV4_MIN_HEADER_LEN;
         assert_eq!(u16::from_be_bytes([frame[udp], frame[udp + 1]]), 53);
         assert_eq!(u16::from_be_bytes([frame[udp + 2], frame[udp + 3]]), 12345);
         assert_eq!(u16::from_be_bytes([frame[udp + 4], frame[udp + 5]]), 14);
-        assert_eq!(u16::from_be_bytes([frame[udp + 6], frame[udp + 7]]), 0);
+        assert_ne!(u16::from_be_bytes([frame[udp + 6], frame[udp + 7]]), 0);
+        assert_eq!(udp_ipv4_checksum(&frame, ip, udp, 14), 0xffff);
     }
 
     #[test]
@@ -2957,11 +2981,49 @@ mod tests {
         assert_eq!(frame_len, ETHERNET_HEADER_LEN + 24 + UDP_HEADER_LEN + 4);
         assert_eq!(frame[ip], 0x46);
         assert_eq!(frame[ip + 1], 0);
-        assert_eq!(&frame[ip + 4..ip + 8], &[0, 0, 0, 0]);
+        assert_eq!(&frame[ip + 4..ip + 8], &[0, 0, 0x40, 0]);
         assert_eq!(frame[ip + 8], RESPONSE_IP_HOP_LIMIT);
         assert_eq!(&frame[ip + IPV4_MIN_HEADER_LEN..new_udp], &[0, 0, 0, 0]);
         assert_eq!(ipv4_checksum(&frame[ip..new_udp]), 0);
         parse_udp_ipv4_frame(&frame[..frame_len]).expect("normalized IPv4 response");
+    }
+
+    #[test]
+    fn rejects_rfc1122_invalid_ipv4_source_addresses() {
+        for source in [
+            [0, 0, 0, 0],
+            [127, 0, 0, 1],
+            [224, 0, 0, 1],
+            [240, 0, 0, 1],
+            [255, 255, 255, 255],
+        ] {
+            let mut frame = ipv4_udp_frame(&[1, 2, 3, 4]);
+            let ip = ETHERNET_HEADER_LEN;
+            frame[ip + 12..ip + 16].copy_from_slice(&source);
+            refresh_ipv4_header_checksum(&mut frame);
+            assert_eq!(
+                parse_udp_ipv4_frame(&frame),
+                Err(AfXdpFrameError::InvalidSourceAddress),
+                "source {source:?} must be discarded"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_rfc1122_invalid_ipv6_source_addresses() {
+        for source in [Ipv6Addr::UNSPECIFIED, "ff02::1".parse().unwrap()] {
+            let mut frame = ipv6_udp_frame(&[1, 2, 3, 4]);
+            let ip = ETHERNET_HEADER_LEN;
+            frame[ip + 8..ip + 24].copy_from_slice(&source.octets());
+            let udp = ip + IPV6_HEADER_LEN;
+            frame[udp + 6..udp + 8].copy_from_slice(&[0, 0]);
+            let checksum = nonzero_udp_checksum(udp_ipv6_checksum(&frame, udp, UDP_HEADER_LEN + 4));
+            frame[udp + 6..udp + 8].copy_from_slice(&checksum.to_be_bytes());
+            assert_eq!(
+                parse_udp_ipv6_frame(&frame),
+                Err(AfXdpFrameError::InvalidSourceAddress)
+            );
+        }
     }
 
     #[test]

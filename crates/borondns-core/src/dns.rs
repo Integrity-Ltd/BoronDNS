@@ -2563,6 +2563,11 @@ fn build_truncated_zone_image_response(
             kept_additionals.push(record);
         },
     );
+    let required_referral_glue = response_shape.response_flag_bits & 0x0400 == 0
+        && kept_authorities.iter().any(|record| {
+            u16::from_be_bytes([record.fixed_fields[0], record.fixed_fields[1]])
+                == RecordType::Ns as u16
+        });
 
     loop {
         let response = build_zone_image_response_from_wire_records(
@@ -2585,6 +2590,9 @@ fn build_truncated_zone_image_response(
 
         let removed_records = if !kept_additionals.is_empty() {
             let records = pop_last_zone_image_rrset(&mut kept_additionals);
+            if required_referral_glue && !records.is_empty() {
+                truncated = true;
+            }
             for _ in &records {
                 section_counts.decrement_additional();
             }
@@ -3076,6 +3084,10 @@ fn build_truncated_response(
     let mut kept_answers = answers.to_vec();
     let mut kept_authorities = authorities.to_vec();
     let mut kept_additionals = additionals.to_vec();
+    let required_referral_glue = !authoritative
+        && kept_authorities
+            .iter()
+            .any(|record| record.rr_type == RecordType::Ns as u16);
     let mut metadata = *metadata;
     if metadata.extended_dns_error.is_some() {
         metadata = metadata.without_extended_dns_error();
@@ -3116,6 +3128,9 @@ fn build_truncated_response(
 
         let removed_record = if !kept_additionals.is_empty() {
             pop_last_resource_record_rrset(&mut kept_additionals);
+            if required_referral_glue {
+                truncated = true;
+            }
             true
         } else if let Some(index) = kept_authorities
             .iter()
@@ -4390,8 +4405,8 @@ fn parse_edns_options(rdata: &[u8]) -> Result<EdnsOptions, EdnsError> {
         match option_code {
             EDNS_NSID_OPTION => options.nsid_requested = true,
             EDNS_COOKIE_OPTION => {
-                let cookie = parse_edns_cookie_option(&rdata[offset..offset + option_len])?;
                 if options.cookie.is_none() {
+                    let cookie = parse_edns_cookie_option(&rdata[offset..offset + option_len])?;
                     options.cookie = Some(cookie);
                 }
             }

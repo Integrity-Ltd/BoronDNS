@@ -163,6 +163,7 @@ fn write_test_config() -> std::path::PathBuf {
         &path,
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 

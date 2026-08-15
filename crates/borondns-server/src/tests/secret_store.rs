@@ -33,8 +33,10 @@ fn config_with_secret_store(root: &std::path::Path) -> ServerConfig {
     ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -834,8 +836,10 @@ fn file_secret_store_rejects_writable_xot_material_and_intermediate_symlinks() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -950,8 +954,10 @@ fn file_secret_store_reloads_xot_profiles() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1015,8 +1021,10 @@ async fn xot_path_only_reload_refreshes_provenance_without_cancelling_material_g
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1192,8 +1200,10 @@ fn transfer_resolves_xot_and_tsig_from_one_snapshot_across_reload() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1294,8 +1304,10 @@ fn file_secret_store_xot_material_is_one_immutable_generation() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1402,8 +1414,10 @@ fn captured_secret_root_prevents_cross_generation_xot_and_tsig_mixing() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1526,8 +1540,10 @@ fn file_secret_store_redacts_inline_xot_private_key_debug() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"

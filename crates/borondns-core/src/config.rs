@@ -285,6 +285,12 @@ impl ServerConfig {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.server.validate()?;
+        if self.server.zone_cache_directory.is_none() && !self.server.allow_non_rfc5936_cold_start {
+            return Err(ConfigError::Invalid(
+                "RFC 5936 secondary restart behavior requires server.zone_cache_directory; set server.allow_non_rfc5936_cold_start=true only for an explicitly unsupported compatibility/test deployment"
+                    .to_owned(),
+            ));
+        }
         self.interfaces.validate(&self.server)?;
         self.process.validate()?;
         if self.dns_udp_listeners().is_empty() && self.dns_tcp_listeners().is_empty() {
@@ -627,6 +633,15 @@ impl ServerConfig {
             }
         }
         self.validate_transfer_sources_cover_targets()?;
+
+        if !self.server.allow_non_rfc9210_single_transport
+            && (self.dns_udp_listeners().is_empty() || self.dns_tcp_listeners().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "RFC 9210 service profile requires at least one UDP and at least one TCP DNS listener; set server.allow_non_rfc9210_single_transport=true only for an explicitly unsupported compatibility/test deployment"
+                    .to_owned(),
+            ));
+        }
 
         Ok(())
     }
@@ -1029,6 +1044,12 @@ pub struct ServerSettings {
     pub listen_udp: Vec<SocketAddr>,
     #[serde(default = "default_dns_listeners")]
     pub listen_tcp: Vec<SocketAddr>,
+    #[serde(default)]
+    pub allow_non_rfc9210_single_transport: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_cache_directory: Option<PathBuf>,
+    #[serde(default)]
+    pub allow_non_rfc5936_cold_start: bool,
     pub health: Option<SocketAddr>,
     #[serde(default)]
     pub nsid: String,
@@ -1041,6 +1062,24 @@ pub struct ServerSettings {
 impl ServerSettings {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_txt_character_string("server.nsid", &self.nsid)?;
+        if self
+            .zone_cache_directory
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "server.zone_cache_directory must not be empty".to_owned(),
+            ));
+        }
+        if self
+            .zone_cache_directory
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(ConfigError::Invalid(
+                "server.zone_cache_directory must be an absolute path".to_owned(),
+            ));
+        }
         Ok(())
     }
 }
@@ -2045,7 +2084,7 @@ pub struct CookieConfig {
     pub timestamp_past_tolerance_seconds: u32,
     #[serde(default = "default_cookie_timestamp_future_tolerance_seconds")]
     pub timestamp_future_tolerance_seconds: u32,
-    #[serde(default)]
+    #[serde(default = "default_cookie_secret_rotation_interval_secs")]
     pub secret_rotation_interval_secs: u64,
 }
 
@@ -2097,16 +2136,19 @@ impl Default for CookieConfig {
             previous_server_secret: None,
             timestamp_past_tolerance_seconds: default_cookie_timestamp_past_tolerance_seconds(),
             timestamp_future_tolerance_seconds: default_cookie_timestamp_future_tolerance_seconds(),
-            secret_rotation_interval_secs: 0,
+            secret_rotation_interval_secs: default_cookie_secret_rotation_interval_secs(),
         }
     }
 }
 
 impl CookieConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.server_secret.is_some() && self.secret_rotation_interval_secs > 0 {
+        if self.policy != CookiePolicyConfig::Disabled
+            && (self.secret_rotation_interval_secs == 0
+                || self.secret_rotation_interval_secs > 36 * 24 * 60 * 60)
+        {
             return Err(ConfigError::Invalid(
-                "cookie.secret_rotation_interval_secs cannot be used with cookie.server_secret; rotate shared Server Secrets by setting server_secret and previous_server_secret".to_owned(),
+                "cookie.secret_rotation_interval_secs must be between 1 and 3110400 seconds when DNS Cookies are enabled (RFC 7873 maximum Server Secret lifetime is 36 days)".to_owned(),
             ));
         }
         validate_runtime_duration_upper_bound(
@@ -3662,6 +3704,10 @@ fn default_cookie_timestamp_past_tolerance_seconds() -> u32 {
 
 fn default_cookie_timestamp_future_tolerance_seconds() -> u32 {
     300
+}
+
+fn default_cookie_secret_rotation_interval_secs() -> u64 {
+    30 * 24 * 60 * 60
 }
 
 fn default_rrl_ipv4_prefix_len() -> u8 {

@@ -283,6 +283,7 @@ pub async fn serve(scenario: Scenario, config: ServerConfig) -> Result<ServerSta
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn tcp_accept_loop(
     listener: TcpListener,
     scenario: Arc<Scenario>,
@@ -378,6 +379,7 @@ async fn udp_receive_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tcp(
     mut stream: TcpStream,
     peer: SocketAddr,

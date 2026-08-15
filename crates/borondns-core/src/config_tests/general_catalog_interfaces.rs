@@ -3,6 +3,7 @@ fn parses_minimal_valid_config() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -52,6 +53,11 @@ fn parses_minimal_valid_config() {
     assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
     assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
     assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
+    assert!(
+        config.cookie.secret_rotation_interval_secs > 0
+            && config.cookie.secret_rotation_interval_secs <= 36 * 24 * 60 * 60,
+        "RFC 7873 section 6 requires generated Server Secrets to change at least every 36 days"
+    );
     assert!(config.rrl.enabled);
     assert_eq!(config.rrl.ipv4_prefix_len, 24);
     assert_eq!(config.rrl.ipv6_prefix_len, 56);
@@ -137,6 +143,7 @@ fn parses_and_validates_zone_publication_policy() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [zone_publication]
@@ -162,6 +169,7 @@ fn parses_and_validates_zone_publication_policy() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [zone_publication]
@@ -185,6 +193,7 @@ fn parses_and_redacts_control_plane_telemetry_config() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [control_plane.telemetry]
@@ -224,6 +233,7 @@ fn rejects_partial_control_plane_telemetry_config() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [control_plane.telemetry]
@@ -250,6 +260,7 @@ fn control_plane_node_ids_are_strict_opaque_segments() {
         ServerConfig::from_toml_str(&format!(
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [control_plane.{section}]
@@ -298,6 +309,7 @@ fn rejects_enabled_control_plane_operations_without_credentials() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [control_plane.operations]
@@ -323,6 +335,7 @@ fn control_plane_http_requires_explicit_loopback_only_override() {
         ServerConfig::from_toml_str(&format!(
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [control_plane.operations]
@@ -392,8 +405,9 @@ fn parses_catalog_zone_without_static_zones() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
-                listen_tcp = []
+                listen_tcp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -429,6 +443,7 @@ fn rejects_duplicate_zone_apexes_case_insensitively() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -450,6 +465,7 @@ fn rejects_static_zone_and_catalog_zone_apex_clash() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
@@ -483,6 +499,7 @@ fn rejects_invalid_catalog_zone_names_before_runtime_startup() {
         let toml = format!(
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
                     listen_tcp = []
 
@@ -512,6 +529,7 @@ fn rejects_unsupported_catalog_zone_class() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -541,8 +559,9 @@ fn parses_split_catalog_and_member_transfer_policy() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
-                listen_tcp = []
+                listen_tcp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -586,8 +605,9 @@ fn default_catalog_member_transfer_policy_inherits_catalog_tsig() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
-                listen_tcp = []
+                listen_tcp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -616,8 +636,9 @@ fn legacy_catalog_member_transfer_policy_allows_unsigned_member_axfr_only() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
-                listen_tcp = []
+                listen_tcp = ["127.0.0.1:5300"]
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -653,6 +674,7 @@ fn legacy_catalog_member_transfer_policy_rejects_public_unsigned_member_primary(
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -685,6 +707,7 @@ fn catalog_member_transfer_policy_deny_requires_member_tsig_key() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -717,6 +740,7 @@ fn rejects_split_catalog_policy_with_missing_member_key() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -747,6 +771,7 @@ fn rejects_zero_catalog_member_zone_cap() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -772,6 +797,7 @@ fn rejects_catalog_zone_without_tsig_key() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -794,6 +820,7 @@ fn parses_process_run_as_user() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [process]
@@ -818,6 +845,7 @@ fn rejects_empty_process_run_as_user() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [process]
@@ -843,6 +871,7 @@ fn parses_logging_configuration() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [logging]
@@ -863,6 +892,7 @@ fn parses_three_srs_interface_roles() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = ["127.0.0.1:5301"]
                 health = "127.0.0.1:8081"
@@ -933,6 +963,7 @@ fn health_listeners_use_srs_precedence() {
     let explicit = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 health = "127.0.0.1:8081"
 
@@ -958,6 +989,7 @@ fn health_listeners_use_srs_precedence() {
     let mgmt = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [interfaces]
@@ -988,6 +1020,7 @@ fn rejects_invalid_srs_interface_roles() {
             "empty dns",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1003,6 +1036,7 @@ fn rejects_invalid_srs_interface_roles() {
             "empty dns interface name",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1018,6 +1052,7 @@ fn rejects_invalid_srs_interface_roles() {
             "fixed transfer source port",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1033,6 +1068,7 @@ fn rejects_invalid_srs_interface_roles() {
             "duplicate transfer family",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1048,6 +1084,7 @@ fn rejects_invalid_srs_interface_roles() {
             "partial explicit health bind",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [health]
@@ -1063,6 +1100,7 @@ fn rejects_invalid_srs_interface_roles() {
             "transfer family mismatch",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1089,6 +1127,7 @@ fn rejects_unknown_configuration_keys() {
                     unexpected = true
 
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [[zones]]
@@ -1101,6 +1140,7 @@ fn rejects_unknown_configuration_keys() {
             "nested",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
                     listen_quic = ["127.0.0.1:853"]
 
@@ -1114,6 +1154,7 @@ fn rejects_unknown_configuration_keys() {
             "dns endpoint",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [interfaces]
@@ -1136,6 +1177,7 @@ fn warns_when_dns_and_mgmt_interfaces_overlap_unintentionally() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [interfaces]
@@ -1158,6 +1200,7 @@ fn warns_when_dns_and_mgmt_interfaces_overlap_unintentionally() {
     let intentional = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [interfaces]
@@ -1183,6 +1226,7 @@ fn rejects_notify_interface_listeners_under_three_role_model() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = ["127.0.0.1:5301"]
 
@@ -1211,6 +1255,7 @@ fn rejects_notify_interface_even_when_it_overlaps_with_dns_listeners() {
             "udp exact",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
                     listen_tcp = []
 
@@ -1226,6 +1271,7 @@ fn rejects_notify_interface_even_when_it_overlaps_with_dns_listeners() {
             "tcp wildcard",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = []
                     listen_tcp = ["0.0.0.0:5300"]
 
@@ -1241,6 +1287,7 @@ fn rejects_notify_interface_even_when_it_overlaps_with_dns_listeners() {
             "interfaces dns exact",
             r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
                     listen_tcp = []
 
@@ -1269,6 +1316,7 @@ fn rejects_obsolete_xot_interface_key() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
@@ -1290,6 +1338,7 @@ fn reports_suspicious_but_valid_configuration_warnings() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [cookie]
@@ -1343,6 +1392,7 @@ fn parses_tsig_fudge_seconds() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [tsig]
@@ -1363,6 +1413,7 @@ fn parses_transfer_policy_settings() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [transfer]
@@ -1389,6 +1440,7 @@ fn secret_store_allows_runtime_tsig_key_references() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [secret_store]
@@ -1414,6 +1466,7 @@ fn rejects_removed_out_of_zone_glue_transfer_setting() {
     let error = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [transfer]
@@ -1427,4 +1480,37 @@ fn rejects_removed_out_of_zone_glue_transfer_setting() {
     .expect_err("removed out-of-zone glue tolerance knob must be rejected");
 
     assert!(error.to_string().contains("accept_out_of_zone_glue"));
+}
+#[test]
+fn rfc5936_supported_profile_requires_persisted_last_good_directory() {
+    let error = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = ["127.0.0.1:5300"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect_err("an RFC 5936 secondary profile cannot discard its last-good zone on restart");
+
+    assert!(error.to_string().contains("zone_cache_directory"));
+}
+
+#[test]
+fn rfc5936_zone_cache_directory_must_be_absolute() {
+    let error = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            zone_cache_directory = "relative/cache"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect_err("restart state must not depend on the service working directory");
+    assert!(error.to_string().contains("absolute path"));
 }

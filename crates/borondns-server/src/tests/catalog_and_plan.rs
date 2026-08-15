@@ -3,8 +3,10 @@ fn runtime_initializes_loading_zones() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -22,8 +24,10 @@ fn runtime_constructor_rejects_programmatically_invalid_zone_name_without_panick
     let mut config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -45,8 +49,10 @@ fn runtime_constructor_rejects_programmatic_udp_batch_overflow_before_listener_t
     let mut config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -68,8 +74,10 @@ fn runtime_constructor_rejects_hostile_histogram_cardinality_before_metrics_allo
     let mut config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."
@@ -94,8 +102,10 @@ async fn runtime_run_revalidates_udp_batch_before_binding_or_spawning_listener()
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -121,8 +131,10 @@ fn runtime_constructor_rejects_programmatic_xdp_allocation_overflow() {
     let mut config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["192.0.2.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 udp_backend = "af_xdp"
@@ -154,8 +166,10 @@ async fn runtime_run_revalidates_xdp_memory_before_socket_bind_or_umem_map() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["192.0.2.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 udp_backend = "af_xdp"
@@ -193,8 +207,10 @@ fn runtime_constructor_rejects_programmatic_af_xdp_queue_outside_redirect_map() 
     let mut config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["192.0.2.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 udp_backend = "af_xdp"
@@ -297,8 +313,10 @@ fn runtime_initializes_catalog_zones_with_serve_policy() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -334,8 +352,10 @@ fn runtime_constructor_rejects_programmatically_invalid_catalog_name_without_pan
     let mut config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -363,8 +383,10 @@ fn removed_transfer_plan_prevents_stale_transfer_publication() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -444,8 +466,10 @@ async fn dequeued_refresh_cannot_rebind_across_validation_to_poll_remove_readd()
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -519,8 +543,10 @@ async fn permit_waiting_refresh_is_cancelled_before_obsolete_network_io() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -573,8 +599,10 @@ async fn removing_plan_aborts_blocked_inflight_transfer_promptly() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -623,6 +651,7 @@ async fn removing_plan_aborts_blocked_inflight_transfer_promptly() {
             max_resident_transfer_tasks: 4,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     ));
     tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
@@ -655,8 +684,10 @@ async fn rotating_secret_aborts_blocked_inflight_transfer_promptly() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [secret_store]
                 path = "{}"
@@ -710,6 +741,7 @@ async fn rotating_secret_aborts_blocked_inflight_transfer_promptly() {
             max_resident_transfer_tasks: 4,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     ));
     tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
@@ -751,8 +783,10 @@ fn stale_transfer_plan_success_does_not_recreate_refresh_status() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -791,8 +825,10 @@ fn ixfr_current_metrics_require_successful_confirmation() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."
@@ -934,8 +970,10 @@ fn ixfr_current_secret_rotation_records_failure_not_success() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -1408,8 +1446,10 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -1533,8 +1573,10 @@ async fn saturated_telemetry_cannot_hold_transfer_or_catalog_lifecycle_state() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -1592,6 +1634,7 @@ async fn saturated_telemetry_cannot_hold_transfer_or_catalog_lifecycle_state() {
                 max_resident_transfer_tasks: 1,
                 telemetry,
                 admission: RefreshAdmission::new(),
+            zone_persistence: None,
             },
         ),
     )
@@ -1631,8 +1674,10 @@ async fn catalog_snapshot_reconciles_retained_and_removed_members() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -1772,6 +1817,7 @@ async fn catalog_snapshot_reconciles_retained_and_removed_members() {
             &notify_authority,
             &tx.downgrade(),
             &metrics,
+            None,
         )
         .await;
 
@@ -1898,8 +1944,10 @@ async fn concurrent_catalog_member_migration_preserves_member_resources() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -1998,8 +2046,10 @@ async fn catalog_member_migration_add_seen_before_removal_is_ignored_as_a_clash(
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2094,8 +2144,10 @@ async fn overlapping_catalog_members_keep_first_applied_owner_until_removal() {
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2327,8 +2379,10 @@ async fn later_lexicographically_smaller_catalog_cannot_take_over_existing_membe
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[tsig_keys]]
             name = "catalog-key."
@@ -2403,8 +2457,10 @@ async fn catalog_member_node_rename_resets_zone_state_and_plan_generation() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[tsig_keys]]
             name = "catalog-key."
@@ -2490,8 +2546,10 @@ async fn retained_catalog_member_keeps_transfer_plan_generation_when_unchanged()
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2558,8 +2616,10 @@ async fn catalog_member_migration_remove_then_add_resets_active_snapshot() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2662,8 +2722,10 @@ async fn catalog_member_later_readd_starts_loading_without_stale_restore() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2763,8 +2825,10 @@ async fn rejected_catalog_member_transfer_override_does_not_preserve_other_catal
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -2881,8 +2945,10 @@ async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3006,8 +3072,10 @@ async fn catalog_snapshot_removes_non_text_roundtrippable_member_without_panic()
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3206,7 +3274,7 @@ fn catalog_snapshot_with_member_override(
             ),
             Rrset::new(
                 DomainName::from_absolute_str(&format!(
-                    "_udns-xfr.member.zones.{catalog_origin}"
+                    "_udns-xfr.ext.member.zones.{catalog_origin}"
                 ))
                 .unwrap(),
                 RecordType::Txt as u16,
@@ -3216,7 +3284,7 @@ fn catalog_snapshot_with_member_override(
             ),
             Rrset::new(
                 DomainName::from_absolute_str(&format!(
-                    "_udns-notify.member.zones.{catalog_origin}"
+                    "_udns-notify.ext.member.zones.{catalog_origin}"
                 ))
                 .unwrap(),
                 RecordType::Txt as u16,
@@ -3325,8 +3393,10 @@ fn catalog_extension_transition_config() -> ServerConfig {
     ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3370,8 +3440,10 @@ fn legacy_catalog_member_transfer_policy_keeps_catalog_signed_but_members_unsign
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3424,8 +3496,10 @@ fn legacy_catalog_member_transfer_policy_rejects_public_unsigned_catalog_overrid
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3468,8 +3542,10 @@ async fn catalog_snapshot_applies_opt_in_member_transfer_extension() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3532,14 +3608,14 @@ async fn catalog_snapshot_applies_opt_in_member_transfer_extension() {
                 vec![catalog_txt("override-key.")],
             ),
             Rrset::new(
-                DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.").unwrap(),
                 RecordType::Txt as u16,
                 1,
                 0,
                 vec![catalog_txt("transport=tcp;port=5300")],
             ),
             Rrset::new(
-                DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                DomainName::from_absolute_str("_udns-notify.ext.a.zones.catalog.example.").unwrap(),
                 RecordType::Txt as u16,
                 1,
                 0,
@@ -3627,7 +3703,7 @@ async fn catalog_malformed_update_retains_valid_xot_and_tsig_then_absent_uses_fa
                 vec![catalog_txt("override-key.")],
             ),
             Rrset::new(
-                DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.").unwrap(),
                 RecordType::Txt as u16,
                 1,
                 0,
@@ -3636,7 +3712,7 @@ async fn catalog_malformed_update_retains_valid_xot_and_tsig_then_absent_uses_fa
                 )],
             ),
             Rrset::new(
-                DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                DomainName::from_absolute_str("_udns-notify.ext.a.zones.catalog.example.").unwrap(),
                 RecordType::Txt as u16,
                 1,
                 0,
@@ -3691,7 +3767,7 @@ async fn catalog_malformed_update_retains_valid_xot_and_tsig_then_absent_uses_fa
         &member_origin,
         8,
         vec![Rrset::new(
-            DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+            DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.").unwrap(),
             RecordType::Txt as u16,
             1,
             0,
@@ -3793,7 +3869,7 @@ async fn catalog_new_member_with_malformed_extension_uses_static_fallback() {
         &member_origin,
         7,
         vec![Rrset::new(
-            DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+            DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.").unwrap(),
             RecordType::Txt as u16,
             1,
             0,
@@ -3849,8 +3925,10 @@ async fn catalog_snapshot_ignores_existing_catalog_zone_name_clash() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -3926,8 +4004,10 @@ async fn catalog_snapshot_enforces_member_zone_cap() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -4022,8 +4102,10 @@ async fn catalog_member_cap_counts_only_accepted_members_after_clash_filter() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -4130,8 +4212,10 @@ fn notify_authority_allows_primaries_and_notify_sources() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -4154,8 +4238,10 @@ fn catalog_notify_policy_applies_notify_only_override_and_clears_stale_tsig() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "override-key."
@@ -4212,8 +4298,10 @@ fn explicit_transfer_primaries_feed_notify_authority_and_transfer_plan() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -4258,8 +4346,10 @@ fn tsig_secret_file_feeds_notify_authority_and_transfer_plan() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -4294,6 +4384,7 @@ fn transfer_plan_rotates_multi_primary_start_once_per_process() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -4366,8 +4457,10 @@ fn notify_authority_rejects_unsigned_request_without_signing_the_response() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [tsig]
                 fudge_seconds = 30
@@ -4402,8 +4495,10 @@ fn ordinary_query_with_unknown_tsig_key_gets_badkey_response() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "known-key."

@@ -3,6 +3,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [query]
@@ -24,6 +25,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [query]
@@ -44,6 +46,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -64,6 +67,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -84,6 +88,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -110,6 +115,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -135,6 +141,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_tcp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -156,6 +163,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -197,6 +205,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_tcp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -219,6 +228,7 @@
             let config = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_tcp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -246,6 +256,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -268,6 +279,7 @@
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -293,6 +305,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -322,6 +335,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -343,6 +357,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -363,6 +378,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_tcp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -384,6 +400,7 @@
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -413,9 +430,6 @@
                 [rrl]
                 summary_log_interval_secs = {max}
 
-                [cookie]
-                secret_rotation_interval_secs = {max}
-
                 [control_plane.telemetry]
                 timeout_secs = {max}
 
@@ -433,7 +447,6 @@
 
         assert_eq!(config.limits.graceful_shutdown_secs, max);
         assert_eq!(config.control_plane.operations.poll_interval_secs, max);
-        assert_eq!(config.cookie.secret_rotation_interval_secs, max);
     }
 
     #[test]
@@ -486,6 +499,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -506,7 +520,6 @@
             ("health", "metrics_rate_limit_idle_seconds"),
             ("observability", "rate_limit_idle_seconds"),
             ("rrl", "summary_log_interval_secs"),
-            ("cookie", "secret_rotation_interval_secs"),
             ("control_plane.telemetry", "timeout_secs"),
             ("control_plane.operations", "poll_interval_secs"),
             ("control_plane.operations", "lease_seconds"),
@@ -515,6 +528,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [{section}]
@@ -537,6 +551,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -559,6 +574,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -579,6 +595,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -607,6 +624,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -627,6 +645,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -647,6 +666,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -667,6 +687,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -687,6 +708,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -707,6 +729,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -728,6 +751,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -749,6 +773,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -769,6 +794,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]

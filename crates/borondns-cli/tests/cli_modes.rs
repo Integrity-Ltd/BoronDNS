@@ -28,6 +28,8 @@ fn validate_config_flag_succeeds_with_valid_config() {
         "validate",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -59,6 +61,7 @@ fn validate_config_counts_dns_interface_listeners() {
         "dns-interface-count",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
 
@@ -97,6 +100,7 @@ fn readiness_endpoints_support_legacy_multiline_and_structured_configs() {
             "readiness-legacy",
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = ["127.0.0.1:5301"]
                 health = "127.0.0.1:8081"
@@ -111,6 +115,7 @@ fn readiness_endpoints_support_legacy_multiline_and_structured_configs() {
             r#"
                 [server]
 
+allow_non_rfc5936_cold_start = true
                 [interfaces]
                 dns = ["127.0.0.1:5300"]
                 mgmt = [
@@ -130,6 +135,7 @@ fn readiness_endpoints_support_legacy_multiline_and_structured_configs() {
             r#"
                 [server]
 
+allow_non_rfc5936_cold_start = true
                 [interfaces]
                 dns = [
                     { address = "127.0.0.3:5303", name = "dns-primary" },
@@ -167,6 +173,8 @@ fn borondns_config_env_supplies_default_config_path_for_validation_modes() {
         "borondns-config-env",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -221,6 +229,8 @@ fn top_level_config_flag_supplies_config_path_for_validation_modes() {
         "top-level-config-flag",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -265,6 +275,7 @@ fn validate_config_emits_json_bootstrap_logs_before_configured_logging() {
         "bootstrap-logs",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
             log_format = "plain"
@@ -303,6 +314,7 @@ fn dump_config_flag_redacts_tsig_secret_material() {
         "dump",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -344,6 +356,7 @@ fn dump_config_flag_redacts_inline_xot_client_key_material() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -393,6 +406,7 @@ fn dump_config_preserves_tsig_secret_file_path_without_secret_material() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -439,6 +453,7 @@ fn missing_tsig_secret_file_exits_with_ioerr() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -480,6 +495,7 @@ fn validate_config_rejects_missing_secret_store_manifest() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -520,6 +536,7 @@ fn validate_config_rejects_missing_secret_store_tsig_reference() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -562,6 +579,7 @@ fn validate_config_rejects_missing_secret_store_xot_profile() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -604,6 +622,7 @@ fn dump_config_includes_borondns_environment_overrides() {
         "dump-env",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -657,6 +676,7 @@ fn invalid_borondns_environment_override_exits_with_config_invalid() {
         "invalid-env",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -691,6 +711,7 @@ fn borondns_environment_override_revalidation_rejects_cross_field_violation() {
         "invalid-env-cross-field",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -724,6 +745,7 @@ fn unrecognized_borondns_environment_override_warns_without_failing() {
         "unknown-env",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
 
@@ -760,6 +782,8 @@ fn suspicious_config_warnings_do_not_fail_validation() {
         "suspicious",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
 
@@ -817,6 +841,7 @@ fn semantically_invalid_config_exits_with_config_invalid() {
         "invalid",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["127.0.0.1:0"]
         "#,
@@ -898,6 +923,8 @@ fn unreadable_xot_tls_file_exits_with_ioerr() {
         "missing-xot-file",
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
 
@@ -1114,6 +1141,8 @@ fn serve_health_bind_failure_exits_with_cantcreat() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
             health = "{occupied_addr}"
@@ -1154,6 +1183,8 @@ fn serve_udp_bind_failure_exits_with_cantcreat() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
             listen_udp = ["{occupied_addr}"]
             listen_tcp = []
 
@@ -1193,6 +1224,7 @@ fn serve_tcp_bind_failure_exits_with_cantcreat() {
         &format!(
             r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["{occupied_addr}"]
 

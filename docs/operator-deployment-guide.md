@@ -62,8 +62,10 @@ Operational state boundaries:
 - Optional external control-plane integration can report transfer telemetry and
   poll durable node operations. It does not add an inbound administrative API
   to BoronDNS.
-- BoronDNS does not persist zone data, metrics, transfer history, or runtime state
-  to disk.
+- BoronDNS atomically persists validated last-good zones in
+  `server.zone_cache_directory`; it does not persist metrics, transfer history,
+  query statistics, or partial transfers. The cache directory must be durable
+  and writable by the runtime user.
 
 ## Install and Build
 
@@ -235,6 +237,9 @@ and are included in `--dump-config` output:
 - `BORONDNS_SERVER_LOG_LEVEL`
 - `BORONDNS_SERVER_LOG_FORMAT`
 - `BORONDNS_SERVER_NSID`
+- `BORONDNS_SERVER_ZONE_CACHE_DIRECTORY`
+- `BORONDNS_SERVER_ALLOW_NON_RFC5936_COLD_START`
+- `BORONDNS_SERVER_ALLOW_NON_RFC9210_SINGLE_TRANSPORT`
 - `BORONDNS_CHAOS_VERSION`
 - `BORONDNS_CHAOS_HOSTNAME`
 - `BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
@@ -301,7 +306,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
 
 - `[server]`: baseline UDP/TCP DNS listeners, optional health endpoint,
   log level, and log format. New deployments should prefer `[interfaces]` for
-  network roles.
+  network roles. The supported RFC 9210 profile requires at least one UDP and
+  one TCP DNS listener. `allow_non_rfc9210_single_transport = true` is an
+  explicit unsupported compatibility/test profile, not an RFC-conforming
+  production mode.
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
   16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
@@ -350,8 +358,9 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   deployments, set the same 32-hex-character `server_secret` on every instance.
   During staged rollover, deploy the new value as `server_secret` and the old
   value as `previous_server_secret`; BoronDNS accepts cookies signed by either
-  value and refreshes responses with the current secret. Do not combine
-  configured shared secrets with `secret_rotation_interval_secs`.
+  value and refreshes responses with the current secret. The configured current
+  secret bootstraps in-process rotation. The interval defaults to 30 days and
+  must not exceed RFC 7873's 36-day maximum while Cookies are enabled.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration. The current
   release-review threshold baseline is documented in
   `docs/rrl-release-thresholds.md`; `summary_log_interval_secs` controls
@@ -394,7 +403,9 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   can provide member transfer addresses, TSIG key-name references, transfer
   transport/port/server-name hints, and NOTIFY sources. They cannot carry raw
   TSIG secrets, TLS private keys, trust anchors, or client certificates; those
-  still come from static config or `[secret_store]`.
+  still come from static config or `[secret_store]`. All custom properties are
+  below RFC 9432's `ext` label; legacy `_udns-xfr` and `_udns-notify` owners
+  outside that subtree are ignored.
 - `catalog_zones.member_transfer_policy.unsigned_axfr`: local legacy policy for
   catalog-derived member transfers. The default `deny` keeps member transfers
   TSIG-authenticated by inheriting `member_tsig_key` or `tsig_key`.
@@ -929,7 +940,9 @@ Network and process hardening:
 - When explicitly testing the AF_XDP backend, configure each UDP listener with
   a concrete IP assigned to the selected interface. Wildcard `0.0.0.0` and
   `[::]` listeners are rejected because an XDP redirect runs before the kernel
-  decides whether an ingress destination is local.
+  decides whether an ingress destination is local. The adapter discards
+  invalid IPv4/IPv6 source addresses, emits atomic IPv4 responses (`DF=1`,
+  ID zero), and generates nonzero UDP checksums for IPv4 and IPv6.
 - Keep health and metrics private.
 - Restrict outbound transfer access to configured primaries where the platform
   firewall supports it.
@@ -1001,15 +1014,15 @@ Shutdown and restart checks:
 
 - Send SIGTERM and verify the process enters draining state before exit when
   in-flight work exists.
-- Restart after config changes. Do not expect any zone or metric state to
-  survive restart.
-- Validate readiness after restart, since every restart performs cold-start
-  zone acquisition.
+- Restart after config changes. Validated zones survive through the configured
+  last-good cache; metrics do not.
+- Validate readiness after restart. A valid cache is served immediately while
+  refresh runs; missing or rejected cache entries remain LOADING.
 
 ## Backup and Upgrade
 
-There is no BoronDNS zone-state backup. The primary server remains the source of
-truth for every served zone.
+The cache is restart continuity state, not an operator-managed backup. The
+primary remains the source of truth for every served zone.
 
 Back up and version-control:
 
@@ -1043,11 +1056,12 @@ Rollback procedure:
 
 1. Reinstall the previous binary or redeploy the previous container image.
 2. Restart the process.
-3. Wait for cold-start transfer and `/readyz`.
+3. Wait for last-good restore plus refresh and `/readyz`.
 4. Verify SOA serials and query responses.
 
-Because BoronDNS has no persistent runtime state, rollback is a binary and
-configuration rollback followed by zone reacquisition from the primary.
+Rollback retains the validated zone cache. The prior binary must use a
+cache-format version it understands; otherwise preserve the cache and allow a
+fresh transfer before replacing it.
 
 ## Campaign Cleanup Quarantines
 

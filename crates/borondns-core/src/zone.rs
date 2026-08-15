@@ -209,6 +209,11 @@ struct PersistentOrderNode<K> {
     right: Option<Arc<Self>>,
 }
 
+type PersistentOrderSplit<K> = (
+    Option<Arc<PersistentOrderNode<K>>>,
+    Option<Arc<PersistentOrderNode<K>>>,
+);
+
 impl<K> Default for PersistentOrderIndex<K> {
     fn default() -> Self {
         Self { root: None, len: 0 }
@@ -341,10 +346,7 @@ where
 fn persistent_order_split<K: Clone + Ord>(
     root: Option<Arc<PersistentOrderNode<K>>>,
     key: &K,
-) -> (
-    Option<Arc<PersistentOrderNode<K>>>,
-    Option<Arc<PersistentOrderNode<K>>>,
-) {
+) -> PersistentOrderSplit<K> {
     let Some(node) = root else {
         return (None, None);
     };
@@ -614,8 +616,7 @@ impl ZoneSnapshot {
             .and_then(|rrset| rrset.records().into_iter().next())
     }
 
-    #[cfg(test)]
-    pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
+    pub fn persistence_records(&self) -> Vec<ResourceRecord> {
         self.rrsets
             .iter()
             .flat_map(|(key, rrset)| {
@@ -634,6 +635,45 @@ impl ZoneSnapshot {
                 })
             })
             .collect()
+    }
+
+    pub fn persistence_record_count(&self) -> u64 {
+        self.rrsets
+            .values()
+            .map(|rrset| rrset.rdatas.len() as u64)
+            .sum()
+    }
+
+    pub fn visit_persistence_records(
+        &self,
+        mut visit: impl FnMut(&DomainName, u16, u16, u32, &[u8]),
+    ) {
+        for (key, rrset) in self.rrsets.iter() {
+            for rdata in &rrset.rdatas {
+                visit(
+                    &rrset.owner,
+                    rrset.rr_type,
+                    rrset.class,
+                    self.record_ttl_by_owner_key(
+                        key.owner.as_ref(),
+                        rrset.class,
+                        rrset.rr_type,
+                        rrset.ttl,
+                        rdata,
+                    ),
+                    rdata,
+                );
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
+        self.persistence_records()
+    }
+
+    pub fn persistence_rrsets(&self) -> impl Iterator<Item = &Rrset> {
+        self.rrsets.values()
     }
 
     pub(crate) fn rrsets(&self) -> impl Iterator<Item = &Rrset> {
@@ -1163,11 +1203,26 @@ impl ZoneSnapshot {
             &mut seen,
             &mut dnssec_state.dnssec_augmented,
         );
-        let authorities = self.add_rrsig_augmentations(
+        let mut authorities = self.add_rrsig_augmentations(
             authorities,
             &mut seen,
             &mut dnssec_state.dnssec_augmented,
         );
+        if let Some(negative_ttl) = authorities
+            .iter()
+            .find(|record| record.rr_type == RecordType::Soa as u16)
+            .map(|record| record.ttl)
+        {
+            for record in &mut authorities {
+                if matches!(
+                    record.rr_type,
+                    value if value == RecordType::Nsec as u16
+                        || value == RecordType::Nsec3 as u16
+                ) {
+                    record.ttl = negative_ttl;
+                }
+            }
+        }
         let additionals = self.add_rrsig_augmentations(
             lookup.additionals,
             &mut seen,
@@ -2727,7 +2782,7 @@ fn canonical_nsec_range_covers(
     name: &DomainName,
 ) -> bool {
     let owner_key = canonical_order_key(owner);
-    let next_key = canonical_order_key(&next_owner);
+    let next_key = canonical_order_key(next_owner);
     let name_key = canonical_order_key(name);
     if owner_key < next_key {
         owner_key < name_key && name_key < next_key
@@ -3323,6 +3378,17 @@ impl ZoneStore {
         snapshot: Arc<ZoneSnapshot>,
     ) -> Result<ZoneMetadata, ZoneImageBuildError> {
         self.try_replace_snapshot(snapshot, false)
+            .map(|entry| entry.control_metadata())
+    }
+
+    /// Publish a fully revalidated persisted snapshot during startup while
+    /// preserving whether a configured catalog zone is query-visible.
+    pub fn insert_restored_snapshot(
+        &self,
+        snapshot: ZoneSnapshot,
+        hidden: bool,
+    ) -> Result<ZoneMetadata, ZoneImageBuildError> {
+        self.try_replace_snapshot(Arc::new(snapshot), hidden)
             .map(|entry| entry.control_metadata())
     }
 
@@ -4379,6 +4445,11 @@ impl Rrset {
         self.records_with_owner(&self.owner)
     }
 
+    /// Borrow validated RDATA for durable last-good zone serialization.
+    pub fn persistence_rdatas(&self) -> impl Iterator<Item = &[u8]> {
+        self.rdatas.iter().map(Vec::as_slice)
+    }
+
     pub(crate) fn records_with_owner(&self, owner: &DomainName) -> Vec<ResourceRecord> {
         self.rdatas
             .iter()
@@ -4428,9 +4499,11 @@ struct ZoneOverlayDirty {
     structure_or_denial_changed: bool,
 }
 
+type ShardedNameBuckets = Box<[Arc<HashMap<u64, SmallVec<[NameKey; 1]>>>]>;
+
 #[derive(Debug, Clone)]
 struct ShardedNameSet {
-    shards: Box<[Arc<HashMap<u64, SmallVec<[NameKey; 1]>>>]>,
+    shards: ShardedNameBuckets,
     len: usize,
     bloom: [u64; 4],
 }

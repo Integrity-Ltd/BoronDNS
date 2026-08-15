@@ -14,6 +14,7 @@ interface="${BORONDNS_PHYSICAL_INTERFACE:-eno1np0}"
 borondns_port="${BORONDNS_PHYSICAL_BORONDNS_PORT:-5300}"
 knot_port="${BORONDNS_PHYSICAL_KNOT_PORT:-5301}"
 duration="${BORONDNS_PHYSICAL_DURATION:-5}"
+borondns_ready_attempts="${BORONDNS_PHYSICAL_BORONDNS_READY_ATTEMPTS:-180}"
 batch="${BORONDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${BORONDNS_PHYSICAL_KXDPGUN_MODE:-auto}"
 player_mtu="${BORONDNS_PHYSICAL_PLAYER_MTU:-${BORONDNS_PHYSICAL_KXDPGUN_MTU:-}}"
@@ -1106,7 +1107,7 @@ run_server_start() {
     local xdp_redirect_object_arg="${xdp_redirect_object:-__default__}"
     local xdp_queue_ids_arg="${xdp_queue_ids:-__none__}"
 
-    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids_arg" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids_arg" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" "$borondns_ready_attempts" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -1135,6 +1136,7 @@ xdp_queue_ids="${24}"
 xdp_ring_size="${25}"
 xdp_umem_frame_count="${26}"
 xdp_run_as_user="${27}"
+borondns_ready_attempts="${28}"
 xdp_batch_size="$udp_batch_size"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
@@ -1332,7 +1334,7 @@ ulimit -l unlimited 2>/dev/null || true
 echo $! >"$run_abs/borondns.pid"
 
 ready=""
-for _ in $(seq 1 180); do
+for _ in $(seq 1 "$borondns_ready_attempts"); do
     ready="$(curl -fsS http://127.0.0.1:8080/readyz 2>/dev/null || true)"
     if [[ "$ready" == ready ]] || printf '%s' "$ready" | grep -q ready; then
         break

@@ -414,6 +414,12 @@ experiments:
   artifact. The default `knot-first` preserves the original comparison flow;
   use `borondns-first` to check for XDP attach/detach or NIC-state order
   effects.
+
+- `BORONDNS_PHYSICAL_BORONDNS_READY_ATTEMPTS` controls the number of 250 ms
+  readiness probes before a BoronDNS row fails. It defaults to 180 (45 seconds).
+  Large BoronGen AXFR and ZoneImage compilation runs should set a deliberately
+  bounded higher value, for example 1200 (five minutes), rather than weakening
+  transfer or publication readiness.
 - `scripts/physical-xdp-source-knot-profile.sh` is a narrow repeat wrapper for
   the current source-built Knot XDP comparison. It defaults to the 2.5M
   requester-owned AF_XDP profile, source-built Knot 3.5.4, server/requester

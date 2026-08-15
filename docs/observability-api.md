@@ -171,8 +171,9 @@ host services return `unknown`.
 ## Response Principles
 
 Responses should be compact snapshots rather than event streams. BoronDNS does
-not persist transfer history or runtime state to disk; any recent-history fields
-are bounded in memory and may reset on process restart.
+does not persist transfer history, metrics, or observability state; those fields
+are bounded in memory and reset on restart. The RFC 5936 last-good zone cache is
+separate from the observability API.
 
 Accepted management connections have fixed defensive request-read and
 response-write deadlines. A client that sends an incomplete request or stops

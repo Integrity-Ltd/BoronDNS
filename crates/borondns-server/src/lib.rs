@@ -32,6 +32,7 @@ mod tcp;
 mod transfer;
 mod transfer_plan;
 mod udp;
+mod zone_persistence;
 
 use borondns_core::{
     ServerConfig,
@@ -62,6 +63,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use zeroize::Zeroizing;
+use zone_persistence::ZonePersistence;
 
 // BDS-NFR-MAINT-004 principal functional requirement references for runtime
 // transport, NOTIFY, zone refresh scheduling, XoT, and response-rate limiting:
@@ -192,6 +194,8 @@ pub(crate) use udp::{response_rcode, skip_response_record};
 pub struct Runtime {
     config: ServerConfig,
     zones: ZoneStore,
+    zone_persistence: Option<ZonePersistence>,
+    restored_zone_unix_secs: HashMap<String, u64>,
 }
 
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
@@ -245,6 +249,16 @@ impl Runtime {
         validate_runtime_config(&config)
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         let zones = ZoneStore::with_publication_policy(config.zone_publication.policy());
+        let zone_persistence = config.server.zone_cache_directory.clone().map(|directory| {
+            // The cache stores canonical uncompressed owner names, while
+            // transfer accounting sees compressed DNS wire names. Bound
+            // the worst RFC name-compression expansion without imposing a
+            // new, lower zone-size ceiling.
+            ZonePersistence::new(
+                directory,
+                config.limits.max_transfer_ingest_bytes.saturating_mul(128),
+            )
+        });
         let mut visible_origins = config
             .zones
             .iter()
@@ -254,6 +268,7 @@ impl Runtime {
             })
             .collect::<Vec<_>>();
         let mut hidden_origins = Vec::new();
+        let mut restored_zone_unix_secs = HashMap::new();
         for catalog_zone in &config.catalog_zones {
             let origin = DomainName::from_absolute_str(&catalog_zone.name)
                 .expect("configuration validation rejects invalid catalog zone names");
@@ -263,9 +278,56 @@ impl Runtime {
                 hidden_origins.push(origin);
             }
         }
+        if let Some(persistence) = &zone_persistence {
+            for origin in &visible_origins {
+                match persistence.restore(origin, 1) {
+                    Ok(Some(restored)) => {
+                        zones
+                            .insert_restored_snapshot(restored.snapshot, false)
+                            .map_err(|error| {
+                                RuntimeError::InvalidRuntimeConfig(format!(
+                                    "persisted last-good zone {} cannot be published: {error}",
+                                    origin
+                                ))
+                            })?;
+                        restored_zone_unix_secs
+                            .insert(origin.canonical_key(), restored.persisted_unix_secs);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!(zone = %origin, %error, "persisted last-good zone rejected; starting in LOADING state")
+                    }
+                }
+            }
+            for origin in &hidden_origins {
+                match persistence.restore(origin, 1) {
+                    Ok(Some(restored)) => {
+                        zones.insert_restored_snapshot(restored.snapshot, true).map_err(|error| {
+                            RuntimeError::InvalidRuntimeConfig(format!(
+                                "persisted last-good catalog zone {} cannot be published: {error}",
+                                origin
+                            ))
+                        })?;
+                        restored_zone_unix_secs
+                            .insert(origin.canonical_key(), restored.persisted_unix_secs);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!(zone = %origin, %error, "persisted last-good catalog zone rejected; starting in LOADING state")
+                    }
+                }
+            }
+        }
+        visible_origins.retain(|origin| !zones.contains_exact_zone_for_control(origin));
+        hidden_origins.retain(|origin| !zones.contains_exact_zone_for_control(origin));
         zones.insert_loading_batch(&visible_origins, &hidden_origins);
 
-        Ok(Self { config, zones })
+        Ok(Self {
+            config,
+            zones,
+            zone_persistence,
+            restored_zone_unix_secs,
+        })
     }
 
     pub fn zone_count(&self) -> usize {
@@ -329,12 +391,12 @@ impl Runtime {
         for zone in &self.config.zones {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
-            refresh_registry.record_loading_start(&origin);
+            self.restore_refresh_status_or_record_loading(&refresh_registry, &origin);
         }
         for catalog_zone in &self.config.catalog_zones {
             let origin = DomainName::from_absolute_str(&catalog_zone.name)
                 .expect("configuration validation rejects invalid catalog zone names");
-            refresh_registry.record_loading_start(&origin);
+            self.restore_refresh_status_or_record_loading(&refresh_registry, &origin);
         }
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
@@ -391,6 +453,47 @@ impl Runtime {
             transfer_plan.clone(),
         );
         catalog_manager.attach_runtime_registries(notify_refresh.clone(), ixfr_cooldowns.clone());
+        // Reconcile a restored catalog before scheduling any network refreshes.
+        // This reconstructs member transfer plans and restores their own
+        // last-good snapshots, so an unavailable primary cannot turn a whole
+        // catalog deployment into a cold start.
+        let (startup_catalog_tx, startup_catalog_rx) = mpsc::channel(1);
+        let startup_catalog_weak = startup_catalog_tx.downgrade();
+        drop(startup_catalog_tx);
+        drop(startup_catalog_rx);
+        for configured_catalog in &self.config.catalog_zones {
+            let origin = DomainName::from_absolute_str(&configured_catalog.name)
+                .expect("configuration validation rejects invalid catalog zone names");
+            let Some(restored) = self.zones.exact_snapshot_for_transfer(&origin) else {
+                continue;
+            };
+            if restored.metadata().state != ZoneState::Active {
+                continue;
+            }
+            let parsed = catalog_manager
+                .parse_candidate_snapshot(restored.snapshot_for_transfer())
+                .map_err(|error| {
+                    RuntimeError::InvalidRuntimeConfig(format!(
+                        "restored catalog zone {origin} failed catalog validation: {error}"
+                    ))
+                })?;
+            if let Some(parsed) = parsed {
+                let metadata = restored.into_metadata();
+                catalog_manager
+                    .apply_parsed_snapshot(
+                        parsed,
+                        &metadata,
+                        &self.zones,
+                        &transfer_plan,
+                        &refresh_registry,
+                        &notify_authority,
+                        &startup_catalog_weak,
+                        &metrics,
+                        self.zone_persistence.as_ref(),
+                    )
+                    .await;
+            }
+        }
         let notify_log_limiter = NotifyLogLimiter::new(
             Duration::from_secs(self.config.limits.notify_log_rate_window_secs),
             self.config.limits.notify_log_max_keys,
@@ -507,6 +610,7 @@ impl Runtime {
                 max_resident_transfer_tasks,
                 telemetry: control_plane_telemetry.clone(),
                 admission: refresh_admission.clone(),
+                zone_persistence: self.zone_persistence.clone(),
             },
         ));
         refresh_workers.spawn(serve_refresh_requests(
@@ -532,6 +636,7 @@ impl Runtime {
                 max_resident_transfer_tasks,
                 telemetry: control_plane_telemetry,
                 admission: refresh_admission.clone(),
+                zone_persistence: self.zone_persistence.clone(),
             },
         ));
         listeners.spawn(serve_scheduled_refreshes(
@@ -860,6 +965,33 @@ impl Runtime {
         Ok(())
     }
 
+    fn restore_refresh_status_or_record_loading(
+        &self,
+        refresh_registry: &ZoneRefreshRegistry,
+        origin: &DomainName,
+    ) {
+        let Some(persisted_unix_secs) = self
+            .restored_zone_unix_secs
+            .get(origin.canonical_key().as_str())
+            .copied()
+        else {
+            refresh_registry.record_loading_start(origin);
+            return;
+        };
+        let Some(metadata) = self.zones.exact_zone_metadata(origin) else {
+            refresh_registry.record_loading_start(origin);
+            return;
+        };
+        let elapsed = unix_timestamp_seconds().saturating_sub(persisted_unix_secs);
+        let now = Instant::now();
+        let transfer_time = now.checked_sub(Duration::from_secs(elapsed)).unwrap_or(now);
+        refresh_registry.record_success_metadata_at_with_timestamp(
+            &metadata,
+            transfer_time,
+            persisted_unix_secs,
+        );
+    }
+
     #[cfg(test)]
     async fn load_initial_zones(
         &self,
@@ -893,6 +1025,7 @@ impl Runtime {
                 max_resident_transfer_tasks: max_resident_transfer_tasks(max_concurrent_transfers),
                 telemetry: ControlPlaneTelemetryClient::disabled(),
                 admission: RefreshAdmission::new(),
+                zone_persistence: self.zone_persistence.clone(),
             },
         )
         .await
@@ -1475,6 +1608,7 @@ impl CatalogManager {
         notify_authority: &NotifyAuthority,
         refresh_tx: &mpsc::WeakSender<RefreshRequest>,
         metrics: &RuntimeMetrics,
+        zone_persistence: Option<&ZonePersistence>,
     ) {
         let Some(catalog) = self.catalogs_by_key.get(metadata.origin_key.as_ref()) else {
             return;
@@ -1747,8 +1881,53 @@ impl CatalogManager {
             if plan_changed && let Some(current_plan) = current_plan.as_ref() {
                 changed_ixfr_members.push((current_plan.origin.clone(), current_plan.generation()));
             }
-            let zone_missing =
+            let mut zone_missing =
                 member_node_changed || !zones.contains_exact_zone_for_control(&owner_member.zone);
+            if zone_missing
+                && !member_node_changed
+                && let Some(persistence) = zone_persistence
+            {
+                match persistence.restore(&owner_member.zone, 1) {
+                    Ok(Some(restored_zone)) => {
+                        match zones.insert_restored_snapshot(restored_zone.snapshot, false) {
+                            Ok(restored_metadata) => {
+                                zone_missing = false;
+                                let elapsed = unix_timestamp_seconds()
+                                    .saturating_sub(restored_zone.persisted_unix_secs);
+                                let now = Instant::now();
+                                let transfer_time =
+                                    now.checked_sub(Duration::from_secs(elapsed)).unwrap_or(now);
+                                refresh_registry.record_success_metadata_at_with_timestamp(
+                                    &restored_metadata,
+                                    transfer_time,
+                                    restored_zone.persisted_unix_secs,
+                                );
+                                info!(
+                                    category = "transfer",
+                                    event = "catalog_member_last_good_restored",
+                                    catalog_zone = %owner_catalog.origin,
+                                    zone = %owner_member.zone,
+                                    serial = ?restored_metadata.serial,
+                                    "restored catalog member last-good zone"
+                                );
+                            }
+                            Err(error) => warn!(
+                                catalog_zone = %owner_catalog.origin,
+                                zone = %owner_member.zone,
+                                %error,
+                                "persisted catalog member could not be published"
+                            ),
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => warn!(
+                        catalog_zone = %owner_catalog.origin,
+                        zone = %owner_member.zone,
+                        %error,
+                        "persisted catalog member rejected; starting in LOADING state"
+                    ),
+                }
+            }
             if zone_missing {
                 loading_members.push(owner_member.zone.clone());
                 refresh_registry.record_loading_start(&owner_member.zone);
@@ -1865,6 +2044,7 @@ impl CatalogManager {
             notify_authority,
             refresh_tx,
             &RuntimeMetrics::new(),
+            None,
         )
         .await;
     }
@@ -2399,7 +2579,6 @@ impl ZoneRefreshRegistry {
         );
     }
 
-    #[cfg(test)]
     fn record_success_metadata_at_with_timestamp(
         &self,
         metadata: &ZoneMetadata,
@@ -4992,6 +5171,8 @@ async fn serve_refresh_requests(
             let tcp_connect_timeout = settings.tcp_connect_timeout;
             let telemetry = settings.telemetry.clone();
             let transfer_limit = settings.transfer_limit.clone();
+            let zone_persistence = settings.zone_persistence.clone();
+            let zone_persistence_for_catalog = zone_persistence.clone();
             let zones = zones.clone();
             let catalog_runtime = catalog_runtime.clone();
             let ixfr_cooldowns = ixfr_cooldowns.clone();
@@ -5048,6 +5229,7 @@ async fn serve_refresh_requests(
                             axfr_timeout,
                             tcp_connect_timeout,
                             reason: request.reason.as_str(),
+                            zone_persistence,
                         },
                     ) => outcome,
                 };
@@ -5083,6 +5265,7 @@ async fn serve_refresh_requests(
                                     &catalog_runtime.notify_authority,
                                     &catalog_runtime.refresh_tx,
                                     &metrics,
+                                    zone_persistence_for_catalog.as_ref(),
                                 )
                                 .await;
                         }
@@ -5260,6 +5443,7 @@ struct RefreshWorkerSettings {
     max_resident_transfer_tasks: usize,
     telemetry: ControlPlaneTelemetryClient,
     admission: RefreshAdmission,
+    zone_persistence: Option<ZonePersistence>,
 }
 
 #[derive(Clone)]
@@ -5271,6 +5455,7 @@ struct InitialLoadSettings {
     max_resident_transfer_tasks: usize,
     telemetry: ControlPlaneTelemetryClient,
     admission: RefreshAdmission,
+    zone_persistence: Option<ZonePersistence>,
 }
 
 #[derive(Clone)]
@@ -5283,6 +5468,7 @@ struct RefreshAttemptContext<'a> {
     axfr_timeout: Duration,
     tcp_connect_timeout: Duration,
     reason: &'a str,
+    zone_persistence: Option<ZonePersistence>,
 }
 
 #[derive(Debug)]
@@ -5290,6 +5476,19 @@ struct RefreshZoneOutcome {
     success: Option<RefreshZoneSuccess>,
     failure_cause: Option<String>,
     obsolete: bool,
+}
+
+async fn persist_last_good_before_publication(
+    persistence: &Option<ZonePersistence>,
+    snapshot: Arc<ZoneSnapshot>,
+) -> Result<(), String> {
+    let Some(persistence) = persistence.clone() else {
+        return Ok(());
+    };
+    tokio::task::spawn_blocking(move || persistence.persist(&snapshot))
+        .await
+        .map_err(|error| format!("zone-cache writer task failed: {error}"))?
+        .map_err(|error| error.to_string())
 }
 
 enum CurrentZoneConfirmationError {
@@ -5467,6 +5666,8 @@ async fn run_initial_zone_loads(
             let tcp_connect_timeout = settings.tcp_connect_timeout;
             let telemetry = settings.telemetry.clone();
             let transfer_limit = settings.transfer_limit.clone();
+            let zone_persistence = settings.zone_persistence.clone();
+            let zone_persistence_for_catalog = zone_persistence.clone();
 
             transfers.spawn(async move {
                 let Some(plan) = catalog_runtime.transfer_plan.get(&zone_apex) else {
@@ -5508,6 +5709,7 @@ async fn run_initial_zone_loads(
                             axfr_timeout,
                             tcp_connect_timeout,
                             reason: "initial",
+                            zone_persistence,
                         },
                     ) => outcome,
                 };
@@ -5546,6 +5748,7 @@ async fn run_initial_zone_loads(
                                     &catalog_runtime.notify_authority,
                                     &catalog_runtime.refresh_tx,
                                     &metrics,
+                                    zone_persistence_for_catalog.as_ref(),
                                 )
                                 .await;
                         }
@@ -5660,6 +5863,7 @@ fn ixfr_error_disables_ixfr(error: &TransferError) -> bool {
     matches!(
         error,
         TransferError::Ixfr(axfr::IxfrError::ErrorRcode(1 | 4))
+            | TransferError::Ixfr(axfr::IxfrError::ErrorRcodeWithEde { rcode: 1 | 4, .. })
     )
 }
 
@@ -6139,6 +6343,22 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                 }
                             };
                             if let Some(catalog_members) = catalog_members {
+                                if let Err(error) = persist_last_good_before_publication(
+                                    &context.zone_persistence,
+                                    snapshot.clone(),
+                                )
+                                .await
+                                {
+                                    context.metrics.record_ixfr_failed();
+                                    warn!(
+                                        zone = %plan.origin,
+                                        %primary,
+                                        %error,
+                                        reason = %context.reason,
+                                        "IXFR last-good persistence failed before publication; falling back to AXFR"
+                                    );
+                                    continue;
+                                }
                                 match context
                                     .transfer_plan
                                     .if_current_plan(plan, || {
@@ -6353,6 +6573,25 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     reason = %context.reason,
                     "zone transfer publication phase"
                 );
+                if let Err(error) = persist_last_good_before_publication(
+                    &context.zone_persistence,
+                    snapshot.clone(),
+                )
+                .await
+                {
+                    last_failure_cause = Some(format!(
+                        "AXFR last-good persistence failed for primary {primary}: {error}"
+                    ));
+                    context.metrics.record_axfr_failed();
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        %error,
+                        reason = %context.reason,
+                        "AXFR last-good persistence failed before publication"
+                    );
+                    continue;
+                }
                 match context
                     .transfer_plan
                     .if_current_plan(plan, || {
@@ -6491,8 +6730,10 @@ fn run_lifecycle_fuzz_sequence(data: &[u8]) -> LifecycleFuzzStats {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "zone0.lifecycle-fuzz."

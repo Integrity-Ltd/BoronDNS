@@ -821,6 +821,49 @@
     }
 
     #[test]
+    fn oversized_referral_sets_tc_when_required_in_domain_glue_is_omitted() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("ns.child.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    (1..=100)
+                        .map(|last| vec![192, 0, 2, last])
+                        .collect(),
+                ),
+            ],
+        ));
+
+        let packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let response = store_response_with_options(&packet, &store, AnswerOptions::udp(512));
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response_authority_types(&response), vec![RecordType::Ns as u16]);
+        assert!(response_additional_types(&response).is_empty());
+        assert_ne!(
+            flags & 0x0200,
+            0,
+            "RFC 9471 requires TC when available in-domain referral glue cannot fit"
+        );
+    }
+
+    #[test]
     fn do_referral_includes_ds_and_covering_rrsigs() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(

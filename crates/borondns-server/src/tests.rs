@@ -54,6 +54,7 @@ use super::observability::{
 use super::udp::{
     UdpIoErrorAction, bounded_udp_batch_size, classify_udp_recv_error, classify_udp_send_error,
 };
+use super::zone_persistence::ZonePersistence;
 use super::{
     BoundUdpListener, CONTROL_PLANE_OPERATION_LIMIT, CONTROL_PLANE_RESPONSE_LIMIT_BYTES,
     CatalogManager, CatalogRuntime, CatalogRuntimeConfig, ControlPlaneOperation,

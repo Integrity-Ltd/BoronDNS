@@ -38,7 +38,9 @@ Implemented behavior in the current Engineering MVP:
   `primaries.ext.<member-node>` A/AAAA records, a common
   `primaries.ext.<member-node>` TXT TSIG key-name reference, and
   BoronDNS-specific extension TXT records for transfer transport and NOTIFY
-  source policy.
+  source policy. Every custom property is below the RFC 9432 `ext` label;
+  legacy `_udns-xfr.<member-node>` and `_udns-notify.<member-node>` owners
+  outside `ext` are ignored.
 - Adding a member PTR schedules transfer of the new member zone.
 - Removing a member PTR removes catalog-managed in-memory service for that
   member zone.
@@ -59,7 +61,8 @@ Outside this Engineering MVP catalog slice:
 
 - Catalog migration state beyond replacing the previous in-memory membership
   set for the configured catalog.
-- Persistent catalog or member-zone state across process restarts.
+- Persistent catalog policy outside the validated RFC 5936 last-good catalog
+  and member-zone snapshots.
 - Optional product-specific member-name allow-list or deny-list policy. The
   default catalog profile follows RFC 9432 member-name semantics rather than
   silently rejecting IANA Special-Use names or wildcard labels.
@@ -113,8 +116,8 @@ with records like:
 a.zones.catalog.example. PTR member.example.
 primaries.ext.a.zones.catalog.example. A 198.51.100.53
 primaries.ext.a.zones.catalog.example. TXT "member-key."
-_udns-xfr.a.zones.catalog.example. TXT "transport=tcp;port=5300"
-_udns-notify.a.zones.catalog.example. TXT "source=198.51.100.54"
+_udns-xfr.ext.a.zones.catalog.example. TXT "transport=tcp;port=5300"
+_udns-notify.ext.a.zones.catalog.example. TXT "source=198.51.100.54"
 ```
 
 Malformed extension data rejects only the member transfer override. The member

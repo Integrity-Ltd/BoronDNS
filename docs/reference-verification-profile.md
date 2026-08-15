@@ -72,7 +72,8 @@ conformance claims.
 
 ### Storage
 
-BoronDNS has no persistent runtime state and no query-path filesystem access.
+BoronDNS persists only validated RFC 5936 last-good zone snapshots in the
+configured cache directory; the query path has no filesystem access.
 Local storage is used only for the host OS, container image storage, runtime
 logs downstream of stdout/stderr, benchmark artifacts, and release evidence.
 Use NVMe SSD for verification hosts so log and artifact persistence does not

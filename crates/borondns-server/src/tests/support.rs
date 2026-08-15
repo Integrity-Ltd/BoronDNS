@@ -1374,14 +1374,14 @@ fn query_qtype(query: &[u8]) -> u16 {
 
 fn assert_query_has_tsig(query: &[u8], key_name: &str, algorithm_name: &str) {
     let header = Header::parse(query).unwrap();
-    assert_eq!(header.arcount, 1);
+    assert!(matches!(header.arcount, 1 | 2));
     let original_id = header.id;
-    let (question_name, question_len) = DomainName::parse(query, 12).unwrap();
+    let (question_name, _) = DomainName::parse(query, 12).unwrap();
     assert_eq!(
         question_name,
         DomainName::from_absolute_str("example.test.").unwrap()
     );
-    let mut offset = 12 + question_len + 4;
+    let mut offset = query_tsig_offset(query);
 
     let (owner, owner_len) = DomainName::parse(query, offset).unwrap();
     assert_eq!(owner, DomainName::from_absolute_str(key_name).unwrap());
@@ -1430,8 +1430,7 @@ fn assert_query_has_tsig(query: &[u8], key_name: &str, algorithm_name: &str) {
 }
 
 fn extract_query_tsig_mac(query: &[u8]) -> Vec<u8> {
-    let (_, question_len) = DomainName::parse(query, 12).unwrap();
-    let mut offset = 12 + question_len + 4;
+    let mut offset = query_tsig_offset(query);
     let (_, owner_len) = DomainName::parse(query, offset).unwrap();
     offset += owner_len + 10;
     let (_, algorithm_len) = DomainName::parse(query, offset).unwrap();
@@ -1442,13 +1441,30 @@ fn extract_query_tsig_mac(query: &[u8]) -> Vec<u8> {
 }
 
 fn query_tsig_fudge(query: &[u8]) -> u16 {
-    let (_, question_len) = DomainName::parse(query, 12).unwrap();
-    let mut offset = 12 + question_len + 4;
+    let mut offset = query_tsig_offset(query);
     let (_, owner_len) = DomainName::parse(query, offset).unwrap();
     offset += owner_len + 10;
     let (_, algorithm_len) = DomainName::parse(query, offset).unwrap();
     offset += algorithm_len + 6;
     u16::from_be_bytes([query[offset], query[offset + 1]])
+}
+
+fn query_tsig_offset(query: &[u8]) -> usize {
+    let header = Header::parse(query).unwrap();
+    let (_, question_len) = DomainName::parse(query, 12).unwrap();
+    let mut offset = 12 + question_len + 4;
+    if header.arcount == 2 {
+        let (owner, owner_len) = DomainName::parse(query, offset).unwrap();
+        assert_eq!(owner, DomainName::root());
+        offset += owner_len;
+        assert_eq!(
+            u16::from_be_bytes([query[offset], query[offset + 1]]),
+            RecordType::Opt as u16
+        );
+        let rdlength = u16::from_be_bytes([query[offset + 8], query[offset + 9]]) as usize;
+        offset += 10 + rdlength;
+    }
+    offset
 }
 
 fn current_unix_time() -> u64 {
@@ -1568,8 +1584,10 @@ fn tsig_notify_authority() -> (NotifyAuthority, TsigKey) {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -2067,8 +2085,10 @@ fn control_plane_reporter_for_endpoint(
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [control_plane.telemetry]
                 endpoint_url = "http://{endpoint}"
@@ -2092,8 +2112,10 @@ fn control_plane_operation_client_for_endpoint(
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [control_plane.operations]
                 enabled = true

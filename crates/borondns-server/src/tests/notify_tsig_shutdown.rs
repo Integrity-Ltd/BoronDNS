@@ -3,8 +3,10 @@ fn signed_notify_is_verified_stripped_and_response_signed() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [tsig]
                 fudge_seconds = 30
@@ -222,8 +224,10 @@ fn catalog_notify_does_not_downgrade_after_dynamic_tsig_key_is_removed() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -346,8 +350,10 @@ fn notify_reload_test_config(root: &std::path::Path) -> ServerConfig {
     ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"
@@ -578,8 +584,10 @@ fn prepared_notify_is_rejected_after_same_name_tsig_secret_rotation() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [secret_store]
             path = "{}"

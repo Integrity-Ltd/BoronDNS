@@ -259,6 +259,24 @@
     }
 
     #[test]
+    fn malformed_duplicate_cookie_after_valid_cookie_is_ignored() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let client_cookie = hex_to_vec("2464c4abcf10c957");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut options = edns_option(EDNS_COOKIE_OPTION, &client_cookie);
+        options.extend_from_slice(&edns_option(EDNS_COOKIE_OPTION, &[0]));
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &options);
+
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::ClientCookieOnly),
+            "RFC 7873 section 5.2 requires every COOKIE after the first to be ignored"
+        );
+    }
+
+    #[test]
     fn empty_question_client_cookie_query_returns_noerror_cookie() {
         let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
         let context =

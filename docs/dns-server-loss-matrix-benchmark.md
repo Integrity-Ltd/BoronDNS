@@ -132,3 +132,49 @@ For a report-back headline from this tuned UDP slice: BoronDNS reached
 4.763M replies/s at <=1% requester loss, versus Knot at 4.219M replies/s and
 NSD at 3.234M replies/s. At the <=5% loss band, BoronDNS reached 4.763M
 replies/s, Knot reached 4.573M replies/s, and NSD reached 3.419M replies/s.
+
+## Current-Kernel QPS and Large-Zone Check, 2026-08-15
+
+The forward 25 Gbit/s pair was rechecked after the server moved from Linux
+`7.0.0-22-generic` to `7.0.0-28-generic`. The requester remained
+`oxidegun-1`; the server was `oxidedns-1`. The comparison restored the retained
+8 MiB receive socket, 32 MiB send socket, 16 MiB `rmem_max`, 64 MiB
+`wmem_max`, fq limit 50,000, and fq per-flow limit 500 settings. Both hosts used
+MTU 9000 and kxdpgun generic mode over `198.18.0.1` to `198.18.0.2`.
+
+System-wide perf showed conntrack lookup/input consuming about 5.9% of CPU at
+the useful knee. A benchmark-scoped raw-table NOTRACK rule was therefore tested
+symmetrically for UDP destination/source ports 5300 and 5301 on `eno1np0`.
+This is benchmark host tuning, not a BoronDNS runtime requirement. The rules
+were removed after the run; production operators must evaluate their own
+firewall, observability, and stateful-policy requirements before considering an
+equivalent exemption.
+
+With NOTRACK active, UDP batch sizes 32, 64, 128, 256, 512, and 1024 were
+bracketed. Batch 256 gave the best clean result; 512 and 1024 increased burst
+and queue pressure. Raising fq to limit 100,000 and per-flow limit 5,000 merely
+moved loss from qdisc drops to UDP receive-buffer exhaustion and is not a
+recommended profile.
+
+| workload | offered qps | replies/s | reply % | UDP batch | result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Knot, small reference zone | 4,250,000 | 4,176,697 | 98.294968% | Knot-managed | current-kernel reference |
+| BoronDNS, small reference zone | 4,250,000 | 4,247,663 | 99.960584% | 256 | best small-zone sweep row |
+| BoronDNS, 9.1M-record static NSEC3 zone | 4,250,000 | 4,245,748 | 99.920916% | 256 | perf-recorded large-zone row |
+| BoronDNS, same zone with active IXFR overlay | 4,250,000 | 4,243,016 | 99.848230% | 256 | 23-generation catch-up plus a live update |
+
+The best small-zone BoronDNS row was 70,966 replies/s (1.70%) above the current
+Knot row. Large static QPS was 0.045% below the small row, and the active IXFR
+overlay was 0.109% below it; both differences are below ordinary run variance.
+The data does not justify a separate large-zone lookup structure.
+
+Retained remote artifacts:
+
+- Knot/current BoronDNS baseline ladder:
+  `/home/codex/borondns-layout-profile-20260815/target/high-qps-stage/evidence/physical-udp-knot-comparison-20260815T162514Z`
+- batch-size sweep:
+  `/home/codex/borondns-layout-profile-20260815/target/high-qps-stage/evidence/physical-udp-knot-comparison-20260815T164713Z`
+- large static zone with system-wide perf:
+  `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165148Z`
+- active IXFR overlay:
+  `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165744Z`

@@ -1200,8 +1200,10 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1260,6 +1262,7 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
             max_resident_transfer_tasks: 16,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     )
     .await
@@ -1294,8 +1297,10 @@ async fn notify_refresh_worker_does_not_accept_serial_hint_as_confirmation() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1353,6 +1358,7 @@ async fn notify_refresh_worker_does_not_accept_serial_hint_as_confirmation() {
             max_resident_transfer_tasks: 16,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     )
     .await
@@ -1372,8 +1378,10 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 max_concurrent_transfers = 2
@@ -1442,6 +1450,7 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
             max_resident_transfer_tasks: 8,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     ));
 
@@ -1476,8 +1485,10 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "catalog-key."
@@ -1539,6 +1550,7 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
             max_resident_transfer_tasks: 1,
             telemetry: ControlPlaneTelemetryClient::disabled(),
             admission: RefreshAdmission::new(),
+            zone_persistence: None,
         },
     ));
 
@@ -1590,8 +1602,10 @@ async fn closed_refresh_admission_discards_buffered_work_without_starting_a_tran
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "shutdown-pending.test."
@@ -1653,6 +1667,7 @@ async fn closed_refresh_admission_discards_buffered_work_without_starting_a_tran
                 max_resident_transfer_tasks: 1,
                 telemetry: ControlPlaneTelemetryClient::disabled(),
                 admission,
+                zone_persistence: None,
             },
         ),
     )
@@ -1676,8 +1691,10 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [interfaces]
                 transfer = ["127.0.0.2:0"]
@@ -1722,6 +1739,7 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -1756,8 +1774,10 @@ async fn notify_serial_hint_still_requires_primary_soa_poll() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1797,6 +1817,7 @@ async fn notify_serial_hint_still_requires_primary_soa_poll() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "notify",
+            zone_persistence: None,
         },
     )
     .await
@@ -1821,8 +1842,10 @@ async fn notify_refresh_polls_the_notifying_primary_first_then_checks_the_others
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1864,6 +1887,7 @@ async fn notify_refresh_polls_the_notifying_primary_first_then_checks_the_others
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "notify",
+            zone_persistence: None,
         },
     )
     .await
@@ -1887,8 +1911,10 @@ async fn stale_first_primary_does_not_mask_a_newer_later_primary() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1929,6 +1955,7 @@ async fn stale_first_primary_does_not_mask_a_newer_later_primary() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -1947,8 +1974,10 @@ async fn older_primary_serial_does_not_reactivate_an_expired_zone() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -1990,6 +2019,7 @@ async fn older_primary_serial_does_not_reactivate_an_expired_zone() {
             axfr_timeout: std::time::Duration::from_secs(1),
             tcp_connect_timeout: std::time::Duration::from_secs(1),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2007,8 +2037,10 @@ async fn notify_serial_hint_requires_soa_poll_over_xot_primary() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2053,6 +2085,7 @@ async fn notify_serial_hint_requires_soa_poll_over_xot_primary() {
             axfr_timeout: std::time::Duration::from_secs(1),
             tcp_connect_timeout: std::time::Duration::from_secs(1),
             reason: "notify",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2073,8 +2106,10 @@ async fn expired_zone_is_not_reactivated_by_unvalidated_notify_serial_hint() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "expired-current.test."
@@ -2119,6 +2154,7 @@ async fn expired_zone_is_not_reactivated_by_unvalidated_notify_serial_hint() {
             axfr_timeout: std::time::Duration::from_secs(1),
             tcp_connect_timeout: std::time::Duration::from_secs(1),
             reason: "notify",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2141,8 +2177,10 @@ async fn malformed_catalog_axfr_is_rejected_before_publication_and_success() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[tsig_keys]]
             name = "catalog-key."
@@ -2203,6 +2241,7 @@ async fn malformed_catalog_axfr_is_rejected_before_publication_and_success() {
             axfr_timeout: std::time::Duration::from_secs(1),
             tcp_connect_timeout: std::time::Duration::from_secs(1),
             reason: "notify",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2233,8 +2272,10 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [tsig]
                 fudge_seconds = 30
@@ -2274,6 +2315,7 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -2296,8 +2338,10 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -2340,6 +2384,7 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -2435,8 +2480,10 @@ async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2472,6 +2519,7 @@ async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
             axfr_timeout: std::time::Duration::from_millis(50),
             tcp_connect_timeout: std::time::Duration::from_millis(50),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2497,8 +2545,10 @@ async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2533,6 +2583,7 @@ async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2554,8 +2605,10 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2593,6 +2646,7 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2622,8 +2676,10 @@ async fn refresh_xot_rejects_tls12_only_primary_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2658,6 +2714,7 @@ async fn refresh_xot_rejects_tls12_only_primary_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2682,8 +2739,10 @@ async fn refresh_xot_rejects_untrusted_certificate_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2719,6 +2778,7 @@ async fn refresh_xot_rejects_untrusted_certificate_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2742,8 +2802,10 @@ async fn refresh_xot_rejects_expired_certificate_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2779,6 +2841,7 @@ async fn refresh_xot_rejects_expired_certificate_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2802,8 +2865,10 @@ async fn refresh_xot_uses_configured_client_certificate() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2842,6 +2907,7 @@ async fn refresh_xot_uses_configured_client_certificate() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -2864,8 +2930,10 @@ async fn refresh_xot_rejects_missing_client_certificate_before_query() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2900,6 +2968,7 @@ async fn refresh_xot_rejects_missing_client_certificate_before_query() {
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await;
@@ -2920,8 +2989,10 @@ fn runtime_config_validation_accepts_valid_xot_files() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2947,8 +3018,10 @@ fn runtime_config_validation_accepts_inline_xot_client_key() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -2976,8 +3049,10 @@ fn runtime_config_validation_accepts_xot_profile_primary() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3004,8 +3079,10 @@ fn runtime_config_validation_rejects_malformed_inline_xot_client_key_without_lea
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3035,8 +3112,10 @@ fn file_descriptor_limit_check_uses_srs_resource_formula() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 max_tcp_connections = 20
@@ -3068,6 +3147,7 @@ fn file_descriptor_limit_counts_udp_tcp_and_health_listener_shape() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300", "127.0.0.1:5301"]
                 listen_tcp = ["127.0.0.1:5300"]
                 health = "127.0.0.1:8080"
@@ -3107,8 +3187,10 @@ fn file_descriptor_limit_counts_af_xdp_queues_and_kernel_fallback_socket() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 udp_backend = "af_xdp"
@@ -3143,8 +3225,10 @@ fn file_descriptor_limit_uses_explicit_af_xdp_queue_count() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["192.0.2.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 udp_backend = "af_xdp"
@@ -3182,8 +3266,10 @@ fn file_descriptor_limit_formula_saturates_extreme_limits() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 max_tcp_connections = 18446744073709551615
@@ -3206,8 +3292,10 @@ fn runtime_config_warnings_report_expiring_xot_trust_anchors() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3252,8 +3340,10 @@ fn runtime_config_warnings_report_expiring_profile_backed_xot_trust_anchors() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [secret_store]
                 path = "{}"
@@ -3307,8 +3397,10 @@ fn profile_backed_expiry_warnings_use_captured_certificates_after_source_mutatio
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [secret_store]
                 path = "{}"
@@ -3372,8 +3464,10 @@ fn runtime_config_validation_rejects_missing_xot_trust_anchor_file() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3406,8 +3500,10 @@ fn runtime_config_validation_rejects_malformed_xot_trust_anchor_file() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3433,8 +3529,10 @@ fn runtime_rejects_invalid_xot_config_before_startup() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3460,8 +3558,10 @@ fn runtime_revalidates_tcp_inflight_capacity_before_binding_or_spawning_tasks() 
     let mut config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = []
             listen_tcp = ["127.0.0.1:0"]
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."
@@ -3486,8 +3586,10 @@ async fn refresh_axfr_uses_xot_tls_transport() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3522,6 +3624,7 @@ async fn refresh_axfr_uses_xot_tls_transport() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -3564,8 +3667,10 @@ async fn profile_backed_xot_transfer_uses_snapshot_after_trust_path_replacement(
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [secret_store]
                 path = "{}"
@@ -3610,6 +3715,7 @@ async fn profile_backed_xot_transfer_uses_snapshot_after_trust_path_replacement(
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -3626,8 +3732,10 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3669,6 +3777,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -3689,6 +3798,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
+            zone_persistence: None,
         },
     )
     .await
@@ -3751,8 +3861,10 @@ async fn scheduled_refresh_worker_expires_zone_and_enqueues_refresh() {
     let config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."
@@ -3794,8 +3906,10 @@ async fn runtime_initial_load_publishes_zone_snapshot() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [[zones]]
                 name = "example.test."
@@ -3854,8 +3968,10 @@ async fn runtime_initial_load_honors_transfer_concurrency_limit() {
     let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [limits]
                 max_concurrent_transfers = 2
@@ -3914,4 +4030,86 @@ async fn runtime_initial_load_honors_transfer_concurrency_limit() {
             .state,
         ZoneState::Active
     );
+}
+#[test]
+fn rfc5936_restart_restores_validated_last_good_zone_before_refresh() {
+    let cache = std::env::temp_dir().join(format!(
+        "borondns-rfc5936-runtime-{}-{}",
+        std::process::id(),
+        TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(42),
+        vec![
+            Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(42)],
+            ),
+            Rrset::new(
+                origin.clone(),
+                RecordType::Ns as u16,
+                1,
+                3600,
+                vec![DomainName::from_absolute_str("ns.example.test.")
+                    .unwrap()
+                    .to_wire()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("ns.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                3600,
+                vec![vec![192, 0, 2, 53]],
+            ),
+        ],
+    );
+    ZonePersistence::new(cache.clone(), 1024 * 1024)
+        .persist(&snapshot)
+        .unwrap();
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+            zone_cache_directory = {cache:?}
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+        cache = cache.display().to_string()
+    ))
+    .unwrap();
+
+    let runtime = Runtime::new(config.clone()).unwrap();
+    let metadata = runtime.zones.exact_zone_metadata(&origin).unwrap();
+    assert_eq!(metadata.state, ZoneState::Active);
+    assert_eq!(metadata.serial, Some(42));
+
+    let cache_file = std::fs::read_dir(&cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut bytes = std::fs::read(&cache_file).unwrap();
+    let midpoint = bytes.len() / 2;
+    bytes[midpoint] ^= 1;
+    std::fs::write(cache_file, bytes).unwrap();
+    let restarted = Runtime::new(config).unwrap();
+    assert_eq!(
+        restarted
+            .zones
+            .exact_zone_metadata(&origin)
+            .unwrap()
+            .state,
+        ZoneState::Loading,
+        "a corrupt persisted candidate must never be partially served"
+    );
+    std::fs::remove_dir_all(cache).unwrap();
 }

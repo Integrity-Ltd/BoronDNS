@@ -445,6 +445,21 @@ where
                 config.server.nsid = value.clone();
                 record_applied_override(&mut applied, &name, &value);
             }
+            "BORONDNS_SERVER_ZONE_CACHE_DIRECTORY" => {
+                let value = env_value_to_string(&name, value)?;
+                config.server.zone_cache_directory = Some(value.clone().into());
+                record_applied_override(&mut applied, &name, &value);
+            }
+            "BORONDNS_SERVER_ALLOW_NON_RFC5936_COLD_START" => {
+                let value = env_value_to_string(&name, value)?;
+                config.server.allow_non_rfc5936_cold_start = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
+            }
+            "BORONDNS_SERVER_ALLOW_NON_RFC9210_SINGLE_TRANSPORT" => {
+                let value = env_value_to_string(&name, value)?;
+                config.server.allow_non_rfc9210_single_transport = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
+            }
             "BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_per_minute = parse_env_value(&name, &value)?;
@@ -1137,6 +1152,7 @@ mod tests {
         let legacy = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = ["127.0.0.1:5301"]
                 health = "127.0.0.1:8081"
@@ -1155,6 +1171,7 @@ mod tests {
         let multiline_management = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [interfaces]
@@ -1181,6 +1198,7 @@ mod tests {
             r#"
                 [server]
 
+allow_non_rfc5936_cold_start = true
                 [interfaces]
                 dns = [
                     { address = "127.0.0.3:5303", name = "dns-primary" },
@@ -1588,6 +1606,7 @@ mod tests {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 log_level = "info"
                 log_format = "json"
@@ -1627,6 +1646,11 @@ mod tests {
                 ("BORONDNS_SERVER_LOG_LEVEL", "debug"),
                 ("BORONDNS_SERVER_LOG_FORMAT", "logfmt"),
                 ("BORONDNS_SERVER_NSID", "env-nsid"),
+                (
+                    "BORONDNS_SERVER_ZONE_CACHE_DIRECTORY",
+                    "/var/lib/borondns/test-zones",
+                ),
+                ("BORONDNS_SERVER_ALLOW_NON_RFC5936_COLD_START", "false"),
                 ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
@@ -1655,6 +1679,11 @@ mod tests {
         assert_eq!(config.server.log_level, "debug");
         assert_eq!(config.server.log_format, LogFormatConfig::Logfmt);
         assert_eq!(config.server.nsid, "env-nsid");
+        assert_eq!(
+            config.server.zone_cache_directory.as_deref(),
+            Some(std::path::Path::new("/var/lib/borondns/test-zones"))
+        );
+        assert!(!config.server.allow_non_rfc5936_cold_start);
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.logging.max_entry_length_bytes, 8192);
@@ -1678,6 +1707,7 @@ mod tests {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -1709,6 +1739,7 @@ mod tests {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]

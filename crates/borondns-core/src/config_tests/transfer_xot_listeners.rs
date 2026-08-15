@@ -3,6 +3,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [edns]
@@ -34,6 +35,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [chaos]
@@ -63,6 +65,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [chaos]
@@ -83,6 +86,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [dnssec]
@@ -108,6 +112,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [transfer]
@@ -128,6 +133,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [transfer]
@@ -154,6 +160,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [tsig]
@@ -174,6 +181,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -203,6 +211,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -243,6 +252,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -289,6 +299,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -305,6 +316,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -328,6 +340,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -349,6 +362,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -380,6 +394,7 @@
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -402,6 +417,7 @@
         let error = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -427,6 +443,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [secret_store]
@@ -454,6 +471,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -477,6 +495,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -503,6 +522,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -527,6 +547,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -548,6 +569,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [[zones]]
@@ -571,6 +593,7 @@
             r#"
                 [server]
 
+allow_non_rfc5936_cold_start = true
                 [[zones]]
                 name = "example.test."
                 primaries = ["192.0.2.53:53"]
@@ -591,6 +614,7 @@
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = ["127.0.0.1:5301", "[::1]:5301"]
 
@@ -619,6 +643,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = []
                 listen_tcp = []
 
@@ -634,4 +659,47 @@
                 .to_string()
                 .contains("at least one UDP or TCP listener")
         );
+    }
+
+    #[test]
+    fn rfc9210_profile_rejects_udp_only_and_tcp_only_service() {
+        for (udp, tcp) in [
+            ("[\"127.0.0.1:5300\"]", "[]"),
+            ("[]", "[\"127.0.0.1:5300\"]"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+allow_non_rfc5936_cold_start = true
+                    listen_udp = {udp}
+                    listen_tcp = {tcp}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ))
+            .expect_err("the supported RFC 9210 profile requires both transports");
+            assert!(error.to_string().contains("RFC 9210"));
+        }
+    }
+
+    #[test]
+    fn explicit_non_rfc9210_profile_allows_single_transport_for_compatibility() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+allow_non_rfc5936_cold_start = true
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+                allow_non_rfc9210_single_transport = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("explicit unsupported compatibility profile");
+
+        assert!(config.server.allow_non_rfc9210_single_transport);
     }

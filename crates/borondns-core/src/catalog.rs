@@ -243,10 +243,10 @@ fn extension_member_key(owner_key: &str) -> Option<&str> {
     if let Some(rest) = owner_key.strip_prefix("primaries.ext.") {
         return Some(rest);
     }
-    if let Some(rest) = owner_key.strip_prefix("_udns-xfr.") {
+    if let Some(rest) = owner_key.strip_prefix("_udns-xfr.ext.") {
         return Some(rest);
     }
-    if let Some(rest) = owner_key.strip_prefix("_udns-notify.") {
+    if let Some(rest) = owner_key.strip_prefix("_udns-notify.ext.") {
         return Some(rest);
     }
     None
@@ -270,8 +270,8 @@ fn parse_member_transfer_extension(
     extension_rrsets: &[&Rrset],
 ) -> CatalogMemberTransferExtension {
     let primary_base = format!("primaries.ext.{}", member_node.canonical_key());
-    let xfr_owner = format!("_udns-xfr.{}", member_node.canonical_key());
-    let notify_owner = format!("_udns-notify.{}", member_node.canonical_key());
+    let xfr_owner = format!("_udns-xfr.ext.{}", member_node.canonical_key());
+    let notify_owner = format!("_udns-notify.ext.{}", member_node.canonical_key());
     let mut primaries = Vec::new();
     let mut key_names_by_owner = HashMap::<String, Vec<DomainName>>::new();
     let mut xfr = None;
@@ -826,14 +826,16 @@ mod tests {
                     vec![txt("member-key.example.")],
                 ),
                 Rrset::new(
-                    DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                    DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.")
+                        .unwrap(),
                     RecordType::Txt as u16,
                     1,
                     0,
                     vec![txt("transport=tcp;port=5300;mode=axfr-ixfr")],
                 ),
                 Rrset::new(
-                    DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                    DomainName::from_absolute_str("_udns-notify.ext.a.zones.catalog.example.")
+                        .unwrap(),
                     RecordType::Txt as u16,
                     1,
                     0,
@@ -897,13 +899,31 @@ mod tests {
                     0,
                     vec![vec![192, 0, 2, 53]],
                 ),
+                Rrset::new(
+                    DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("transport=xot;port=853")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("source=198.51.100.1")],
+                ),
             ],
         );
 
         let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
 
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].transfer, CatalogMemberTransferExtension::Absent);
+        assert_eq!(
+            members[0].transfer,
+            CatalogMemberTransferExtension::Absent,
+            "RFC 9432 custom properties outside the ext subtree must be ignored"
+        );
     }
 
     #[test]
@@ -932,7 +952,8 @@ mod tests {
                     ],
                 ),
                 Rrset::new(
-                    DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                    DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.")
+                        .unwrap(),
                     RecordType::Txt as u16,
                     1,
                     0,
@@ -955,8 +976,8 @@ mod tests {
     fn rejects_conflicting_xfr_txt_policies_but_accepts_identical_duplicates() {
         let member_node =
             DomainName::from_absolute_str("a.zones.catalog.example.").expect("member node");
-        let owner =
-            DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").expect("XFR owner");
+        let owner = DomainName::from_absolute_str("_udns-xfr.ext.a.zones.catalog.example.")
+            .expect("XFR owner");
         let conflicting = Rrset::new(
             owner.clone(),
             RecordType::Txt as u16,

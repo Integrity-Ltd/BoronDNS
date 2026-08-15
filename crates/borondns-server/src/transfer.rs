@@ -317,7 +317,11 @@ async fn poll_soa_from_primary_stream_inner(
     let mut stream =
         connect_transfer_stream(primary, transfer_source, connect_timeout, xot_client_config)
             .await?;
-    let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig)?;
+    let mut query_message = axfr::build_soa_query(qid, zone_apex, qclass);
+    if primary.transport == TransferTransportConfig::Xot {
+        axfr::append_xot_opt(&mut query_message);
+    }
+    let query = maybe_sign_transfer_query(query_message, tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)
@@ -1208,10 +1212,12 @@ async fn transfer_ixfr_from_primary_inner(
     let current_soa = current_zone
         .soa_record_view(qclass)
         .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
-    let query = maybe_sign_transfer_query(
-        axfr::build_ixfr_query_from_soa_view(qid, zone_apex, qclass, current_soa)?,
-        session.tsig,
-    )?;
+    let mut query_message =
+        axfr::build_ixfr_query_from_soa_view(qid, zone_apex, qclass, current_soa)?;
+    if primary.transport == TransferTransportConfig::Xot {
+        axfr::append_xot_opt(&mut query_message);
+    }
+    let query = maybe_sign_transfer_query(query_message, session.tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)
@@ -1736,8 +1742,11 @@ async fn transfer_axfr_from_primary_inner(
     )
     .await?;
 
-    let query =
-        maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), session.tsig)?;
+    let mut query_message = axfr::build_axfr_query(qid, zone_apex, qclass);
+    if primary.transport == TransferTransportConfig::Xot {
+        axfr::append_xot_opt(&mut query_message);
+    }
+    let query = maybe_sign_transfer_query(query_message, session.tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message)?;
     stream
         .write_all(&framed_query)

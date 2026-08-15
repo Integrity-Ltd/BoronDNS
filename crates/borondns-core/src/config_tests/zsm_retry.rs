@@ -12,6 +12,7 @@
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
                     [server]
+allow_non_rfc5936_cold_start = true
                     listen_udp = ["127.0.0.1:5300"]
 
                     [limits]
@@ -33,6 +34,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]
@@ -54,6 +56,7 @@
         let error = ServerConfig::from_toml_str(
             r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
 
                 [limits]

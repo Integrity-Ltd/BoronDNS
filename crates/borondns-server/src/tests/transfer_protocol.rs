@@ -848,8 +848,10 @@ fn dns_cookie_secret_store_uses_configured_shared_secrets() {
     let config = ServerConfig::from_toml_str(
         r#"
                 [server]
+allow_non_rfc5936_cold_start = true
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+                allow_non_rfc9210_single_transport = true
 
                 [cookie]
                 policy = "lenient"
@@ -1086,8 +1088,10 @@ fn direct_xot_inline_private_key_enforces_exact_limit_before_clone_or_file_io() 
     let mut config = ServerConfig::from_toml_str(
         r#"
             [server]
+allow_non_rfc5936_cold_start = true
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = []
+            allow_non_rfc9210_single_transport = true
 
             [[zones]]
             name = "example.test."

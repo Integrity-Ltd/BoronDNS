@@ -1,9 +1,17 @@
 # The primary TOML file must be a regular file no larger than 4 MiB. BoronDNS
 # validates and reads one open handle so concurrent growth cannot bypass it.
 [server]
+# Required by the supported RFC 5936 secondary profile. Pre-create this durable
+# directory writable by the configured runtime user.
+zone_cache_directory = "/var/lib/borondns/zones"
+# Compatibility/testing escape hatch only; do not enable in supported service.
+# allow_non_rfc5936_cold_start = true
 # Legacy listen_udp/listen_tcp keys are still accepted. Prefer [interfaces].dns
 # for new deployments; if interfaces.dns is omitted, the SRS defaults are
 # ["0.0.0.0:53", "[::]:53"] for UDP and TCP.
+# The supported RFC 9210 profile requires both transports. A deliberately
+# unsupported compatibility/test deployment may set
+# allow_non_rfc9210_single_transport = true.
 # Runtime log level. Default: "info".
 log_level = "info"
 # Runtime log format. Default: "json"; "logfmt" is also SRS-structured.
@@ -122,10 +130,11 @@ timestamp_future_tolerance_seconds = 300
 # load-balanced deployments, configure the same 32-hex-character server_secret
 # on every instance. During staged rollover, deploy the new value as
 # server_secret and the old value as previous_server_secret. Do not combine a
-# configured server_secret with secret_rotation_interval_secs.
+# The configured server_secret is the initial secret; automatic rotation keeps
+# its use within RFC 7873's 36-day maximum lifetime.
 # server_secret = "00112233445566778899aabbccddeeff"
 # previous_server_secret = "ffeeddccbbaa99887766554433221100"
-secret_rotation_interval_secs = 0
+secret_rotation_interval_secs = 2592000
 
 [rrl]
 # Enable UDP response-rate limiting. Default: true.
@@ -365,7 +374,7 @@ notify_sources = ["192.0.2.53"]
 # zone itself on the public DNS query interface.
 #serve_catalog_zone = false
 # Default: false. When true, accept optional per-member transfer metadata from
-# primaries.ext.<member>, _udns-xfr.<member>, and _udns-notify.<member> catalog
+# primaries.ext.<member>, _udns-xfr.ext.<member>, and _udns-notify.ext.<member> catalog
 # records. This carries addresses, ports, transport, server_name, TSIG key
 # names, and NOTIFY sources only; TSIG secrets and TLS trust material stay in
 # static config or the reloadable secret store.

@@ -226,7 +226,7 @@ fn do_nodata_for_existing_name_includes_nsec_and_covering_rrsig() {
                 DomainName::from_absolute_str("www.example.test.").unwrap(),
                 RecordType::Nsec as u16,
                 1,
-                300,
+                900,
                 vec![nsec_rdata("www.example.test.")],
             ),
             Rrset::new(
@@ -258,6 +258,25 @@ fn do_nodata_for_existing_name_includes_nsec_and_covering_rrsig() {
         ]
     );
     assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    assert_eq!(
+        response_authority_ttls(&response, RecordType::Nsec as u16),
+        vec![300],
+        "RFC 9077 requires NSEC TTL=min(SOA TTL, SOA MINIMUM)"
+    );
+
+    let direct_nsec = store_response(
+        &query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Nsec as u16,
+            1,
+        ),
+        &store,
+    );
+    assert_eq!(
+        response_answer_ttls(&direct_nsec, RecordType::Nsec as u16),
+        vec![900],
+        "the negative-response clamp must not rewrite the stored RRset TTL"
+    );
 }
 
 #[test]
@@ -638,6 +657,11 @@ fn do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs() {
         &["example.test.", "anchor.example.test."],
         "example.test.",
     ));
+    for rrset in &mut rrsets {
+        if rrset.rr_type == RecordType::Nsec3 as u16 {
+            rrset.ttl = 900;
+        }
+    }
     let store = ZoneStore::new();
     store.insert_snapshot(ZoneSnapshot::active(
         DomainName::from_absolute_str("example.test.").unwrap(),
@@ -664,6 +688,12 @@ fn do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs() {
         ]
     );
     assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    assert!(
+        response_authority_ttls(&response, RecordType::Nsec3 as u16)
+            .iter()
+            .all(|ttl| *ttl == 300),
+        "RFC 9077 requires NSEC3 TTL=min(SOA TTL, SOA MINIMUM)"
+    );
 }
 
 #[test]
