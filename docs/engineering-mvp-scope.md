@@ -32,8 +32,10 @@ The bounded local preflight must not claim completed long-running evidence
 unless release artifacts exist. The following are release closeout or formal
 SRS acceptance activities tracked in `docs/mvp-gap-register.md`:
 
-- 24-hour fuzz campaigns per parser target.
-- 30-day soak execution.
+- Several independent 24-hour fuzz campaigns across the release-selected
+  parser and untrusted-input targets.
+- Risk-based extended-runtime/resource evidence; no fixed 30-day campaign is
+  required.
 - Reference Hardware/Profile benchmark campaigns.
 - Production-depth `info` verbosity profiling under release traffic.
 - External operator acceptance.

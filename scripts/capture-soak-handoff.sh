@@ -5,10 +5,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_dir="${BORONDNS_SOAK_HANDOFF_DIR:-$repo_root/target/evidence/soak-handoff-$timestamp}"
 
-duration_days="${BORONDNS_SOAK_DURATION_DAYS:-30}"
-baseline_hour="${BORONDNS_SOAK_BASELINE_HOUR:-24}"
+duration_days="${BORONDNS_SOAK_DURATION_DAYS:-1}"
+baseline_hour="${BORONDNS_SOAK_BASELINE_HOUR:-1}"
 memory_growth_threshold_pct="${BORONDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT:-10}"
-snapshot_cadence="${BORONDNS_SOAK_SNAPSHOT_CADENCE:-weekly}"
+snapshot_cadence="${BORONDNS_SOAK_SNAPSHOT_CADENCE:-hourly}"
 
 require_positive_integer() {
     local name="$1"
@@ -34,11 +34,11 @@ EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
-BDS-NFR-REL-003	soak-report-template.md; rss-samples.tsv; weekly-summary-template.md	setup-ready	run 30-day soak, record 24-hour baseline and day-30 RSS, compute growth percentage
+BDS-NFR-REL-003	soak-report-template.md; rss-samples.tsv; weekly-summary-template.md	setup-ready	declare duration, warm-up baseline, sampling cadence, and threshold; classify the post-warm-up RSS trend
 BDS-NFR-REL-006	soak-report-template.md; operational-events.tsv	setup-ready	record overload, recovery, restart, and primary-failure observations during soak
 BDS-NFR-RES-001	rss-samples.tsv; fd-samples.tsv	setup-ready	record process RSS and file-descriptor samples throughout the soak
 BDS-NFR-OBS-001	metrics-samples.tsv; weekly-summary-template.md	setup-ready	record readiness, zone-state, transfer, query, RCODE, and latency metrics
-BDS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach completed soak report to formal SRS MVP release evidence before final SRS acceptance
+BDS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach selected extended-runtime evidence to the public-beta release review
 BDS-VER-010	soak-report-template.md	setup-ready	publish completed soak result and evidence paths in release notes
 BDS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
 EOF
@@ -60,10 +60,10 @@ timestamp_utc	elapsed_hours	event_type	severity	requirement_id	description	opera
 EOF
 
 cat >"$evidence_dir/weekly-summary-template.md" <<'EOF'
-# BoronDNS Soak Weekly Summary
+# BoronDNS Extended-Runtime Summary
 
 - Soak evidence directory:
-- Week number:
+- Summary number:
 - Covered UTC interval:
 - Commit:
 - Binary identity:
@@ -104,7 +104,7 @@ cat >"$evidence_dir/operator-signoff.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/soak-report-template.md" <<EOF
-# BoronDNS 30-Day Soak Report
+# BoronDNS Extended-Runtime Report
 
 ## Scope
 
@@ -140,21 +140,23 @@ the values with Prometheus, systemd/cgroup accounting, container runtime stats,
 or host tools, but the completed report must name the source used for each
 metric.
 
-For BDS-NFR-REL-003, compute:
+For BDS-NFR-REL-003, compute final-versus-post-warm-up growth:
 
 \`\`\`
-growth_pct = ((rss_day_30_bytes - rss_hour_${baseline_hour}_bytes) / rss_hour_${baseline_hour}_bytes) * 100
+growth_pct = ((rss_final_bytes - rss_hour_${baseline_hour}_bytes) / rss_hour_${baseline_hour}_bytes) * 100
 \`\`\`
 
-The acceptance threshold is \`growth_pct <= $memory_growth_threshold_pct\` for
-stable zone size and stable client-source-prefix distribution. If the workload
-or zone corpus changes materially during the soak, record the deviation and do
-not claim unqualified BDS-NFR-REL-003 evidence.
+The run's declared threshold is \`growth_pct <= $memory_growth_threshold_pct\`
+for stable zone size and stable client-source-prefix distribution. Also inspect
+the complete post-warm-up series for a continuing trend: a final sample below
+the threshold does not excuse monotonic unbounded growth. If the workload or
+zone corpus changes materially, record the deviation and do not claim
+unqualified BDS-NFR-REL-003 evidence.
 
 ## Results
 
 - Hour-$baseline_hour RSS bytes:
-- Day-$duration_days RSS bytes:
+- Final RSS bytes:
 - Growth percent:
 - Threshold pass/fail:
 - Readiness anomalies:
@@ -183,11 +185,11 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the release-candidate setup artifact for later
-release/operations execution of the long-duration soak. It does not claim that
-the 30-day soak has run. It provides the report template, sample TSV schemas,
+This directory is the release-candidate setup artifact for a declared-duration
+extended-runtime run. It does not claim that any run has completed. It provides
+the report template, sample TSV schemas,
 requirement traceability, environment values, and sign-off template needed for
-the later BDS-VER-008 acceptance run.
+the later BDS-VER-008 public-beta review.
 
 Run configuration:
 

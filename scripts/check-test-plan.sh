@@ -39,8 +39,8 @@ for method in \
     "Interoperability test" \
     "Soak test" \
     "Operational test" \
-    "Security audit" \
-    "External operator acceptance"; do
+    "Optional independent security review" \
+    "Optional external operator review"; do
     require_text "$method"
 done
 

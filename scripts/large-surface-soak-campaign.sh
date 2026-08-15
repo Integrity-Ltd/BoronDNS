@@ -25,7 +25,7 @@ Options:
   --host HOST              SSH target; repeatable. Defaults to borondns-1 oxidegun-1.
   --remote-repo DIR        Remote repo root. Default: /home/codex/borondns-fuzz.
   --remote-evidence DIR    Remote evidence root. Default: REMOTE_REPO/target/evidence/large-surface-soak-ID.
-  --duration SECONDS       Soak duration. Default: 2592000 (30 days).
+  --duration SECONDS       Soak duration. Default: 86400 (24 hours).
   --scenario NAME          Scenario to include; repeatable. Defaults to runner default set.
   --scenario-timeout SECS  Per-scenario timeout. Default: 1800.
   --scenario-kill-after SECS
@@ -72,7 +72,7 @@ campaign_id="$timestamp"
 evidence_dir=""
 remote_repo="${BORONDNS_LARGE_SOAK_REMOTE_REPO:-/home/codex/borondns-fuzz}"
 remote_evidence="${BORONDNS_LARGE_SOAK_REMOTE_EVIDENCE:-}"
-duration="${BORONDNS_LARGE_SOAK_DURATION_SECONDS:-2592000}"
+duration="${BORONDNS_LARGE_SOAK_DURATION_SECONDS:-86400}"
 duration_seconds=""
 scenario_timeout="${BORONDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
 scenario_timeout_seconds=""

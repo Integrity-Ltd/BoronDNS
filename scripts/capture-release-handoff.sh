@@ -21,13 +21,13 @@ EOF
 
 cat >"$evidence_dir/evidence-attachment-map.tsv" <<'EOF'
 requirement_id	evidence_category	setup_artifact	completed_release_artifact	required_release_note_section	local_mvp_status	later_release_ops_action
-BDS-VER-008	formal SRS MVP acceptance gate	release-readiness-checklist.md	completed release checklist and external operator acceptance	Verification Responsibility Sign-off	setup-ready	complete every gate row before claiming formal SRS acceptance
+BDS-VER-008	1.0 public-beta acceptance gate	release-readiness-checklist.md	completed release checklist and optional external operator review	Verification Responsibility Sign-off	setup-ready	complete every required gate row before claiming public-beta acceptance
 BDS-VER-010	release publication	release-notes-fill-plan.md	completed release notes checked by scripts/check-release-notes.sh	all release-note sections	setup-ready	publish evidence pointers and requirement outcomes
 BDS-VER-011	cadence governance	scheduled-ci-plan.md	CI/scheduler run logs or release engineer manual run record	Release/Operations Handoff	setup-ready	record continuous, periodic, and gate execution ownership
 BDS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table and perf/resource comparison output	Regression Delta	setup-ready	triage every functional or performance/resource regression
 BDS-VER-013	interop version retention	evidence-attachment-map.tsv	interop-primary-versions/INDEX.tsv and referenced primary-version files	Interop Primary Versions	setup-ready	attach every retained real-primary version artifact
 BDS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC compliance table with release evidence pointers	RFC Compliance Assertions	setup-ready	copy and update docs/rfc-compliance-assertions.md posture
-BDS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed responsibility and external-operator rows	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
+BDS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed required project responsibility rows and any optional external review	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
 BDS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed interface baseline diff and release-note change classification	Interface Changes	setup-ready	compare current interface baseline against previous accepted release and classify additions deprecations and breaking changes
 BDS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
 BDS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
@@ -80,7 +80,7 @@ Architecture Owner	$architecture_owner	Release verification result review	yes	Ve
 Release engineer	$release_owner	Gate execution, evidence snapshot, release notes, signing handoff	yes	Verification Responsibility Sign-off
 Test/verification owner	$release_owner	Verification evidence completeness and regression triage	yes	Verification Responsibility Sign-off
 Operations owner	$release_owner	Long-running fuzz, benchmark, soak scheduling and completion	yes	Long-Running Evidence Handoff
-External operator	$external_operator	Production-representative formal SRS MVP acceptance scope	yes	Verification Responsibility Sign-off
+External operator	$external_operator	Optional production-representative review	no	Verification Responsibility Sign-off
 Security reviewer	unassigned-security-reviewer	Security policy review, dependency audit review, vulnerability exceptions	yes	Security and Dependency Review
 EOF
 
@@ -103,7 +103,7 @@ scheduled jobs have run.
 - Weekly during release acceptance:
   - `scripts/fuzz-campaign.sh --duration 86400`
   - Reference Hardware/Profile benchmark execution using `benchmark-handoff/`
-  - soak weekly summary while the 30-day soak is active
+  - extended-runtime resource summaries at the cadence declared for the run
 - Monthly:
   - BIND, NSD, and Knot interoperability/differential comparison refresh.
 - Required retained evidence:
@@ -176,7 +176,7 @@ Required evidence pointer sources:
 - `reproducible-build-handoff/`
 - `release-handoff/appendix-c5-decision-register.tsv`
 - `benchmark-handoff/` or completed benchmark artifacts
-- `soak-handoff/` or completed 30-day soak artifacts
+- `soak-handoff/` or completed release-selected extended-runtime artifacts
 - `fuzz-campaign/campaign-summary.tsv` or delegated fuzz handoff
 - `interop-primary-versions/INDEX.tsv`
 - `release-handoff/`
@@ -205,7 +205,7 @@ cat >"$evidence_dir/external-operator-acceptance.md" <<EOF
 - Long-running evidence delegated to operator:
   - fuzz campaign:
   - Reference Hardware/Profile benchmark:
-  - 30-day soak:
+  - release-selected extended-runtime evidence:
 - Accepted failed/deferred requirements:
 - Operational restrictions:
 - Signature:
@@ -234,7 +234,8 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] Long-running fuzz evidence completed or delegated with owner and path.
 - [ ] Reference Hardware/Profile benchmark evidence completed or delegated with
       owner and path.
-- [ ] 30-day soak evidence completed or delegated with owner and path.
+- [ ] Several independent 24-hour fuzz/resource rounds and any selected
+      extended-runtime evidence completed or delegated with owner and path.
 - [ ] Regression delta reviewed and triaged.
 - [ ] RFC compliance assertions copied and updated with release evidence paths.
 - [ ] Appendix C.5 pending decisions resolved or explicitly deferred with owner

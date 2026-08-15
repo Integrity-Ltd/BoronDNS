@@ -153,7 +153,7 @@ for handoff_field in \
     "Fuzz campaign handoff or completed artifacts" \
     "Info verbosity profile handoff or completed artifacts" \
     "Reference Hardware/Profile benchmark handoff or completed artifacts" \
-    "Soak handoff or completed 30-day report" \
+    "Extended-runtime evidence (fuzz/resource rounds and any optional soak)" \
     "Release/operations owner for delegated long-running evidence" \
     "Deferred execution rationale"; do
     require_text "$handoff_field"

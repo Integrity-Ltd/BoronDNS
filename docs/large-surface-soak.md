@@ -118,15 +118,14 @@ tree.
 Create only a manifest:
 
 ```sh
-scripts/large-surface-soak-campaign.sh plan --duration 2592000
+scripts/large-surface-soak-campaign.sh plan --duration 86400
 ```
 
-Install prerequisites and launch the full 30-day campaign on the default two
-hosts:
+Install prerequisites and launch one 24-hour campaign on the default two hosts:
 
 ```sh
 scripts/large-surface-soak-campaign.sh launch \
-  --duration 2592000 \
+  --duration 86400 \
   --install-prereqs
 ```
 
@@ -424,8 +423,9 @@ that the implemented interop and protocol surfaces continue to pass under
 repeated setup, transfer, catalog mutation, query validation, and teardown.
 
 It is intentionally not the same as a single resident BoronDNS process serving
-one stable workload for 30 days. Treat the single-process RSS/FD growth soak as
-a companion lane when closing the strict BDS-NFR-REL-003 memory-growth target.
+one stable workload. Treat a declared-duration single-process RSS/FD run as an
+optional companion lane when investigating the BDS-NFR-REL-003 memory-growth
+property. Neither tool imposes a fixed 30-day release prerequisite.
 
 Scenario self-skips are recorded as `skipped` by default because some XoT
 coverage depends on the primary package in the host/container distribution. Use

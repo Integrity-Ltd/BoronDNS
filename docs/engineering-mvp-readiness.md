@@ -41,12 +41,13 @@ instead of executing them.
 ## Explicit Non-Goals
 
 Release-candidate readiness is not full SRS `BDS-VER-008` release acceptance.
-It does not claim completed 30-day soak execution, signed release artifact
+It does not claim completed release-selected extended-runtime evidence, signed release artifact
 production, package/image reproducibility, external independent-builder
 sign-off, or external operator acceptance until those artifacts exist. The
 v0.2.0 static-binary reproducible-build comparison is retained in
 `docs/reproducible-build-v0.2.0.md`. Completed benchmark and 24-hour fuzz
-evidence may be retained and cited by the release, but any missing release
+evidence may be retained and cited by the release, including the planned
+several independent 24-hour rounds, but any missing release
 artifact must remain explicit in `docs/mvp-gap-register.md` and the release
 notes.
 

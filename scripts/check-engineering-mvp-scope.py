@@ -23,8 +23,8 @@ REQUIRED_SCOPE_PHRASES = [
     "must not claim completed long-running evidence unless release artifacts exist",
     "Implemented post-Alpha protocol slices listed in",
     "not removed from release-candidate scope merely because they exceed a minimal static-zone secondary-server trim",
-    "24-hour fuzz campaigns",
-    "30-day soak execution",
+    "Several independent 24-hour fuzz campaigns",
+    "no fixed 30-day campaign is required",
     "Reference Hardware/Profile benchmark campaigns",
     "not release-candidate evidence until the generated artifacts are retained and cited",
 ]

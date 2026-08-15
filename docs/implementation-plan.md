@@ -14,17 +14,38 @@ The project tracks two related but separate targets:
   smoke/runtime evidence, checked traceability, retained benchmark and fuzz
   evidence where available, and the implemented post-Alpha feature slices
   retained by `docs/implemented-feature-scope.md`.
-- **SRS acceptance execution**: the later `BDS-VER-008` compliance gate run,
-  including long-duration campaigns, full release evidence, and external
-  operator acceptance.
+- **1.0 public-beta acceptance**: the `BDS-VER-008` gate, including the
+  selected release evidence, several independent 24-hour fuzz rounds, signed
+  artifacts, and explicit documentation of any accepted beta limitation.
 
 The release candidate must not claim completed long-running evidence unless the
-release artifacts exist. Handoff and runbook artifacts for long fuzz campaigns,
-Reference Hardware/Profile benchmarks, 30-day soak, production-depth logging
-profiles, external operator acceptance, independent reproducible-build
+release artifacts exist. Handoff and runbook artifacts for fuzz campaigns,
+optional extended-runtime tests, Reference Hardware/Profile benchmarks,
+production-depth logging profiles, external operator review, independent reproducible-build
 comparison, and signed release artifacts may remain in the repository, but they
 are not release evidence until the generated artifacts are retained and cited by
 the gap register, release notes, or verification ledger.
+
+## Current 0.9.1 to 1.0 Sequence
+
+The current source version remains 0.9.0 while validation is in progress. The
+planned release sequence is deliberately short:
+
+1. Run several independent 24-hour fuzz rounds on the selected candidate,
+   including resource sampling and targeted follow-up for any changed or weak
+   input family.
+2. Resolve every release-blocking finding and rerun the affected focused and
+   continuous checks.
+3. If the candidate is clean, publish exactly one additional prerelease,
+   `0.9.1`, as the final public validation build before version 1.
+4. Confirm the accepted 0.9.1 state with the selected fuzz, interoperability,
+   packaging, signing, documentation, and release checks.
+5. Publish `1.0.0` as a public beta if no blocker remains and every accepted
+   limitation is stated in the release notes and operator documentation.
+
+The plan does not require a 30-day soak or a sequence of further prereleases.
+Optional longer soaks remain engineering tools. A blocker discovered after
+0.9.1 requires a new release decision; it does not silently weaken the 1.0 gate.
 
 The detailed release-candidate boundary is owned by
 `docs/engineering-mvp-scope.md` and checked by the legacy-named

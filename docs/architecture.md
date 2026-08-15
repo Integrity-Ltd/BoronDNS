@@ -280,12 +280,12 @@ the generated release notes. A workflow implementation is not itself release
 evidence: each accepted release must still retain and independently verify its
 actual bundles.
 
-No formal SRS MVP or public release artifact may be treated as accepted unless
+No public release artifact may be treated as accepted unless
 it is signed and has verification instructions in the release notes or artifact
 manifest. Unsigned internal builds must be labelled as unsigned/internal.
 
 Public signing-key material is not committed at this stage because the preferred
-formal SRS MVP path is keyless Sigstore. If detached OpenPGP signing is used
+public-release path is keyless Sigstore. If detached OpenPGP signing is used
 later, the public key or fingerprint must be published in `SECURITY.md` or an
 equivalent release security document before the release is accepted.
 
@@ -300,14 +300,14 @@ as follows:
 | Periodic methods | CI scheduler or manual release engineer |
 | Gate methods | Release engineer |
 | Release verification review | Architecture Owner |
-| External operator acceptance | External operator named in formal SRS MVP release notes |
-| Security audit | Third-party security specialist procured for the release scope |
+| Optional external operator review | External operator named in release notes when available |
+| Optional independent security review | Third-party security specialist when procured for a defined scope |
 
-For v0.1 through the formal SRS MVP release gate, the Architecture Owner role is
+For v0.1 through the 1.0 public-beta release gate, the Architecture Owner role is
 held by DT. The release engineer role is a project release role and may be held
 by DT until explicitly delegated. A single person may hold multiple roles, but
 accountability for each role remains separate.
 
 Unfilled, delegated, or rotating roles must be recorded in the release notes.
-Any third-party security audit engagement must be recorded in release evidence
+Any third-party security audit engagement should be recorded in release evidence
 with scope, date, and remediation outcome.

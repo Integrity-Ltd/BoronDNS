@@ -71,12 +71,12 @@ remaining in this table as aspiration.
 | Full DNSSEC negative proof synthesis | Not accepted as the code boundary. | BoronDNS passively serves transferred DNSSEC RRsets and selected transferred NSEC/NSEC3 denial proofs. It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material. |
 | Full Prometheus metric catalogue | Partially retained as implemented operational metrics. | The implemented metrics are in scope; release-grade retained evidence and production-depth profiling remain acceptance work. Catalog-specific metrics are narrowed to `borondns_catalog_member_info` plus ordinary zone/transfer metrics. Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend. |
 | Packed zone store / pre-baked response cache | Deferred. | Current code uses memory-resident zone snapshots. The response-cache candidate counters only measure whether a future cache might be useful. |
-| 30-day soak test | Deferred from Engineering MVP execution. | Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution. |
+| Fixed 30-day soak test | Accepted as over-prescriptive and removed from the current release gate. | Duration-neutral resource/soak tooling remains available; 1.0 uses several independent 24-hour fuzz/resource rounds plus targeted evidence selected by changed risk. |
 | Full three-primary interop matrix | Deferred from Engineering MVP execution. | Focused BIND, Knot, and PowerDNS/PostgreSQL paths exist where implemented features need current evidence; the formal all-primary BDS-VER-003 matrix remains release acceptance. |
 | Exact performance MUSTs | Deferred from Engineering MVP execution. | Local smoke and large-catalog benchmarks are tuning evidence; Reference Hardware/Profile conformance remains release acceptance. |
 | Release signing | Deferred from Engineering MVP execution. | Release-signing mechanism and verification wording are documented, but signed artifact evidence is a release gate. |
 | CVE governance | Retained as documentation/process scope, not protocol-code scope. | `SECURITY.md` and SRS policy text record vulnerability handling and CVE coordination; release-specific audit and exception evidence remains release acceptance. |
-| External operator acceptance | Deferred from Engineering MVP execution. | Operator guide and installer artifacts can be reviewed now, but external operator sign-off remains a formal release gate. |
+| External operator acceptance | Optional supporting evidence. | Operator guide and installer artifacts can be reviewed independently, but third-party sign-off is not a prerequisite for 0.9.1 or the 1.0 public beta. |
 
 The exact retained implementation slices are owned by
 `docs/implemented-feature-scope.md`. This scope-trim boundary is code-checked
@@ -88,6 +88,25 @@ index, Engineering MVP scope, implementation plan, gap register, and
 verification ledger to continue naming those families as implemented
 Engineering MVP scope. If a feature is removed from code, the scope documents
 must change in the same patch.
+
+## 2026-08-15 Code and Release Alignment Review
+
+The current cleanup compared the complete checked-in SRS requirement registry
+with the implementation-facing traceability, configuration, verification, and
+release documents. Automated checks enumerate 425 SRS requirement identifiers
+and 274 functional requirement references. The review found and corrected two
+missing configuration traceability entries (`BDS-IF-CONF-019` and
+`BDS-IF-CONF-020`), removed a fixed 30-day soak and a nonexistent runtime
+memory-growth parameter, and replaced unsupported vulnerability-response and
+maintenance promises with the lightweight policy in `SECURITY.md`.
+
+The active release plan is: keep the source version at 0.9.0 during validation;
+run several independent 24-hour fuzz rounds; if the selected candidate is
+acceptable, publish exactly one additional prerelease, 0.9.1; then publish
+1.0.0 as a public beta if no release blocker remains. Optional longer soaks,
+external operator review, and independent security review remain useful
+supporting evidence but are not mandatory gates. The source version is not
+bumped by this documentation review.
 
 The main SRS hygiene regressions from this review are also checked by
 `scripts/check-srs-hygiene.py`: old namespace artifacts, suffixed requirement
@@ -107,7 +126,7 @@ AF_XDP backend is test-tool scope only; BoronDNS server XDP/eBPF remains a
 deferred unsafe-boundary track.
 
 Not every review-suggested defer item has a code-backed retained slice.
-`30-day soak test`, `CVE governance`, and `External operator acceptance` are
+`extended-runtime evidence`, `CVE governance`, and `External operator review` are
 process/evidence boundaries only: they remain documented as later
 release/operations work, but they do not correspond to BoronDNS server protocol
 code that should appear in `docs/implemented-feature-scope.md`.

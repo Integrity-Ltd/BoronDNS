@@ -3,8 +3,8 @@
 ## BoronDNS-Secondary
 
 **Document Version:** v0.9.1
-**Date:** 26 May 2026
-**Status:** Current checked-in requirements baseline for Engineering MVP; not formal BDS-VER-008 release-acceptance evidence
+**Date:** 15 August 2026
+**Status:** Current checked-in requirements baseline for the 0.9.1 validation release and planned 1.0.0 public beta; not a claim that every BDS-VER-008 release artifact already exists
 
 ---
 
@@ -15,7 +15,7 @@
 | Project | BoronDNS-Secondary |
 | Document | Software Requirements Specification (SRS) |
 | Version | v0.9.1 |
-| Date | 26 May 2026 |
+| Date | 15 August 2026 |
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
@@ -38,6 +38,7 @@
 | v0.9.1 alignment note | 13 Jun 2026 | DT | Source-alignment cleanup for the v0.2.0 preparation branch. The document version and requirement identifiers stay unchanged, but §4.20, §5.3, and §6.2 now describe the implemented reloadable filesystem `secret_store`, split catalog/member transfer configuration, opt-in catalog member transfer extensions, and the private-address-only legacy unsigned member AXFR policy. |
 | v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
 | v0.9.1 large-zone IXFR note | 13 Aug 2026 | Codex | Adds BDS-IF-CONF-019 for the externally visible compact/sharded/auto zone-publication policy used to keep small-zone query behavior while allowing delta-sensitive publication of large-zone IXFR. The policy is explicitly performance-only and does not weaken atomic refresh or DNS correctness requirements. |
+| v0.9.1 release-alignment review | 15 Aug 2026 | Codex | Reviews the complete current SRS against the implementation and active documentation after the RFC-compliance and large-zone IXFR work. Adds the missing BDS-IF-CONF-020 traceability for RFC 5936 last-good-zone persistence; replaces the unavailable 30-day soak/configuration promise with risk-based bounded-runtime evidence; replaces fixed vulnerability-response and embargo promises with truthful public-beta intake requirements; and aligns the acceptance gate to several independent 24-hour fuzz rounds, one final 0.9.1 validation release, then a 1.0.0 public-beta decision. Requirement identifiers remain stable. |
 
 ---
 
@@ -2541,12 +2542,12 @@ After the grace period expires, the server MUST exit regardless of remaining in-
 *Source.* BDS-INV-004.
 *Verification.* Forced-kill tests followed by restart verification; filesystem state inspection across crash-restart cycles.
 
-**BDS-NFR-REL-003.** Steady-state memory consumption MUST be bounded across extended operation. Specifically: on the Reference Hardware Profile, under sustained workload at the throughput level of BDS-NFR-PERF-002 (50% of capacity) with zones of stable size and a stable distribution of client source IPs, the server's resident set size (RSS) at the 30-day mark of continuous runtime MUST be within a configurable percentage threshold (parameter `reliability.memory_growth_threshold_pct`, default 10%) of the RSS measured at the 24-hour mark of the same run. The 24-hour mark is taken as the steady-state baseline; the period before is allowed for warm-up (RRL state population, connection-pool growth, cache fills).
+**BDS-NFR-REL-003.** Steady-state memory consumption MUST remain bounded across extended operation. Under a stable workload, stable zone sizes, and a stable distribution of client source IPs, the server MUST NOT exhibit continuing memory growth attributable to its own data structures after an identified warm-up period. Release verification MUST declare the workload, warm-up point, observation duration, sampling cadence, and acceptable growth threshold before execution; it MUST retain the RSS samples and classify any continuing trend rather than treating a short run as proof of indefinite stability.
 
-The server MUST NOT exhibit unbounded memory growth attributable to its own data structures (RRL state, connection-pool entries, in-flight query tracking) under the stable-workload conditions above.
+The SRS does not prescribe a 30-day duration or a runtime configuration parameter for this verification policy. A release may combine multi-day soak evidence, repeated 24-hour fuzz/resource campaigns, allocator-stress tests, and targeted load scenarios according to the risks changed in that release. Longer optional campaigns remain useful engineering evidence but are not automatically a release prerequisite.
 *Source.* Operational requirement for long-running infrastructure services.
 *Note.* Memory growth caused by external factors (a primary delivering progressively larger zones across the soak period, a steadily growing population of distinct client source prefixes) is not in scope; the requirement isolates growth attributable to the server's internal state management.
-*Verification.* 30-day soak testing per BDS-NFR-REL-003 (as part of the formal SRS MVP release acceptance defined by BDS-VER-008) on the Reference Hardware Profile with stable workload; RSS measurements at 24-hour and 30-day marks; computation of the growth percentage against the configured threshold.
+*Verification.* Risk-based extended-runtime testing on the Reference Hardware Profile or a documented substitute; comparison of retained post-warm-up RSS samples; allocator-exhaustion and stable-workload checks; review of fuzz and soak resource evidence for a continuing growth trend.
 
 **BDS-NFR-REL-004.** Network errors on inbound or outbound connections — malformed packets, mid-transfer connection drops, kernel buffer exhaustion, transient `EAGAIN`/`EWOULDBLOCK` conditions, ICMP unreachables, peer TCP RST, TLS handshake-level failures on XoT — MUST NOT cause process termination. Errors MUST be handled per the requirements of §4.6, §4.7, §4.8, §4.10, and §4.12; the process continues serving subsequent traffic. File-descriptor exhaustion is prevented structurally by BDS-NFR-RES-004 (startup `rlimit` check); should it occur despite that check (e.g., due to FD leak), accept failures MUST be logged at error level and MUST NOT terminate the process.
 *Source.* Operational requirement.
@@ -2609,15 +2610,11 @@ The area code **SEC** is allocated.
 *Source.* Project cryptographic-dependency policy; standard supply-chain security practice.
 *Verification.* Dependency-gate execution observed in local continuous logs, CI logs, or release-gate evidence; review of advisories at each release.
 
-**BDS-NFR-SEC-007.** The project MUST maintain a documented vulnerability disclosure policy specifying:
-- a reporting contact (`security@` email address or equivalent secure reporting channel);
-- the expected response timeline: initial acknowledgement within 72 hours; fix or mitigation within a configurable target (parameter at the project policy level, default 30 days for severity High or Critical findings, 90 days for severity Medium or Low);
-- the coordinated disclosure window during which the reporter is asked to refrain from public disclosure (project policy default 90 days, subject to negotiation with reporter);
-- the CVE assignment process (the project is a CVE Numbering Authority candidate, or coordinates via a recognised CNA, or via MITRE direct).
+**BDS-NFR-SEC-007.** The project MUST publish a `SECURITY.md` vulnerability-intake policy in the primary repository and reference it from the README. The policy MUST identify a private reporting contact; describe the current, superseded, prerelease, development, and internal-build maintenance posture; define the report scope; distinguish vulnerability intake from a support contract; state whether response, remediation, hotfix, backport, disclosure, or CVE commitments exist; and explain how report-specific confidentiality may be agreed.
 
-The policy MUST be referenced from the project's primary repository README and published in a `SECURITY.md` file at the repository root. The policy MUST be reviewed at each release.
-*Source.* Standard practice for production-grade infrastructure software; pre-emptive provision for the vulnerability handling lifecycle.
-*Verification.* Repository inspection at release time; policy completeness check against the enumerated elements.
+The policy MUST NOT claim a response time, remediation time, maintained release branch, default embargo, or other service commitment unless that commitment has been explicitly approved and operationally resourced. The BoronDNS 1.0 public-beta posture requires no fixed response or remediation deadline, no default disclosure window, no hotfix or backport promise, and no CVE promise. The policy MUST be reviewed for each public release and updated when the actual maintenance model changes.
+*Source.* Truthful vulnerability intake for publicly distributed infrastructure software without representing unavailable support capacity.
+*Verification.* Repository inspection at release time; README-link check; comparison of policy statements with the release and maintenance model approved in the project decision register.
 
 ### Security additions from the v0.8 CIA threat-model analysis
 
@@ -2717,8 +2714,8 @@ Removal or semantic change of any element of these interfaces requires a major-v
 - the vulnerability-disclosure contact per BDS-NFR-SEC-007.
 
 The Guide MUST be updated at each release to reflect introduced features and changed defaults.
-*Source.* Operational deliverable necessary for external operator acceptance per BDS-VER-008.
-*Verification.* Document review at each release; external operator acceptance per §7.1.
+*Source.* Operational deliverable necessary for safe public-beta evaluation and deployment.
+*Verification.* Document review at each release; optional external operator review per §7.1 when available.
 
 ## 5.5 Portability
 
@@ -3368,13 +3365,13 @@ The following methods are used, individually or in combination, to verify the re
 
 **Performance test.** Sustained-load benchmarking, latency-distribution measurement, capacity-scaling tests. Used for §5.1 (PERF) and the capacity-related requirements of §5.7 (RES). Reproducibility requires execution on the Reference Hardware Profile of Appendix E.2 against the Reference Query Mix of Appendix E.3 for normative conformance assertions.
 
-**Soak test.** Long-duration runtime tests (days to weeks) under realistic workload, measuring memory consumption, file-descriptor stability, and detection of slow leaks or accumulating state. Used for BDS-NFR-REL-003 and supporting verification for §5.2 (REL).
+**Soak test.** Extended runtime testing under a declared stable workload, measuring memory consumption, file-descriptor stability, and slow leaks or accumulating state. Duration is selected from the release risk and recorded with the evidence; no fixed 30-day duration is implied. Used for BDS-NFR-REL-003 and supporting verification for §5.2 (REL).
 
 **Operational test.** Deployment in representative environments (containers, virtual machines), exercising startup, signal handling, configuration parsing, and orchestrator integration. Used for §5.5 (PORT), §6.1, §6.2, §6.4, §6.5, §6.6.
 
 **Security audit.** Periodic third-party review of the codebase, dependency set, and operational posture by security specialists external to the project team. Recommended at major release boundaries and following any BDS-NFR-SEC-007 disclosure. Findings are tracked under the vulnerability disclosure policy of BDS-NFR-SEC-007; remediation actions are recorded in release notes.
 
-**External operator acceptance.** Independent deployment and verification by operators outside the project team. Used during formal SRS MVP release testing and as ongoing post-release validation per BDS-VER-008; constitutes the highest-confidence form of operational verification because it exercises the deployment guide, the configuration interface, and the operational interfaces under conditions the project team did not design.
+**External operator review.** Optional independent deployment and verification by operators outside the project team. It is valuable supporting evidence because it exercises the deployment guide, configuration interface, and operational interfaces under conditions the project team did not design, but it is not a prerequisite for the 0.9.1 validation release or the 1.0.0 public beta.
 
 **BDS-VER-001.** Every requirement in §3 through §6 carries a *Verification* field naming the method or methods by which it is verified. These named methods MUST be drawn exclusively from the catalogue enumerated in §7.1 above (Inspection, Static analysis, Unit test, Property-based test, Integration test, Conformance test, Differential test, Interoperability test, Fuzz test, Performance test, Soak test, Operational test, Security audit, External operator acceptance). Where a requirement's *Verification* field uses informal phrasing (e.g., "code review", "endpoint inspection"), the phrasing MUST be mappable to one of the named methods; ambiguous mappings are an SRS defect requiring revision. The catalogue is the single source of truth for verification method nomenclature; ad-hoc method names introduced in §3-§6 *Verification* fields MUST NOT be used.
 *Source.* SRS internal consistency; foundation for the Test Plan's method-by-method test harness organisation.
@@ -3397,7 +3394,7 @@ A release with any BDS-FR, BDS-NFR, BDS-IF, BDS-INV, or BDS-NEG requirement mark
 **BDS-VER-011.** Verification methods are classified by execution cadence into three categories:
 - **Continuous** — executed by the active continuous gate for the project stage, with results being build-blocking for accepted changes. During the private-repository Engineering MVP profile this gate is the local `scripts/check.sh` command; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record must cover the accepted commit. Continuous methods comprise: Static analysis, Unit test, Property-based test where present, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per BDS-NFR-SEC-006).
 - **Periodic** — executed on a documented schedule independently of commits during an active release-acceptance cycle, or earlier only when the release plan explicitly promotes the run. Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per BDS-NFR-SEC-002, scheduled at least weekly during release acceptance), Performance test (weekly performance-regression run per BDS-VER-012 during release acceptance), Soak test (continuous during the soak window, with weekly snapshot reports), Differential test against current primary releases (scheduled at least monthly during release acceptance).
-- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: full Interoperability matrix per BDS-VER-003 against all three primaries; full Performance test on Reference Hardware Profile of Appendix E.2 against Reference Query Mix of Appendix E.3 for all BDS-NFR-PERF requirements; 30-day Soak test on the Reference Hardware Profile for the formal SRS MVP release gate per BDS-NFR-REL-003; Security audit at major release boundaries; External operator acceptance for the formal SRS MVP release gate per BDS-VER-008.
+- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: the release-selected Interoperability matrix per BDS-VER-003; performance tests appropriate to the release claim; review of the risk-based BDS-NFR-REL-003 extended-runtime evidence; security review appropriate to changed attack surface; and the release decision recorded under BDS-VER-008.
 
 The classification of each requirement's verification (per its declared method per BDS-VER-001) into Continuous, Periodic, or Gate cadence MUST be recorded in the Test Plan. The active verification automation for the current project stage MUST enact the Continuous classification, and the Test Plan MUST document how Periodic and Gate classifications are scheduled, delegated, or retained when they are not yet automated. During the private-repository Engineering MVP profile, `scripts/check.sh` enacts the Continuous class; Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled. Inspection and Operational test fall under Gate cadence by default; Static analysis falls under Continuous; the remaining methods may be Continuous, Periodic, or Gate depending on the specific requirement and per-test cost.
 The periodic weekly/monthly cadences are release-acceptance-cycle obligations rather than standing private-repo calendar commitments.
@@ -3462,9 +3459,9 @@ The canonical register is `docs/rfc-compliance-assertions.md` for this repositor
 *Source.* Operator-facing transparency; resolution of v0.6 audit finding about RFC compliance assertion publication.
 *Verification.* Release-notes inspection confirming structured-list presence and content; cross-check that the canonical register and Operator Deployment Guide pointer are synchronized.
 
-## 7.4 Acceptance Criteria for Formal Milestones
+## 7.4 Acceptance Criteria for Release Milestones
 
-This SRS establishes Alpha and formal SRS MVP milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These formal gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's Engineering MVP may therefore include implemented post-Alpha slices while still tracking the full BDS-VER-008 release-acceptance evidence separately.
+This SRS establishes Alpha and 1.0 public-beta milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's Engineering MVP may therefore include implemented post-Alpha slices while still tracking the full BDS-VER-008 release-acceptance evidence separately.
 
 **BDS-VER-007 — Alpha Milestone.** The Alpha milestone is achieved when the following are demonstrably satisfied:
 
@@ -3480,22 +3477,22 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 *Source.* Formal Alpha acceptance target recorded in this SRS.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of BDS-VER-011 (Gate methods).
 
-**BDS-VER-008 — MVP Milestone.** This requirement defines the formal SRS MVP release gate. It is separate from the repository's bounded Engineering MVP profile used for local implementation readiness. The formal MVP milestone is achieved when the following are demonstrably satisfied:
+**BDS-VER-008 — Public-Beta Milestone.** This requirement defines the BoronDNS 1.0 public-beta release gate. It is separate from the repository's bounded local implementation-readiness profile. The milestone is achieved when the following are demonstrably satisfied or explicitly scoped as a documented public-beta limitation:
 
 - All requirements of §3 through §6 to their full normative content;
 - Interoperability per §7.2 with all three primaries (NSD, Knot DNS, BIND 9);
 - All BDS-NFR-PERF performance targets met under benchmarking on the Reference Hardware Profile of Appendix E.2 against the Reference Query Mix of Appendix E.3;
-- A 30-day soak test per BDS-NFR-REL-003 completed without anomaly on the Reference Hardware Profile;
-- Fuzz testing per BDS-NFR-SEC-002 executed for ≥ 24 hours per parser without finding;
+- Risk-based bounded-runtime evidence per BDS-NFR-REL-003 reviewed without an unexplained continuing resource-growth trend;
+- Several independent 24-hour fuzz rounds executed against the parser and untrusted-input targets selected by the release test plan, with findings resolved or explicitly recorded;
 - Dependency security audit per BDS-NFR-SEC-006 clean;
 - Vulnerability disclosure policy per BDS-NFR-SEC-007 published;
 - Test coverage targets per BDS-NFR-MAINT-007 met (70% overall, 85% for wire-format parsers);
-- Signed release artifacts per BDS-NFR-MAINT-008 produced for the formal SRS MVP release;
+- Signed release artifacts per BDS-NFR-MAINT-008 produced for the public release;
 - Documentation complete: this SRS, the Architecture Document, the Test Plan, and the Operator Deployment Guide (per BDS-NFR-MAINT-009);
-- External operator acceptance per §7.1 by at least one production-representative operator.
+- The exact accepted commit published once as the `0.9.1` validation release before the `1.0.0` public-beta decision, unless a newly discovered release blocker requires another project decision; no additional prerelease train is required by this SRS.
 
-*Source.* Formal SRS MVP release-acceptance target recorded in this SRS.
-*Verification.* Acceptance review at the formal SRS MVP release gate.
+*Source.* Public-beta release-acceptance target recorded in this SRS and the project decision register.
+*Verification.* Review of the 0.9.1 validation evidence, fuzz campaign summaries, release notes, documented limitations, signed artifacts, and final 1.0.0 public-beta decision.
 
 ## 7.5 Verification Evidence and Traceability
 
@@ -3519,9 +3516,9 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 - **Continuous methods** per BDS-VER-011 are executed through the active continuous gate for the project stage. During the private-repository Engineering MVP profile this is local `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
 - **Periodic methods** per BDS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in release notes.
 - **Gate methods** per BDS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
-- **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through the formal SRS MVP release gate, this role is held by DT.
-- **External operator acceptance** per BDS-VER-008 (formal SRS MVP release gate) introduces a third-party verifier; the acceptance signature, the identity of the accepting operator, and the operator's accepted scope statement are recorded in the formal SRS MVP release notes.
-- **Security audit** per the §7.1 method definition is procured from a third-party security specialist firm; the engagement is recorded in the Architecture Document with the auditor identity, scope, and findings tracking process.
+- **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through the 1.0 public-beta gate, this role is held by DT.
+- **External operator review**, when available, introduces a third-party verifier. Its identity, reviewed scope, and conclusions SHOULD be recorded in the release notes, but the review is supporting evidence rather than a BDS-VER-008 prerequisite.
+- **Independent security review**, when procured, is supporting evidence. The engagement and its auditor identity, scope, and findings tracking process SHOULD be recorded, but BDS-VER-008 requires the dependency-security gate rather than promising a third-party audit for every release.
 
 Where a single individual fills multiple roles (typical for the project's small team), the role accountability is unaffected; the individual signs off in each capacity. Where a role is unfilled (e.g., the release-engineer role is shared rotationally), the rotation schedule is recorded in the Architecture Document.
 *Source.* Project governance clarity; resolution of v0.6 audit finding about absent verification responsibility allocation.

@@ -1,6 +1,6 @@
 # Release Evidence Guide
 
-Status: release and operations evidence runbook for formal SRS acceptance.
+Status: release and operations evidence runbook for the 0.9.1 validation and 1.0 public-beta gates.
 
 This guide owns the mechanics of `scripts/release-evidence-snapshot.sh` and the
 handoff directories used by later release/operations runs. It is separate from
@@ -11,7 +11,8 @@ The release candidate does not claim completed long-running evidence unless the
 release artifacts exist. A generated handoff directory proves that the setup and
 artifact shape exist; it does not prove that the benchmark, soak,
 reproducible-build comparison, production-depth logging profile, release-signing
-review, or external operator acceptance has been completed.
+review has been completed. Optional external operator review is recorded when
+available but is not a release prerequisite.
 
 ## Snapshot Profiles
 
@@ -112,7 +113,7 @@ one evidence package instead of a full snapshot.
 | --- | --- | --- |
 | Benchmark | `scripts/capture-benchmark-handoff.sh` | Creates the Reference Hardware/Profile benchmark runbook, report template, metric/resource TSV schemas, baseline-history template, requirement traceability map, release-note snippet, and operator sign-off template. |
 | Info verbosity | `scripts/capture-info-verbosity-handoff.sh` | Creates the production-depth `info` verbosity profile runbook, report template, log-volume/structured-field/metrics TSV schemas, requirement traceability map, release-note snippet, and operator sign-off template. |
-| Soak | `scripts/capture-soak-handoff.sh` | Creates the 30-day soak report template, RSS/file-descriptor/metrics/event TSV schemas, weekly summary template, requirement traceability map, and operator sign-off template. |
+| Extended runtime | `scripts/capture-soak-handoff.sh` | Creates a duration-neutral extended-runtime report template, RSS/file-descriptor/metrics/event TSV schemas, summary template, requirement traceability map, and operator sign-off template. |
 | Release governance | `scripts/capture-release-handoff.sh` | Creates the evidence attachment map, role ownership TSV, scheduled CI/manual-run plan, signing runbook, release-note fill plan, external-operator acceptance template, and release-readiness checklist. |
 
 ## Large-Surface Soak Evidence
@@ -123,12 +124,11 @@ Knot, PowerDNS/PostgreSQL, XoT, TSIG, catalog-zone, extended-catalog,
 DNSSEC/EDNS/DNS-Cookie/RRL, bad-transfer, and negative-query scenarios while
 sampling host resources and retaining per-scenario artifacts.
 
-The default release-campaign duration is `2592000` seconds, matching a 30-day
-wall-clock soak window. Its evidence complements the single resident-process
-RSS/file-descriptor soak represented by `scripts/capture-soak-handoff.sh`: the
-large-surface soak maximizes protocol and primary-interop churn, while the
-resident-process soak remains the stricter memory-growth lane for
-BDS-NFR-REL-003.
+The campaign duration is selected explicitly for each run. The 1.0 plan uses
+several independent 24-hour fuzz/resource rounds; a longer large-surface run is
+optional and does not become a release requirement merely because the tooling
+supports it. Its evidence complements the single resident-process
+RSS/file-descriptor lane represented by `scripts/capture-soak-handoff.sh`.
 
 See `docs/large-surface-soak.md` for launch, status, collection, and evidence
 schema details.
@@ -333,9 +333,10 @@ verifies package/image creation and runtime smoke behavior only; archive
 reproducibility, Docker image archive reproducibility, public artifact signing,
 and independent-builder sign-off remain separate release-governance work.
 
-For the formal SRS MVP release gate, release notes must also include the
-external operator acceptance signature, accepting operator identity, and
-accepted scope statement required by `BDS-VER-008` and `BDS-VER-015`.
+For the 1.0 public-beta gate, release notes must identify the required project
+reviewers and their scope. If an external operator review is available, the
+notes should record the reviewer, reviewed scope, and conclusions as supporting
+evidence; `BDS-VER-008` and `BDS-VER-015` do not require one.
 
 ## Primary Interop Evidence
 

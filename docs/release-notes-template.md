@@ -122,7 +122,7 @@ CLI, metrics, logs, health endpoints, and network behavior.
 - Fuzz campaign handoff or completed artifacts: TBD
 - Info verbosity profile handoff or completed artifacts: TBD
 - Reference Hardware/Profile benchmark handoff or completed artifacts: TBD
-- Soak handoff or completed 30-day report: TBD
+- Extended-runtime evidence (fuzz/resource rounds and any optional soak): TBD
 - Release/operations owner for delegated long-running evidence: TBD
 - Deferred execution rationale, if any: TBD
 

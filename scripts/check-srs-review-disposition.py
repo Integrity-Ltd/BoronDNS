@@ -66,7 +66,7 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "first-party source ownership, representative tests or interop evidence, and current SRS owner identifiers",
     "move to a deferred or gap state in the same patch",
     "`docs/implemented-feature-scope.md`",
-    "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
+    "Duration-neutral resource/soak tooling remains available",
     "implementation-specific source and test markers",
 ]
 
@@ -126,7 +126,7 @@ REVIEW_SUGGESTED_DEFER_ITEMS = [
     "Full DNSSEC negative proof synthesis",
     "Full Prometheus metric catalogue",
     "Packed zone store / pre-baked response cache",
-    "30-day soak test",
+    "Fixed 30-day soak test",
     "Full three-primary interop matrix",
     "Exact performance MUSTs",
     "Release signing",
@@ -294,9 +294,9 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
         "Deferred",
         "The response-cache candidate counters only measure whether a future cache might be useful",
     ],
-    "30-day soak test": [
-        "Deferred from Engineering MVP execution",
-        "completed evidence belongs to later SRS acceptance execution",
+    "Fixed 30-day soak test": [
+        "Accepted as over-prescriptive and removed from the current release gate",
+        "several independent 24-hour fuzz/resource rounds",
     ],
     "Full three-primary interop matrix": [
         "Deferred from Engineering MVP execution",
@@ -315,8 +315,8 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
         "release-specific audit and exception evidence remains release acceptance",
     ],
     "External operator acceptance": [
-        "Deferred from Engineering MVP execution",
-        "external operator sign-off remains a formal release gate",
+        "Optional supporting evidence",
+        "third-party sign-off is not a prerequisite for 0.9.1 or the 1.0 public beta",
     ],
 }
 
@@ -374,7 +374,7 @@ REVIEW_DEFER_CODE_BACKING = {
 }
 
 PROCESS_ONLY_REVIEW_DEFER_ITEMS = [
-    "30-day soak test",
+    "Fixed 30-day soak test",
     "CVE governance",
     "External operator acceptance",
 ]

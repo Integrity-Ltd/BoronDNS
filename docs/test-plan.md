@@ -48,10 +48,10 @@ until their corresponding retained runs exist.
 | Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the Engineering MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/evidence-command-catalog.md`, with current gaps tracked in `docs/mvp-gap-register.md`; human-operated BIND smoke run documented in `docs/manual-bind-interop.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `BDS-VER-003`, `BDS-VER-004`, `BDS-VER-013` |
-| Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the Engineering MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
-| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, external operator acceptance | release notes, interface compatibility evidence, info verbosity profile, and operator acceptance records |
-| Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
-| External operator acceptance | Gate | Production-representative external deployment and signed scope statement for formal SRS MVP release acceptance | formal SRS MVP release notes |
+| Soak test / extended-runtime test | Periodic and Gate when selected | `scripts/capture-soak-handoff.sh` creates a duration-neutral setup/report path; the release plan selects fuzz/resource rounds, allocator stress, targeted load, and any optional longer soak according to changed risk | retained resource samples and completed extended-runtime report artifacts |
+| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, and optional external operator review | release notes, interface compatibility evidence, info verbosity profile, and any external review record |
+| Optional independent security review | Gate when selected | Third-party or independent review may be selected for a defined release or vulnerability scope | release notes and review report when available |
+| Optional external operator review | Gate when selected | Production-representative external deployment may supplement project-owned acceptance evidence | release notes and reviewed scope when available |
 
 The `scripts/audit-invariants.sh` BDS-INV-004 gate self-tests its filesystem
 mutation scanner before inspecting runtime source. Its fixtures cover Cargo
@@ -195,7 +195,7 @@ these rows remain handoff obligations unless completed artifacts are retained.
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
 | Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off template; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
 | Reproducible-build comparison | Hard gate before public artifact signing | The tagged workflow runs `scripts/reproducible-build-compare.sh` for its exact current commit and authenticates the validated manifests into the signing job; `docs/reproducible-build-v0.2.0.md` records earlier v0.2.0 evidence and `scripts/capture-reproducible-build-handoff.sh` provides release-engineer sign-off templates | release/operations owners still fill package/image, public-signature verification, and external sign-off evidence before claiming broader artifact acceptance |
-| Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off template | release/operations owners later fill the report during the 30-day run |
+| Extended-runtime snapshot | At a declared cadence while the selected run is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, summary template, and operator sign-off template | release/operations owners fill the report for the declared run duration |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
 ## Gate Execution
@@ -252,7 +252,7 @@ not prove that production benchmarks have been executed.
 `scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
 the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
 traceability map, and operator sign-off template for the later BDS-NFR-REL-003
-30-day soak. A generated handoff directory proves the Engineering MVP setup
+extended-runtime campaign. A generated handoff directory proves the setup
 exists; it does not prove that the long-running soak has been executed.
 
 `scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
@@ -303,5 +303,5 @@ release-note gate checks that the release notes include:
 - failed-requirement project decisions and remediation targets;
 - RFC compliance assertions;
 - verification responsibility sign-off;
-- for the formal SRS MVP release gate, external operator acceptance signature, accepting operator
-  identity, and accepted scope statement.
+- when an optional external operator review is available, reviewer identity,
+  reviewed scope, and conclusions as supporting evidence.

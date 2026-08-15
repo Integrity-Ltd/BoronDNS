@@ -1187,9 +1187,9 @@ current operator-relevant limitations are:
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts, and external operator deployment evidence is still
   required before BDS-VER-008 acceptance.
-- Full performance target runs, 30-day soak execution, and 24-hour fuzz
-  campaigns per parser target are later SRS acceptance execution items; the
-  Engineering MVP only needs their setup, artifact formats, and handoff path.
+- Full performance target runs and the release-selected independent 24-hour
+  fuzz/resource campaigns are later acceptance execution items; optional longer
+  soaks may supplement them but are not a fixed 1.0 requirement.
 - Container image size and static-binary release packaging are covered by the
   tag-push release workflow through the installer archive, static `borondns`
   binary, static XDP-enabled `boron-gun` binary, Alpine Docker image archive,

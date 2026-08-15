@@ -11982,7 +11982,7 @@ grep -Fq 'BORON_LOAD_IXFR_CHURN_START_DELAY_MS' "$bounded_load_harness"
 grep -Fq 'BORON_LOAD_SOA_REFRESH_SECONDS' "$bounded_load_harness"
 grep -Fq 'BORON_LOAD_ZSM_MIN_INTERVAL_SECONDS' "$bounded_load_harness"
 grep -Fq 'BORON_LOAD_ZONE_PUBLICATION_STRATEGY' "$bounded_load_harness"
-grep -Fq -- '--ixfr-max-generations "$ixfr_max_generations"' "$bounded_load_harness"
+grep -Fq -- "--ixfr-max-generations \"\$ixfr_max_generations\"" "$bounded_load_harness"
 grep -Fq 'IXFR churn unexpectedly fell back to AXFR after readiness' "$bounded_load_harness"
 grep -Fq 'BoronDNS did not complete a member IXFR before performance measurement' \
     "$bounded_load_harness"
