@@ -89,6 +89,7 @@ server_tx_ring="${BORONDNS_PHYSICAL_SERVER_TX_RING:-}"
 server_rmem_max="${BORONDNS_PHYSICAL_SERVER_RMEM_MAX:-}"
 server_wmem_max="${BORONDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
 stage_override="${BORONDNS_PHYSICAL_STAGE:-}"
+allow_non_rfc5936_cold_start="${BORONDNS_PHYSICAL_ALLOW_NON_RFC5936_COLD_START:-true}"
 xdp_redirect_object="${BORONDNS_PHYSICAL_XDP_REDIRECT_OBJECT:-}"
 xdp_mode="${BORONDNS_PHYSICAL_XDP_MODE:-drv}"
 xdp_zero_copy="${BORONDNS_PHYSICAL_XDP_ZERO_COPY:-require}"
@@ -1107,7 +1108,7 @@ run_server_start() {
     local xdp_redirect_object_arg="${xdp_redirect_object:-__default__}"
     local xdp_queue_ids_arg="${xdp_queue_ids:-__none__}"
 
-    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids_arg" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" "$borondns_ready_attempts" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids_arg" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" "$borondns_ready_attempts" "$allow_non_rfc5936_cold_start" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -1137,6 +1138,7 @@ xdp_ring_size="${25}"
 xdp_umem_frame_count="${26}"
 xdp_run_as_user="${27}"
 borondns_ready_attempts="${28}"
+allow_non_rfc5936_cold_start="${29}"
 xdp_batch_size="$udp_batch_size"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
@@ -1185,12 +1187,18 @@ sudo pkill -x knotd 2>/dev/null || true
 sleep 0.2
 
 cp "$stage_abs/borondns.toml" "$run_abs/borondns.toml"
-python3 - "$run_abs/borondns.toml" "$workers" "$hot_path" "$idle_strategy" <<'PY'
+python3 - "$run_abs/borondns.toml" "$workers" "$hot_path" "$idle_strategy" "$allow_non_rfc5936_cold_start" <<'PY'
 import re
 import sys
 
-path, workers, hot_path, idle_strategy = sys.argv[1:5]
+path, workers, hot_path, idle_strategy, allow_non_rfc5936_cold_start = sys.argv[1:6]
 text = open(path, encoding="utf-8").read()
+if allow_non_rfc5936_cold_start == "true" and "allow_non_rfc5936_cold_start" not in text:
+    text = text.replace(
+        "[server]\n",
+        "[server]\nallow_non_rfc5936_cold_start = true\n",
+        1,
+    )
 text = re.sub(r"udp_reuseport_workers = \d+", f"udp_reuseport_workers = {workers}", text)
 text = re.sub(r'hot_path_detail = "[^"]+"', f'hot_path_detail = "{hot_path}"', text)
 if "udp_idle_strategy" in text:

@@ -168,6 +168,17 @@ Knot row. Large static QPS was 0.045% below the small row, and the active IXFR
 overlay was 0.109% below it; both differences are below ordinary run variance.
 The data does not justify a separate large-zone lookup structure.
 
+A follow-up batch-256/NOTRACK sweep established that the current-kernel knee
+remains near 4.25M offered QPS: the current build returned 3.968M replies/s at
+4.50M and 3.822M replies/s at 4.80M. To separate application changes from the
+host regression, historical commit `ae2b1f82` (the exact BoronDNS revision used
+for the retained 4.763M result) was rebuilt and rerun on the same current host.
+It returned 3.979M replies/s at 4.50M and 3.838M replies/s at 4.80M. The
+equivalent saturation and qdisc/receive-buffer loss signatures rule out the
+intervening BoronDNS changes as the cause. Recovering the former 4.763M result
+requires host/kernel packet-path work or an old-kernel control run; application
+hot-path changes are not supported by this evidence.
+
 Retained remote artifacts:
 
 - Knot/current BoronDNS baseline ladder:
@@ -178,3 +189,7 @@ Retained remote artifacts:
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165148Z`
 - active IXFR overlay:
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165744Z`
+- current-build 4.50M-4.80M recovery sweep:
+  `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260815T190133Z`
+- historical-commit current-kernel control:
+  `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260815T190651Z`

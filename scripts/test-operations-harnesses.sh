@@ -9893,9 +9893,10 @@ package_fake_second_image_id="sha256:$(printf '%s' "$package_fake_second_config_
 mkdir -p "$foreign_workspace" "$package_fake_bin" "$package_fake_dist" "$package_fake_target" \
     "$package_docker_input"
 # Reading an archive is allowed to update only its access time. Keep this
-# regression independent of Docker by exercising the verifier's descriptor-
-# bound staging primitive on a file whose atime is deliberately older than its
-# mtime, forcing relatime filesystems to update atime during the read.
+# regression independent of Docker and the filesystem's atime mount policy by
+# exercising the descriptor-bound staging primitive, then comparing the stable
+# identity with a synthetic atime-only stat change. The latter is required on
+# noatime filesystems, where a real read cannot force an atime update.
 python3 - "$repo_root/scripts/verify-docker-archive.py" "$workdir" <<'PY'
 import importlib.util
 import os
@@ -9926,10 +9927,29 @@ try:
     after = os.fstat(descriptor)
 finally:
     os.close(descriptor)
-if after.st_atime_ns == before.st_atime_ns:
-    raise SystemExit("archive staging fixture did not force an atime update")
 if module.stable_archive_identity(after) != module.stable_archive_identity(before):
     raise SystemExit("atime-only archive read changed the stable identity")
+atime_only = type(
+    "AtimeOnlyStat",
+    (),
+    {
+        field: getattr(before, field)
+        for field in (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_uid",
+            "st_gid",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+    }
+)()
+atime_only.st_atime_ns = before.st_atime_ns + 1
+if module.stable_archive_identity(atime_only) != module.stable_archive_identity(before):
+    raise SystemExit("synthetic atime-only change altered the stable identity")
 PY
 printf '%s\n' '[package]' 'name = "foreign-workspace"' 'version = "9.9.9"' 'edition = "2024"' \
     >"$foreign_workspace/Cargo.toml"
