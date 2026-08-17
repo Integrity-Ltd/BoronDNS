@@ -813,3 +813,54 @@ allow_non_rfc5936_cold_start = true
                 .contains("max_transfer_ingest_messages")
         );
     }
+
+    #[test]
+    fn rejects_unbounded_transfer_ingest_message_cap() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+allow_non_rfc5936_cold_start = true
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_ingest_messages = 1048577
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("unbounded transfer message metadata must fail");
+
+        assert!(error.to_string().contains("must not exceed 1048576"));
+    }
+
+    #[test]
+    fn parses_and_bounds_transfer_resident_memory_budget() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+allow_non_rfc5936_cold_start = true
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_resident_bytes = 123456789
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("positive resident-memory budget");
+        assert_eq!(config.limits.max_transfer_resident_bytes, 123_456_789);
+
+        let mut invalid = config;
+        invalid.limits.max_transfer_resident_bytes = 0;
+        assert!(
+            invalid
+                .validate()
+                .expect_err("zero resident-memory budget")
+                .to_string()
+                .contains("max_transfer_resident_bytes")
+        );
+    }

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     future::Future,
     io::Write,
     net::{IpAddr, SocketAddr},
@@ -51,6 +51,7 @@ use crate::{
     },
     secret_store::SecretManager,
     std_udp_mmsg,
+    transfer::TransferIngestBudget,
 };
 
 const MANAGEMENT_REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -606,7 +607,7 @@ async fn metrics(
         return rate_limited_response(retry_after_seconds);
     }
 
-    let body = metrics_body(
+    let mut body = metrics_body(
         &state.zones,
         &state.metrics,
         &state.catalog_manager,
@@ -614,6 +615,7 @@ async fn metrics(
         state.started_at.elapsed().as_secs(),
         state.zone_shape_metrics_enabled,
     );
+    append_transfer_ingest_budget_metrics(&mut body, &state.transfer_ingest_budget);
     if accepts_gzip(&headers) {
         match gzip_bytes(body.as_bytes()) {
             Ok(compressed) => {
@@ -1435,6 +1437,28 @@ pub(crate) fn metrics_body(
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
+}
+
+fn append_transfer_ingest_budget_metrics(body: &mut String, budget: &TransferIngestBudget) {
+    let snapshot = budget.snapshot();
+    body.push_str(&format!(
+        "# HELP borondns_transfer_memory_limit_bytes Configured global resident-memory budget for retained transfers.\n\
+         # TYPE borondns_transfer_memory_limit_bytes gauge\n\
+         borondns_transfer_memory_limit_bytes {}\n\
+         # HELP borondns_transfer_memory_reserved_bytes Resident-memory estimate currently reserved by retained transfers.\n\
+         # TYPE borondns_transfer_memory_reserved_bytes gauge\n\
+         borondns_transfer_memory_reserved_bytes {}\n\
+         # HELP borondns_transfer_memory_peak_reserved_bytes Process-lifetime peak resident-memory estimate reserved by retained transfers.\n\
+         # TYPE borondns_transfer_memory_peak_reserved_bytes gauge\n\
+         borondns_transfer_memory_peak_reserved_bytes {}\n\
+         # HELP borondns_transfer_memory_rejections_total Transfers rejected by the global resident-memory budget.\n\
+         # TYPE borondns_transfer_memory_rejections_total counter\n\
+         borondns_transfer_memory_rejections_total {}\n",
+        snapshot.limit_bytes,
+        snapshot.in_flight_bytes,
+        snapshot.peak_in_flight_bytes,
+        snapshot.rejections_total,
+    ));
 }
 
 fn append_build_info_metric(body: &mut String) {
@@ -2711,6 +2735,7 @@ pub(crate) struct HealthEndpointState {
     pub(crate) observability_auth: ObservabilityAuth,
     pub(crate) observability_rate_limiter: MetricsRateLimiter,
     pub(crate) transfer_materials: Vec<TransferMaterial>,
+    pub(crate) transfer_ingest_budget: TransferIngestBudget,
     pub(crate) secrets: SecretManager,
     pub(crate) started_at: Instant,
     pub(crate) graceful_shutdown_secs: u64,
@@ -3213,8 +3238,15 @@ impl QueryLatencyHistogram {
 #[derive(Debug)]
 pub(crate) struct CookiePrefixMetrics {
     max_prefixes: usize,
-    counts: HashMap<IpPrefix, CookiePrefixCounters>,
-    lru: VecDeque<IpPrefix>,
+    counts: HashMap<IpPrefix, CookiePrefixEntry>,
+    recency: BTreeMap<u128, IpPrefix>,
+    next_order: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CookiePrefixEntry {
+    counters: CookiePrefixCounters,
+    order: u128,
 }
 
 impl Default for CookiePrefixMetrics {
@@ -3228,15 +3260,17 @@ impl CookiePrefixMetrics {
         Self {
             max_prefixes: max_prefixes.max(1),
             counts: HashMap::new(),
-            lru: VecDeque::new(),
+            recency: BTreeMap::new(),
+            next_order: 0,
         }
     }
 
     pub(crate) fn record_status(&mut self, prefix: IpPrefix, status: DnsCookieRequestStatus) {
         self.ensure_prefix(prefix);
-        let Some(counters) = self.counts.get_mut(&prefix) else {
+        let Some(entry) = self.counts.get_mut(&prefix) else {
             return;
         };
+        let counters = &mut entry.counters;
         match status {
             DnsCookieRequestStatus::NoCookie => {
                 counters.no_cookie = counters.no_cookie.saturating_add(1)
@@ -3255,8 +3289,8 @@ impl CookiePrefixMetrics {
 
     pub(crate) fn record_badcookie(&mut self, prefix: IpPrefix) {
         self.ensure_prefix(prefix);
-        if let Some(counters) = self.counts.get_mut(&prefix) {
-            counters.badcookie = counters.badcookie.saturating_add(1);
+        if let Some(entry) = self.counts.get_mut(&prefix) {
+            entry.counters.badcookie = entry.counters.badcookie.saturating_add(1);
         }
     }
 
@@ -3264,7 +3298,7 @@ impl CookiePrefixMetrics {
         let mut samples = self
             .counts
             .iter()
-            .map(|(prefix, counters)| (*prefix, *counters))
+            .map(|(prefix, entry)| (*prefix, entry.counters))
             .collect::<Vec<_>>();
         samples.sort_unstable_by_key(|(prefix, _)| prefix.to_string());
         samples
@@ -3276,24 +3310,44 @@ impl CookiePrefixMetrics {
             return;
         }
         self.evict_one_if_needed();
-        self.counts.insert(prefix, CookiePrefixCounters::default());
-        self.touch_lru(prefix);
+        let order = self.allocate_order();
+        self.counts.insert(
+            prefix,
+            CookiePrefixEntry {
+                counters: CookiePrefixCounters::default(),
+                order,
+            },
+        );
+        self.recency.insert(order, prefix);
     }
 
     fn evict_one_if_needed(&mut self) {
         if self.counts.len() < self.max_prefixes {
             return;
         }
-        while let Some(prefix) = self.lru.pop_front() {
-            if self.counts.remove(&prefix).is_some() {
-                return;
-            }
-        }
+        let Some((&order, &prefix)) = self.recency.first_key_value() else {
+            return;
+        };
+        self.recency.remove(&order);
+        self.counts.remove(&prefix);
     }
 
     fn touch_lru(&mut self, prefix: IpPrefix) {
-        self.lru.retain(|candidate| *candidate != prefix);
-        self.lru.push_back(prefix);
+        let Some(previous_order) = self.counts.get(&prefix).map(|entry| entry.order) else {
+            return;
+        };
+        self.recency.remove(&previous_order);
+        let order = self.allocate_order();
+        if let Some(entry) = self.counts.get_mut(&prefix) {
+            entry.order = order;
+        }
+        self.recency.insert(order, prefix);
+    }
+
+    fn allocate_order(&mut self) -> u128 {
+        let order = self.next_order;
+        self.next_order = self.next_order.wrapping_add(1);
+        order
     }
 }
 

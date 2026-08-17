@@ -153,13 +153,8 @@ impl TransferPlan {
             zones_by_key: Arc::new(Mutex::new(zones_by_key)),
             catalog_member_templates_by_key: Arc::new(catalog_member_templates_by_key),
             next_generation,
-            // `max_transfer_ingest_bytes` is a per-session protocol limit. The
-            // shared guard therefore reserves enough for every session admitted
-            // by the transfer semaphore instead of making concurrent valid
-            // sessions compete for one session's allowance.
-            transfer_ingest_budget: TransferIngestBudget::for_concurrent_sessions(
-                config.limits.max_transfer_ingest_bytes,
-                config.limits.max_concurrent_transfers,
+            transfer_ingest_budget: TransferIngestBudget::for_resident_limit(
+                config.limits.max_transfer_resident_bytes,
             ),
         })
     }

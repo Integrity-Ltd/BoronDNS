@@ -13,10 +13,11 @@ use std::{
 
 use borondns_core::{
     dns::{
-        AnswerOptions, AnyResponseMode, ChaosOptions, DatagramAction, DomainName,
-        ExtendedDnsErrorsMode, Header, Transport, ZoneImageProvider,
+        AnswerOptions, AnyResponseMode, ChaosOptions, DatagramAction, DnsCookieRequestStatus,
+        DomainName, ExtendedDnsErrorsMode, Header, Question, Transport, ZoneImageProvider,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
-        chaos_query_observation, default_zone_image_provider, request_has_valid_dns_server_cookie,
+        chaos_query_observation_from_parsed, default_zone_image_provider,
+        dns_cookie_request_status,
     },
     zone::ZoneStore,
 };
@@ -32,11 +33,11 @@ use crate::{
     CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore, NotifyAuthority,
     NotifyLogLimiter, NotifyRefreshTracker, QueryMetricObservation, QueryObservationOptions,
     RefreshRequest, RuntimeError, RuntimeMetrics, dns_cookie_context, observe_dns_cookie_metrics,
-    observe_query_metrics, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
-    record_chaos_query_if_observed, record_dns_cookie_badcookie_if_emitted,
-    record_query_lookup_metrics, record_query_response_metric, record_query_send_metric,
-    record_response_cache_metric, response_cache_ineligible_reason, sign_tsig_response,
-    signal_notify_refresh,
+    observe_query_metrics_from_parsed, prepare_notify_packet_with_metrics,
+    prepare_query_tsig_packet, record_chaos_query_if_observed,
+    record_dns_cookie_badcookie_if_emitted, record_query_lookup_metrics,
+    record_query_response_metric, record_query_send_metric, record_response_cache_metric,
+    response_cache_ineligible_reason, sign_tsig_response, signal_notify_refresh,
 };
 
 const ERRNO_EMFILE: i32 = 24;
@@ -66,6 +67,7 @@ where
     info!(%local_addr, "TCP listener bound");
     let mut connections = JoinSet::new();
     let (connection_shutdown_tx, connection_shutdown_rx) = watch::channel(false);
+    let mut global_saturation_logged = false;
     tokio::pin!(graceful_stop);
 
     loop {
@@ -74,6 +76,28 @@ where
         // continuously readable listener cannot grow an unbounded completed
         // task backlog through the biased shutdown-first select below.
         reap_ready_tcp_connections(&mut connections, local_addr);
+        if settings.active_connections.load(Ordering::Acquire) >= settings.max_connections {
+            if !global_saturation_logged {
+                warn!(
+                    %local_addr,
+                    active_connections = settings.active_connections.load(Ordering::Relaxed),
+                    limit = settings.max_connections,
+                    "TCP connection limit reached; pausing accept and applying kernel backlog pressure"
+                );
+                global_saturation_logged = true;
+            }
+            tokio::select! {
+                biased;
+                () = &mut graceful_stop => break,
+                completed = connections.join_next(), if !connections.is_empty() => {
+                    if let Some(Err(error)) = completed {
+                        warn!(%local_addr, %error, "TCP connection task failed");
+                    }
+                }
+            }
+            continue;
+        }
+        global_saturation_logged = false;
         let accepted = tokio::select! {
             biased;
             () = &mut graceful_stop => break,
@@ -109,13 +133,16 @@ where
         ) {
             Ok(permit) => permit,
             Err(TcpConnectionLimitExceeded::Global) => {
+                // The single accept loop checks global capacity before polling
+                // accept. Retain this defensive branch for a future admission
+                // implementation that can change capacity concurrently.
                 warn!(
                     peer_ip = %peer.ip(),
                     peer_port = peer.port(),
                     transport = "tcp",
                     active_connections = settings.active_connections.load(Ordering::Relaxed),
                     limit = settings.max_connections,
-                    "TCP connection limit reached; closing accepted connection"
+                    "TCP connection capacity changed after accept; closing accepted connection"
                 );
                 drop(stream);
                 continue;
@@ -816,12 +843,19 @@ async fn handle_tcp_packet(
         // policy authorization resolves concurrent snapshot replacement.
         hook(query_id).await;
     }
+    let parsed_header = Header::parse(&prepared.packet).ok();
+    let parsed_question = parsed_header
+        .as_ref()
+        .filter(|header| header.qdcount == 1)
+        .and_then(|_| Question::parse(&prepared.packet).ok());
     let secrets = dns_cookie_secrets.current();
     let dns_cookie = dns_cookie_context(peer_ip, &secrets, dns_cookie);
-    let cookie_validated = dns_cookie
-        .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
-    let query_metrics = observe_query_metrics(
-        &prepared.packet,
+    let dns_cookie_status =
+        dns_cookie.and_then(|context| dns_cookie_request_status(&prepared.packet, Some(context)));
+    let cookie_validated = dns_cookie_status == Some(DnsCookieRequestStatus::ValidServerCookie);
+    let query_metrics = observe_query_metrics_from_parsed(
+        parsed_header.as_ref(),
+        parsed_question.as_ref(),
         &zones,
         &metrics,
         QueryObservationOptions {
@@ -837,18 +871,15 @@ async fn handle_tcp_packet(
         false,
         edns_padding_block_size,
     );
-    let dns_cookie_metrics = observe_dns_cookie_metrics(
-        &prepared.packet,
-        dns_cookie,
-        peer_ip,
-        cookie_prefix_metrics,
-        &metrics,
-    );
+    let dns_cookie_metrics =
+        observe_dns_cookie_metrics(dns_cookie_status, peer_ip, cookie_prefix_metrics, &metrics);
     let chaos = ChaosOptions {
         version: &chaos_version,
         hostname: &chaos_hostname,
     };
-    let chaos_observation = chaos_query_observation(&prepared.packet, &nsid, chaos);
+    let chaos_observation = parsed_header.as_ref().and_then(|header| {
+        chaos_query_observation_from_parsed(header, parsed_question.as_ref(), &nsid, chaos)
+    });
     let compose_started = metrics.start_pipeline_timer();
     let answer_options = AnswerOptions {
         transport: Transport::Tcp,

@@ -114,7 +114,7 @@ fn main() {
     let base_build = build_started.elapsed();
     let base_shape = base_snapshot.shape_summary();
     assert_eq!(base_shape.rdata_count, config.records + 2);
-    assert_eq!(base_snapshot.serial, Some(1));
+    assert_eq!(base_snapshot.serial(), Some(1));
     let after_base = memory_sample();
 
     let store = Arc::new(ZoneStore::with_publication_policy(ZonePublicationPolicy {
@@ -163,7 +163,7 @@ fn main() {
         panic!("generated IXFR unexpectedly reported the zone current");
     };
     let updated_snapshot: Arc<ZoneSnapshot> = Arc::from(updated_snapshot);
-    assert_eq!(updated_snapshot.serial, Some(2));
+    assert_eq!(updated_snapshot.serial(), Some(2));
     let updated_rdata_records = updated_snapshot.rdata_record_count();
     let added_records = config
         .delta

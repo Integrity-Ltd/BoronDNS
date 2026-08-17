@@ -37,6 +37,7 @@ af-xdp = ["dep:aya", "dep:xdp"]
 fuzzing = []
 
 [dev-dependencies]
+borondns-core = { path = "../borondns-core", version = "0.9.0", features = ["test-support"] }
 rcgen.workspace = true
 
 [lints.rust]

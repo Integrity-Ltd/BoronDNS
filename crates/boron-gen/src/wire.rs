@@ -326,7 +326,7 @@ mod tests {
         );
 
         let snapshot = parse_axfr_response(0x4242, &origin, 1, &messages).unwrap();
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.serial(), Some(1));
     }
 
     #[test]
@@ -374,7 +374,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let base = parse_axfr_response(0x6161, &origin, 1, &axfr_messages).unwrap();
-        assert_eq!(base.serial, Some(1));
+        assert_eq!(base.serial(), Some(1));
 
         let ixfr_query_wire =
             build_ixfr_query_from_soa_view(0x6262, &origin, 1, base.soa_record_view(1).unwrap())
@@ -394,7 +394,7 @@ mod tests {
         let IxfrResponse::Updated(updated) = response else {
             panic!("expected generated IXFR update")
         };
-        assert_eq!(updated.serial, Some(3));
+        assert_eq!(updated.serial(), Some(3));
         assert_eq!(updated.rdata_record_count(), base.rdata_record_count());
     }
 }

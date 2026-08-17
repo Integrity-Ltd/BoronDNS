@@ -24,6 +24,7 @@ configuration	[limits].udp_socket_send_buffer_bytes	stable	0.1.5	config/borondns
 configuration	[limits].udp_socket_max_pacing_rate_bytes_per_second	stable	0.1.5	config/borondns.example.toml	minor-additive	Optional Linux SO_MAX_PACING_RATE request for standard UDP sockets; evidence-gated host tuning.
 configuration	[xdp].queue_ids	stable	0.1.4	config/borondns.example.toml	minor-additive	Optional sparse AF_XDP queue id list; unset preserves the contiguous range starting at xdp.queue_id.
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/borondns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
+configuration	[limits].max_transfer_resident_bytes	stable	0.9.1	config/borondns.example.toml	minor-additive	Global conservative resident-memory envelope for concurrent transfer ingestion decoding and publication; default 64 GiB.
 configuration	[zones] entries	stable	0.1	config/borondns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/borondns.example.toml	major	Static TSIG key schema and redaction behavior.
 configuration	[tsig_keys].secret_file	stable	0.1	config/borondns.example.toml	major	Optional TSIG secret file path source; exactly one of secret or secret_file is required.

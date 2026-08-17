@@ -1361,6 +1361,19 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     {
         bail!("xdp.worker_cpu_affinity length must match the active XDP queue count");
     }
+    #[cfg(all(target_os = "linux", feature = "xdp"))]
+    {
+        let capacity = xdp_backend::cpu_affinity_capacity();
+        if let Some(cpu) = config
+            .xdp
+            .worker_cpu_affinity
+            .iter()
+            .copied()
+            .find(|cpu| *cpu >= capacity)
+        {
+            bail!("xdp.worker_cpu_affinity CPU index {cpu} exceeds cpu_set_t capacity {capacity}");
+        }
+    }
     if config.interface.queue_list.is_empty() {
         config
             .interface
@@ -2455,5 +2468,21 @@ mod tests {
             error.to_string().contains("source port span"),
             "unexpected error: {error}"
         );
+    }
+
+    #[cfg(all(target_os = "linux", feature = "xdp"))]
+    #[test]
+    fn xdp_validation_rejects_unrepresentable_cpu_affinity_before_cpu_set() {
+        let mut config = FileConfig::default();
+        config.backend.kind = Backend::Xdp;
+        config.interface.nic = Some("veth0".to_owned());
+        config.interface.queue_count = 1;
+        config.source.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 1]));
+        config.target.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 2]));
+        let capacity = xdp_backend::cpu_affinity_capacity();
+        config.xdp.worker_cpu_affinity = vec![capacity];
+
+        let error = validate_config(&config).expect_err("CPU_SET bound must be validated");
+        assert!(error.to_string().contains("cpu_set_t capacity"));
     }
 }

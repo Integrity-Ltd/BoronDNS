@@ -121,6 +121,12 @@ pub enum TransferError {
     #[error("IXFR response validation failed: {0}")]
     Ixfr(#[from] axfr::IxfrError),
 
+    #[error("{protocol} validation worker failed: {message}")]
+    ValidationWorker {
+        protocol: &'static str,
+        message: String,
+    },
+
     #[error("SOA poll response validation failed: {0}")]
     Soa(#[from] axfr::SoaQueryError),
 
@@ -162,7 +168,7 @@ pub enum TransferError {
     },
 
     #[error(
-        "{protocol} session from primary {addr} could not reserve {requested_bytes} octets from the global transfer ingestion budget ({in_flight_bytes} octets already in flight, limit {limit_bytes})"
+        "{protocol} session from primary {addr} could not reserve {requested_bytes} estimated resident octets from the global transfer-memory budget ({in_flight_bytes} octets already reserved, limit {limit_bytes})"
     )]
     IngestGlobalSizeLimit {
         protocol: &'static str,

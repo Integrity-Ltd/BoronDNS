@@ -2482,6 +2482,7 @@ fn health_state_with_observability(
         observability_auth,
         observability_rate_limiter,
         transfer_materials: Vec::<TransferMaterial>::new(),
+        transfer_ingest_budget: TransferIngestBudget::for_resident_limit(64 * 1024 * 1024),
         secrets: SecretManager::empty_for_test(),
         started_at: std::time::Instant::now(),
         graceful_shutdown_secs: 30,
@@ -2516,5 +2517,17 @@ fn soa_rdata_with_serial(serial: u32) -> Vec<u8> {
     let (_, consumed_rname) = DomainName::parse(&rdata, consumed_mname).unwrap();
     let serial_offset = consumed_mname + consumed_rname;
     rdata[serial_offset..serial_offset + 4].copy_from_slice(&serial.to_be_bytes());
+    rdata
+}
+
+fn soa_rdata_with_timers(refresh: u32, retry: u32, expire: u32, minimum: u32) -> Vec<u8> {
+    let mut rdata = soa_rdata();
+    let (_, consumed_mname) = DomainName::parse(&rdata, 0).unwrap();
+    let (_, consumed_rname) = DomainName::parse(&rdata, consumed_mname).unwrap();
+    let timers_offset = consumed_mname + consumed_rname + 4;
+    for (index, value) in [refresh, retry, expire, minimum].into_iter().enumerate() {
+        let offset = timers_offset + index * 4;
+        rdata[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
     rdata
 }

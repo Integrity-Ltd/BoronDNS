@@ -44,6 +44,7 @@ fn set_core_dump_limit_zero() -> Result<(), io::Error> {
     // SAFETY: `limit` is a valid immutable pointer to a fully initialized
     // `libc::rlimit`, and `setrlimit` reads it only for the constant
     // `RLIMIT_CORE` resource in the current process.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-001
     errno_result(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) })
 }
 
@@ -52,6 +53,7 @@ fn set_dumpable(dumpable: bool) -> Result<(), io::Error> {
     let value = if dumpable { 1 } else { 0 };
     // SAFETY: `prctl(PR_SET_DUMPABLE, value, 0, 0, 0)` changes only the
     // dumpable flag of the current process and does not retain pointers.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-002
     errno_result(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, value, 0, 0, 0) })
 }
 
@@ -60,6 +62,7 @@ fn set_no_new_privileges() -> Result<(), io::Error> {
     // SAFETY: `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` sets a monotonic
     // privilege-hardening bit for the current process and does not retain
     // pointers or depend on borrowed memory.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-003
     errno_result(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) })
 }
 

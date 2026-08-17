@@ -54,7 +54,7 @@ impl ZonePersistence {
     pub(crate) fn persist(&self, snapshot: &ZoneSnapshot) -> Result<(), ZonePersistenceError> {
         fs::create_dir_all(&self.directory)
             .map_err(|source| self.io_error(&self.directory, source))?;
-        let final_path = self.path_for(&snapshot.origin);
+        let final_path = self.path_for(snapshot.origin());
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temp_path = self.directory.join(format!(
             ".{}.tmp.{}.{}",
@@ -76,7 +76,7 @@ impl ZonePersistence {
             let mut writer = BufWriter::new(file);
             let mut digest = Sha256::new();
             write_hashed(&mut writer, &mut digest, MAGIC, &temp_path, self)?;
-            let origin_wire = snapshot.origin.to_wire();
+            let origin_wire = snapshot.origin().to_wire();
             write_hashed(
                 &mut writer,
                 &mut digest,
@@ -85,7 +85,7 @@ impl ZonePersistence {
                 self,
             )?;
             write_hashed(&mut writer, &mut digest, &origin_wire, &temp_path, self)?;
-            match snapshot.serial {
+            match snapshot.serial() {
                 Some(serial) => {
                     write_hashed(&mut writer, &mut digest, &[1], &temp_path, self)?;
                     write_hashed(
@@ -264,7 +264,7 @@ impl ZonePersistence {
                     .as_secs()
                     .saturating_sub(persisted_unix_secs);
                 let snapshot = if snapshot
-                    .soa_timers
+                    .soa_timers()
                     .is_some_and(|timers| elapsed >= u64::from(timers.expire))
                 {
                     snapshot.with_state(borondns_core::zone::ZoneState::Expired)
@@ -529,8 +529,8 @@ mod tests {
         let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
         let snapshot = snapshot();
         persistence.persist(&snapshot).unwrap();
-        let restored = persistence.restore(&snapshot.origin, 1).unwrap().unwrap();
-        assert_eq!(restored.snapshot.serial, Some(7));
+        let restored = persistence.restore(snapshot.origin(), 1).unwrap().unwrap();
+        assert_eq!(restored.snapshot.serial(), Some(7));
         assert_eq!(
             restored.snapshot.persistence_record_count(),
             snapshot.persistence_record_count()
@@ -548,11 +548,11 @@ mod tests {
         let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
         let snapshot = snapshot();
         persistence.persist(&snapshot).unwrap();
-        let path = persistence.path_for(&snapshot.origin);
+        let path = persistence.path_for(snapshot.origin());
         let mut bytes = fs::read(&path).unwrap();
         bytes[20] ^= 1;
         fs::write(&path, bytes).unwrap();
-        assert!(persistence.restore(&snapshot.origin, 1).is_err());
+        assert!(persistence.restore(snapshot.origin(), 1).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -566,18 +566,18 @@ mod tests {
         let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
         let snapshot = snapshot();
         persistence.persist(&snapshot).unwrap();
-        let path = persistence.path_for(&snapshot.origin);
+        let path = persistence.path_for(snapshot.origin());
         let mut bytes = fs::read(&path).unwrap();
-        let timestamp_offset = MAGIC.len() + 2 + snapshot.origin.to_wire().len() + 1 + 4;
+        let timestamp_offset = MAGIC.len() + 2 + snapshot.origin().to_wire().len() + 1 + 4;
         bytes[timestamp_offset..timestamp_offset + 8].copy_from_slice(&0u64.to_be_bytes());
         let checksum_offset = bytes.len() - 32;
         let checksum = Sha256::digest(&bytes[..checksum_offset]);
         bytes[checksum_offset..].copy_from_slice(&checksum);
         fs::write(&path, bytes).unwrap();
 
-        let restored = persistence.restore(&snapshot.origin, 1).unwrap().unwrap();
+        let restored = persistence.restore(snapshot.origin(), 1).unwrap().unwrap();
         assert_eq!(
-            restored.snapshot.state,
+            restored.snapshot.state(),
             borondns_core::zone::ZoneState::Expired
         );
         fs::remove_dir_all(root).unwrap();
@@ -596,8 +596,8 @@ mod tests {
 
         let undersized = ZonePersistence::new(root.clone(), 1);
         assert!(undersized.persist(&snapshot).is_err());
-        let restored = persistence.restore(&snapshot.origin, 1).unwrap().unwrap();
-        assert_eq!(restored.snapshot.serial, Some(7));
+        let restored = persistence.restore(snapshot.origin(), 1).unwrap().unwrap();
+        assert_eq!(restored.snapshot.serial(), Some(7));
         fs::remove_dir_all(root).unwrap();
     }
 }

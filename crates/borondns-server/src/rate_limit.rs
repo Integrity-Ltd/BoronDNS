@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
     net::IpAddr,
     sync::{Arc, Mutex},
@@ -160,6 +160,7 @@ struct RrlState {
     max_keys: usize,
     allowlist: Vec<IpPrefix>,
     buckets: HashMap<RrlKey, RrlBucket>,
+    recency: BTreeMap<u128, RrlKey>,
     next_order: u128,
 }
 
@@ -184,6 +185,7 @@ impl RrlState {
                 .map(|prefix| IpPrefix::parse(prefix).expect("validated RRL allowlist prefix"))
                 .collect(),
             buckets: HashMap::new(),
+            recency: BTreeMap::new(),
             next_order: 0,
         }
     }
@@ -202,16 +204,20 @@ impl RrlState {
         metrics.record_rrl_subject();
         let key = RrlKey::new(source, self.prefix_len(source), category);
         let rate = self.rates.for_category(category);
-        if !self.buckets.contains_key(&key) {
+        let previous_order = self.buckets.get(&key).map(|bucket| bucket.order);
+        if previous_order.is_none() {
             self.evict_one_if_needed(metrics);
-            let order = self.allocate_order();
-            self.buckets.insert(key, RrlBucket::new(rate, order));
-            metrics.set_rrl_tracked_keys(self.tracked_keys());
+        } else if let Some(previous_order) = previous_order {
+            self.recency.remove(&previous_order);
         }
-
         let order = self.allocate_order();
-        let Some(bucket) = self.buckets.get_mut(&key) else {
-            return RrlDecision::Send(response);
+        self.recency.insert(order, key);
+        let bucket = match self.buckets.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                metrics.set_rrl_tracked_keys(u64::try_from(self.recency.len()).unwrap_or(u64::MAX));
+                entry.insert(RrlBucket::new(rate, order))
+            }
         };
         bucket.touch(order);
         if bucket.take_token(rate) {
@@ -247,14 +253,10 @@ impl RrlState {
         if self.buckets.len() < self.max_keys {
             return;
         }
-        let Some(oldest_key) = self
-            .buckets
-            .iter()
-            .min_by_key(|(_, bucket)| bucket.order)
-            .map(|(key, _)| *key)
-        else {
+        let Some((&oldest_order, &oldest_key)) = self.recency.first_key_value() else {
             return;
         };
+        self.recency.remove(&oldest_order);
         if self.buckets.remove(&oldest_key).is_some() {
             metrics.record_rrl_key_evicted();
             metrics.set_rrl_tracked_keys(self.tracked_keys());

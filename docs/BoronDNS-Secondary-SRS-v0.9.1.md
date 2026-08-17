@@ -315,7 +315,7 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 
 **Time.** The server requires a system clock with reasonable accuracy — typically within a few minutes of real time — for TSIG signature validity. Drift exceeding TSIG's permitted fudge window will cause transfer authentication to fail.
 
-**Storage.** No persistent storage is required. The server does not write zone data, configuration state, or operational state to disk. The configuration file, if used in preference to environment variables, is read once at startup and not subsequently re-read.
+**Storage.** A writable directory is required for the bounded, checksummed last-good zone snapshots mandated by BDS-INV-004. BoronDNS atomically writes only validated zone snapshots there; it does not persist configuration, metrics, query statistics, transfer history, or partial transfers. General configuration is read once at startup and is not subsequently re-read.
 
 **Memory.** Memory must be sufficient to hold all served zones in fully expanded form, plus working space for in-flight queries and transfers. Capacity planning is the operator's responsibility.
 
@@ -329,7 +329,7 @@ The following constraints are binding because they are restated here. They are f
 
 **Memory residency.** Zone data resides entirely in process memory; the query path performs no disk I/O.
 
-**No persistent state.** Operational state is not written to persistent storage. Every startup is a cold start; the primary is the source of truth for zone data, and orchestrator configuration is the source of truth for everything else.
+**Narrow persistent state.** The only persistent runtime state is the validated last-good zone cache required by BDS-INV-004. At startup BoronDNS revalidates and restores an eligible snapshot before refreshing it from the primary; zones without a valid snapshot start cold in LOADING. The primary remains the source of truth for zone data, and orchestrator configuration remains the source of truth for everything else.
 
 **Static release artifact.** The published Linux release artifact targets `x86_64-unknown-linux-musl` and is verified as a statically linked binary with no runtime shared-library dependencies. Non-release developer builds may use the host toolchain's normal dynamic-linking conventions and are not the portability baseline.
 
@@ -1098,7 +1098,7 @@ The area code **AXFR** is allocated.
 *Source.* BDS-INV-003.
 *Verification.* Concurrent query tests during AXFR completion; verify atomic transition.
 
-**BDS-FR-AXFR-024.** The server MUST enforce both a configurable maximum cumulative ingestion size and a configurable maximum DNS response-message count per AXFR session. The cumulative size is measured as the total number of octets of zone data received, excluding TCP framing and TSIG overhead. The default maximum size MUST be 4 gibibytes (4 × 2³⁰ octets), and the default maximum message count MUST be 4,096. When either limit is exceeded, the AXFR session MUST be aborted per BDS-FR-AXFR-019, with the abort log entry recording the observed value and applicable configured limit. Any partially ingested data MUST be discarded without modifying the in-memory zone store.
+**BDS-FR-AXFR-024.** The server MUST enforce both a configurable maximum cumulative ingestion size and a configurable maximum DNS response-message count per AXFR session. The cumulative size is measured as the total number of octets of zone data received, excluding TCP framing and TSIG overhead. The default maximum size MUST be 4 gibibytes (4 × 2³⁰ octets), and the default maximum message count MUST be 4,096. The configurable message count MUST NOT exceed 1,048,576 so per-message allocation metadata remains bounded. The server MUST additionally enforce a global configurable transfer resident-memory envelope, defaulting to 64 GiB, across concurrent retained transfer data and publication work. Admission MUST conservatively charge each retained wire octet at 256 octets to cover name decompression, decoded owned state and indexes, build workspace, the new image, and overlap with the serving generation. When a per-session limit or the global envelope is exceeded, the AXFR session MUST be aborted per BDS-FR-AXFR-019, with the abort log entry recording the observed value and applicable configured limit. Any partially ingested data MUST be discarded without modifying the in-memory zone store.
 *Source.* Defence against memory-exhaustion attacks from a compromised, misconfigured, or hostile primary delivering an unbounded transfer stream.
 *Note.* Both limits are per-session rather than across sessions. The byte cap bounds retained transfer payload, while the message cap separately bounds streams composed of pathological numbers of small DNS messages. Their configurable nature allows controlled synthetic or unusually large zones to raise both limits; neither limit is silently disabled.
 The implementation MAY additionally enforce an aggregate in-flight ingestion guard, but that guard MUST allow every session admitted by BDS-FR-AXFR-022 to consume the full configured per-session limit concurrently. A derived guard of `maximum concurrent transfers × per-session ingestion limit`, with overflow-safe arithmetic, satisfies this requirement without making otherwise-valid transfers fail according to timing.
@@ -1687,7 +1687,7 @@ The area code **TCP** is allocated.
 
 ### Concurrency limits
 
-**BDS-FR-TCP-005.** The server MUST limit the number of concurrently accepted TCP connections to a configurable maximum, with a default of 1024. New connection attempts when the limit is reached MUST be either refused at the TCP layer or accepted and immediately closed; the choice is implementation-defined and recorded in the Architecture Document. Connection refusal due to the limit MUST be logged at warning level.
+**BDS-FR-TCP-005.** The server MUST limit the number of concurrently accepted TCP connections to a configurable maximum, with a default of 1024. At the global limit the listener MUST cease polling `accept`, leaving new attempts under the configured kernel backlog until capacity returns; it MUST NOT create an accept-and-close busy loop. Entry into a continuous saturation interval MUST be logged once at warning level rather than once per connection attempt.
 *Source.* RFC 7766 §10; resource management.
 *Verification.* Tests at and beyond the concurrent connection limit.
 
@@ -2315,7 +2315,7 @@ The "strict" policy raises the effective resistance to spoofing further (no usef
 
 ### Configuration
 
-**BDS-FR-COOKIE-008.** DNS Cookies MUST be enabled by default with the "lenient" policy. The configuration MUST permit the operator to disable cookies entirely or to switch to "strict" policy per §6.2. The configuration permits an in-process cookie secret regeneration interval (default: once per process lifetime, i.e., the secret persists until process restart) for operators who want periodic local rotation within a long-running process. This interval is valid only for process-local secrets and MUST NOT be combined with configured shared Server Secret material; anycast or load-balanced rollover uses the current-plus-previous shared-secret mechanism of BDS-FR-COOKIE-004.
+**BDS-FR-COOKIE-008.** DNS Cookies MUST be enabled by default with the "lenient" policy. The configuration MUST permit the operator to disable cookies entirely or to switch to "strict" policy per §6.2. Process-local Server Secrets MUST rotate automatically at a configurable interval that is greater than zero and no longer than 36 days; the default interval is 30 days. Independent per-process regeneration MUST NOT be combined with configured shared Server Secret material; anycast or load-balanced rollover uses the current-plus-previous shared-secret mechanism of BDS-FR-COOKIE-004.
 *Source.* Operational defaults; Appendix A.
 *Note.* RFC 7873 §5.2.3 permits a server receiving a Client-Cookie-only query to discard the request, send BADCOOKIE, or process the request and return a Server Cookie. BoronDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie while still issuing Server Cookies to clients that request them. Operators that need a stricter UDP anti-spoofing posture can opt into BADCOOKIE enforcement.
 *Verification.* Configuration round-trip tests across the three modes; behavioural tests confirming each mode's response composition.
@@ -3746,7 +3746,7 @@ confirmation rather than implicit endorsement.
 
 ## C.2 Foundational Exclusions
 
-These items conflict with the secondary-only architectural stance of BDS-INV-001, with the no-persistent-state stance of BDS-INV-004, or with the static-configuration stance of BDS-INV-005. They are excluded permanently from this project; bringing any of them into scope would redefine the project as something other than a secondary-only authoritative DNS server.
+These items conflict with the secondary-only architectural stance of BDS-INV-001, with the narrowly bounded last-good persistence stance of BDS-INV-004, or with the static-configuration stance of BDS-INV-005. They are excluded permanently from this project; bringing any of them into scope would redefine the project's supported profile.
 
 ### C.2.1 Primary-role functions
 
@@ -4131,7 +4131,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **CNAME.** Canonical Name record (type 5, RFC 1035 §3.3.1). Specifies a canonical name to which the owner name aliases.
 
-**Cold start.** A process start in which no prior state is recovered. Per BDS-INV-004, every start of this server is a cold start.
+**Cold start.** A process start in which no prior validated last-good zone snapshot is recovered. Per BDS-INV-004, this occurs only for zones without an eligible persisted snapshot or when the explicitly unsupported cold-start compatibility profile is selected.
 
 **Compression.** DNS name compression (RFC 1035 §4.1.4). The encoding of repeated domain names within a DNS message as 14-bit pointers into earlier in the message. The compression policy per RR type is specified in §4.14, Appendix B, and the companion implementation note `docs/rr-type-catalogue.md`.
 

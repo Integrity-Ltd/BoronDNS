@@ -261,7 +261,9 @@ fn main() {
     let boundary_packets = boundary_packet_cases();
     let udp_ceiling_packets = udp_ceiling_packet_cases();
     let store = ZoneStore::new();
-    store.insert_snapshot(snapshot.clone());
+    store
+        .try_insert_snapshot(snapshot.clone())
+        .expect("benchmark snapshot compiles");
     let mixed_packet_validation_mismatches =
         count_mixed_packet_mismatches(&store, image.clone(), &mixed_packets);
     let hot_packet_validation_mismatches =
@@ -1497,7 +1499,9 @@ fn build_zone_directory_benchmark(
         let serial = u32::try_from(index)
             .ok()
             .map(|value| value.saturating_add(1));
-        store.insert_snapshot(ZoneSnapshot::active(origin.clone(), serial, Vec::new()));
+        store
+            .try_insert_snapshot(ZoneSnapshot::active(origin.clone(), serial, Vec::new()))
+            .expect("benchmark snapshot compiles");
         origins.push(origin);
         qnames.push(
             DomainName::from_absolute_str(&format!("www.zone{index}.catalog-bench.test.")).unwrap(),
@@ -1521,7 +1525,9 @@ fn build_zone_directory_serial_gate_benchmark(zone_count: usize) -> (ZoneStore, 
                 .map(|value| value.saturating_add(1))
                 .unwrap_or(u32::MAX)
         });
-        store.insert_snapshot(ZoneSnapshot::active(origin.clone(), serial, Vec::new()));
+        store
+            .try_insert_snapshot(ZoneSnapshot::active(origin.clone(), serial, Vec::new()))
+            .expect("benchmark snapshot compiles");
         origins.push(origin);
     }
 
@@ -1925,11 +1931,11 @@ fn time_zone_directory_linear_lookup(
         let found = snapshots
             .iter()
             .map(|snapshot| snapshot.snapshot_for_offline_oracle())
-            .filter(|zone| qname.is_equal_or_subdomain_of(&zone.origin))
-            .max_by_key(|zone| zone.origin.label_count());
+            .filter(|zone| qname.is_equal_or_subdomain_of(zone.origin()))
+            .max_by_key(|zone| zone.origin().label_count());
         if let Some(zone) = found {
             found_count = found_count.saturating_add(1);
-            label_checksum = label_checksum.saturating_add(zone.origin.label_count());
+            label_checksum = label_checksum.saturating_add(zone.origin().label_count());
         }
     }
     TimedLookup {
@@ -2012,10 +2018,13 @@ fn time_zone_directory_offline_snapshot_rebuild_sort(
             .iter()
             .map(|snapshot| snapshot.snapshot_for_offline_oracle())
             .collect::<Vec<_>>();
-        snapshots.sort_by_key(|snapshot| snapshot.origin.canonical_key());
+        snapshots.sort_by_key(|snapshot| snapshot.origin().canonical_key());
         snapshot_count = snapshot_count.saturating_add(snapshots.len());
         for snapshot in &snapshots {
-            checksum = fnv1a_bytes(checksum, &snapshot.serial.unwrap_or_default().to_be_bytes());
+            checksum = fnv1a_bytes(
+                checksum,
+                &snapshot.serial().unwrap_or_default().to_be_bytes(),
+            );
         }
     }
     TimedLookup {
@@ -2144,9 +2153,9 @@ fn time_zone_directory_snapshot_state_clone(snapshots: &[OfflineZoneSnapshot]) -
                 .with_state(ZoneState::Expired),
         );
         expired_count =
-            expired_count.saturating_add(usize::from(expired.state == ZoneState::Expired));
+            expired_count.saturating_add(usize::from(expired.state() == ZoneState::Expired));
         serial_checksum =
-            serial_checksum.saturating_add(expired.serial.unwrap_or_default() as usize);
+            serial_checksum.saturating_add(expired.serial().unwrap_or_default() as usize);
     }
     TimedLookup {
         duration: started.elapsed(),
@@ -2407,33 +2416,35 @@ fn count_ede_nsec3_truncation_packet_mismatch() -> usize {
     let store = ZoneStore::new();
     let missing_nsec3 = nsec3_owner("missing.bench.test.", "bench.test.");
     let wildcard_nsec3 = nsec3_owner("*.bench.test.", "bench.test.");
-    store.insert_snapshot(ZoneSnapshot::active(
-        DomainName::from_absolute_str("bench.test.").unwrap(),
-        Some(1),
-        vec![
-            Rrset::new(
-                DomainName::from_absolute_str("bench.test.").unwrap(),
-                RecordType::Soa as u16,
-                1,
-                3600,
-                vec![soa_rdata()],
-            ),
-            Rrset::new(
-                missing_nsec3,
-                RecordType::Nsec3 as u16,
-                1,
-                300,
-                vec![nsec3_rdata_with_iterations(1, 1)],
-            ),
-            Rrset::new(
-                wildcard_nsec3,
-                RecordType::Nsec3 as u16,
-                1,
-                300,
-                vec![nsec3_rdata_with_iterations(1, 1)],
-            ),
-        ],
-    ));
+    store
+        .try_insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("bench.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("bench.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    missing_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+            ],
+        ))
+        .expect("benchmark snapshot compiles");
     let mut packet = query_packet(
         &DomainName::from_absolute_str("missing.bench.test.").unwrap(),
         RecordType::A as u16,

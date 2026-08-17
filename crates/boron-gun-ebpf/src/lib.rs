@@ -83,6 +83,24 @@ struct UdpHdr {
     check: u16,
 }
 
+// SAFETY: implementors are repr(C) packet headers containing only integer or
+// byte-array fields, so every input bit pattern is a valid Rust value.
+// SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-001
+unsafe trait PacketPod: Copy {}
+// SAFETY: EthHdr is repr(C), Copy, has no padding read by the program, and any
+// bit pattern is valid for its byte-array fields.
+// SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-002
+unsafe impl PacketPod for EthHdr {}
+// SAFETY: Ipv4Hdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-003
+unsafe impl PacketPod for Ipv4Hdr {}
+// SAFETY: Ipv6Hdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-004
+unsafe impl PacketPod for Ipv6Hdr {}
+// SAFETY: UdpHdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-005
+unsafe impl PacketPod for UdpHdr {}
+
 #[xdp]
 pub fn boron_gun_reply_redirect(ctx: XdpContext) -> u32 {
     match try_boron_gun_reply_redirect(&ctx) {
@@ -130,12 +148,20 @@ fn try_boron_gun_drop(ctx: &XdpContext) -> Result<u32, ()> {
     }
 
     let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
+    if ip.version_ihl >> 4 != 4 {
+        return Ok(xdp_action::XDP_PASS);
+    }
     if ip.protocol != 17 {
         return Ok(xdp_action::XDP_PASS);
     }
 
     let ihl = usize::from(ip.version_ihl & 0x0f) * 4;
     if ihl < mem::size_of::<Ipv4Hdr>() {
+        return Ok(xdp_action::XDP_PASS);
+    }
+    if (u16::from_be(ip.frag_off) & 0x3fff) != 0
+        || usize::from(u16::from_be(ip.total_len)) < ihl + mem::size_of::<UdpHdr>()
+    {
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -173,6 +199,9 @@ fn udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
 fn ipv4_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
     let ip_offset = mem::size_of::<EthHdr>();
     let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
+    if ip.version_ihl >> 4 != 4 {
+        return Err(());
+    }
     if ip.protocol != 17 {
         return Err(());
     }
@@ -181,7 +210,9 @@ fn ipv4_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
     if ihl < mem::size_of::<Ipv4Hdr>() {
         return Err(());
     }
-    if (u16::from_be(ip.frag_off) & 0x3fff) != 0 {
+    if (u16::from_be(ip.frag_off) & 0x3fff) != 0
+        || usize::from(u16::from_be(ip.total_len)) < ihl + mem::size_of::<UdpHdr>()
+    {
         return Err(());
     }
 
@@ -204,16 +235,20 @@ fn ipv6_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
     Ok(ip_offset + mem::size_of::<Ipv6Hdr>())
 }
 
-fn read_at<T: Copy>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {
+fn read_at<T: PacketPod>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
     let size = mem::size_of::<T>();
-    if start + offset + size > end {
+    let location = start.checked_add(offset).ok_or(())?;
+    let limit = location.checked_add(size).ok_or(())?;
+    if limit > end {
         return Err(());
     }
-    let ptr = (start + offset) as *const T;
-    // SAFETY: bounds are checked against data_end above; unaligned access is
-    // required because packet headers are byte streams, not Rust-aligned structs.
+    let ptr = location as *const T;
+    // SAFETY: bounds are checked against data_end above, PacketPod guarantees
+    // all input bit patterns are valid T values, and unaligned access is
+    // required because packet headers are byte streams.
+    // SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-006
     Ok(unsafe { ptr::read_unaligned(ptr) })
 }
 
@@ -231,6 +266,7 @@ fn increment_drop_counter() {
 fn rx_queue_index(ctx: &XdpContext) -> u32 {
     // SAFETY: `ctx.ctx` is the kernel-provided xdp_md pointer for this program
     // invocation and remains valid for the duration of the call.
+    // SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-007
     unsafe { (*ctx.ctx).rx_queue_index }
 }
 
@@ -240,6 +276,7 @@ fn increment_counter(counter: &PerCpuArray<u64>) {
     };
     // SAFETY: the pointer comes from a valid per-CPU Array map entry for the
     // current CPU, so a plain increment is sufficient.
+    // SAFETY-ID: UNSAFE-BORON-GUN-EBPF-LIB-008
     unsafe {
         *counter += 1;
     }

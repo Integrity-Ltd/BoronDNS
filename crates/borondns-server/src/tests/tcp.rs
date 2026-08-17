@@ -641,7 +641,7 @@ async fn tcp_connection_closes_on_zero_length_frame() {
 }
 
 #[tokio::test]
-async fn tcp_listener_closes_connections_over_global_limit() {
+async fn tcp_listener_leaves_over_global_limit_connections_in_kernel_backlog() {
     let zones = ZoneStore::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -691,13 +691,21 @@ async fn tcp_listener_closes_connections_over_global_limit() {
 
     let mut second = TcpStream::connect(addr).await.unwrap();
     let mut byte = [0u8; 1];
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), second.read(&mut byte))
+            .await
+            .is_err(),
+        "over-limit connection must remain queued rather than being accepted and closed"
+    );
+    assert_eq!(active.load(Ordering::Acquire), 1);
+
+    drop(first);
+    second.write_all(&[0, 0]).await.unwrap();
     let read = tokio::time::timeout(std::time::Duration::from_secs(1), second.read(&mut byte))
         .await
-        .expect("over-limit connection should close promptly")
+        .expect("queued connection should be admitted after capacity returns")
         .unwrap();
-
     assert_eq!(read, 0);
-    assert_eq!(active.load(Ordering::Acquire), 1);
     server.abort();
     let _ = server.await;
     for _ in 0..100 {
@@ -707,7 +715,6 @@ async fn tcp_listener_closes_connections_over_global_limit() {
         tokio::task::yield_now().await;
     }
     assert_eq!(active.load(Ordering::Acquire), 0);
-    drop(first);
 }
 
 #[tokio::test]

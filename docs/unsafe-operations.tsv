@@ -1,0 +1,84 @@
+id	path	unsafe_surface
+UNSAFE-BORON-GUN-XDP-BACKEND-001	crates/boron-gun/src/xdp_backend.rs	unsafe impl Send for BoundXdpWorker {}
+UNSAFE-BORON-GUN-XDP-BACKEND-002	crates/boron-gun/src/xdp_backend.rs	unsafe impl Pod for DropConfig {}
+UNSAFE-BORON-GUN-XDP-BACKEND-003	crates/boron-gun/src/xdp_backend.rs	unsafe impl Pod for ReplyRedirectConfig {}
+UNSAFE-BORON-GUN-XDP-BACKEND-004	crates/boron-gun/src/xdp_backend.rs	unsafe {
+UNSAFE-BORON-GUN-XDP-BACKEND-005	crates/boron-gun/src/xdp_backend.rs	let Some(mut packet) = (unsafe { worker.umem.alloc() }) else {
+UNSAFE-BORON-GUN-XDP-BACKEND-006	crates/boron-gun/src/xdp_backend.rs	let sent = match unsafe { worker.tx_ring.send(&mut send_slab, wakeup) } {
+UNSAFE-BORON-GUN-XDP-BACKEND-007	crates/boron-gun/src/xdp_backend.rs	let ret = unsafe {
+UNSAFE-BORON-GUN-XDP-BACKEND-008	crates/boron-gun/src/xdp_backend.rs	let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+UNSAFE-BORON-GUN-XDP-BACKEND-009	crates/boron-gun/src/xdp_backend.rs	unsafe {
+UNSAFE-BORON-GUN-XDP-BACKEND-010	crates/boron-gun/src/xdp_backend.rs	let result = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
+UNSAFE-BORON-GUN-XDP-BACKEND-011	crates/boron-gun/src/xdp_backend.rs	let received = unsafe { rx_ring.recv(umem, recv_slab) };
+UNSAFE-BORON-GUN-XDP-BACKEND-012	crates/boron-gun/src/xdp_backend.rs	unsafe {
+UNSAFE-BORON-GUN-EBPF-LIB-001	crates/boron-gun-ebpf/src/lib.rs	unsafe trait PacketPod: Copy {}
+UNSAFE-BORON-GUN-EBPF-LIB-002	crates/boron-gun-ebpf/src/lib.rs	unsafe impl PacketPod for EthHdr {}
+UNSAFE-BORON-GUN-EBPF-LIB-003	crates/boron-gun-ebpf/src/lib.rs	unsafe impl PacketPod for Ipv4Hdr {}
+UNSAFE-BORON-GUN-EBPF-LIB-004	crates/boron-gun-ebpf/src/lib.rs	unsafe impl PacketPod for Ipv6Hdr {}
+UNSAFE-BORON-GUN-EBPF-LIB-005	crates/boron-gun-ebpf/src/lib.rs	unsafe impl PacketPod for UdpHdr {}
+UNSAFE-BORON-GUN-EBPF-LIB-006	crates/boron-gun-ebpf/src/lib.rs	Ok(unsafe { ptr::read_unaligned(ptr) })
+UNSAFE-BORON-GUN-EBPF-LIB-007	crates/boron-gun-ebpf/src/lib.rs	unsafe { (*ctx.ctx).rx_queue_index }
+UNSAFE-BORON-GUN-EBPF-LIB-008	crates/boron-gun-ebpf/src/lib.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-001	crates/borondns-server/src/af_xdp.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-002	crates/borondns-server/src/af_xdp.rs	unsafe impl Pod for RedirectConfig {}
+UNSAFE-BORONDNS-SERVER-AF-XDP-003	crates/borondns-server/src/af_xdp.rs	unsafe impl Send for AfXdpPacketIo {}
+UNSAFE-BORONDNS-SERVER-AF-XDP-004	crates/borondns-server/src/af_xdp.rs	let initially_filled = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-005	crates/borondns-server/src/af_xdp.rs	let queued = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-006	crates/borondns-server/src/af_xdp.rs	let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-007	crates/borondns-server/src/af_xdp.rs	let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-008	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-009	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-001	crates/borondns-server/src/privilege.rs	unsafe { std::mem::zeroed() }
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-002	crates/borondns-server/src/privilege.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-003	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::initgroups(name.as_ptr(), gid) })
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-004	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::setresgid(gid, gid, gid) })
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-005	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::setresuid(uid, uid, uid) })
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-006	crates/borondns-server/src/privilege.rs	unsafe { libc::geteuid() }
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-007	crates/borondns-server/src/privilege.rs	unsafe { libc::getegid() }
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-008	crates/borondns-server/src/privilege.rs	unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) }
+UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-001	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) })
+UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-002	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, value, 0, 0, 0) })
+UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-003	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) })
+UNSAFE-BORONDNS-SERVER-PROCESS-SIGNALS-001	crates/borondns-server/src/process_signals.rs	let previous = unsafe { libc::signal(signal, libc::SIG_IGN) };
+UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-001	crates/borondns-server/src/resource_limits.rs	let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-002	crates/borondns-server/src/resource_limits.rs	let result = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) };
+UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-003	crates/borondns-server/src/resource_limits.rs	let stat = unsafe { stat.assume_init() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-001	crates/borondns-server/src/std_udp_mmsg.rs	self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-002	crates/borondns-server/src/std_udp_mmsg.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-003	crates/borondns-server/src/std_udp_mmsg.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-004	crates/borondns-server/src/std_udp_mmsg.rs	self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-005	crates/borondns-server/src/std_udp_mmsg.rs	unsafe trait ZeroValid: Copy {}
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-006	crates/borondns-server/src/std_udp_mmsg.rs	unsafe impl ZeroValid for libc::sockaddr_storage {}
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-007	crates/borondns-server/src/std_udp_mmsg.rs	unsafe impl ZeroValid for libc::iovec {}
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-008	crates/borondns-server/src/std_udp_mmsg.rs	unsafe impl ZeroValid for libc::mmsghdr {}
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-009	crates/borondns-server/src/std_udp_mmsg.rs	unsafe { std::mem::zeroed() }
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-010	crates/borondns-server/src/std_udp_mmsg.rs	unsafe { *libc::__errno_location() }
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-011	crates/borondns-server/src/std_udp_mmsg.rs	let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-012	crates/borondns-server/src/std_udp_mmsg.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-013	crates/borondns-server/src/std_udp_mmsg.rs	let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-014	crates/borondns-server/src/std_udp_mmsg.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-015	crates/borondns-server/src/std_udp_mmsg.rs	let raw = unsafe { *std::ptr::from_ref(storage).cast::<libc::sockaddr_in>() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-016	crates/borondns-server/src/std_udp_mmsg.rs	let raw = unsafe { *std::ptr::from_ref(storage).cast::<libc::sockaddr_in6>() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-001	crates/borondns-server/src/std_udp_socket.rs	let fd = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-002	crates/borondns-server/src/std_udp_socket.rs	let _ = unsafe { libc::close(fd) };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-003	crates/borondns-server/src/std_udp_socket.rs	Ok(unsafe { std::net::UdpSocket::from_raw_fd(fd) })
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-004	crates/borondns-server/src/std_udp_socket.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-005	crates/borondns-server/src/std_udp_socket.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-006	crates/borondns-server/src/std_udp_socket.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-007	crates/borondns-server/src/std_udp_socket.rs	let result = unsafe { libc::bind(fd, (&storage as *const libc::sockaddr_storage).cast(), len) };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-008	crates/borondns-server/src/std_udp_socket.rs	let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-009	crates/borondns-server/src/std_udp_socket.rs	let mut raw: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-010	crates/borondns-server/src/std_udp_socket.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-011	crates/borondns-server/src/std_udp_socket.rs	let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-012	crates/borondns-server/src/std_udp_socket.rs	let mut raw: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-013	crates/borondns-server/src/std_udp_socket.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-014	crates/borondns-server/src/std_udp_socket.rs	let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-015	crates/borondns-server/src/std_udp_socket.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-016	crates/borondns-server/src/std_udp_socket.rs	let result = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-001	crates/borondns-server-ebpf/src/lib.rs	unsafe trait PacketPod: Copy {}
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-002	crates/borondns-server-ebpf/src/lib.rs	unsafe impl PacketPod for EthHdr {}
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-003	crates/borondns-server-ebpf/src/lib.rs	unsafe impl PacketPod for Ipv4Hdr {}
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-004	crates/borondns-server-ebpf/src/lib.rs	unsafe impl PacketPod for Ipv6Hdr {}
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-005	crates/borondns-server-ebpf/src/lib.rs	unsafe impl PacketPod for UdpHdr {}
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-006	crates/borondns-server-ebpf/src/lib.rs	Ok(unsafe { ptr::read_unaligned(ptr) })
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-007	crates/borondns-server-ebpf/src/lib.rs	unsafe { (*ctx.ctx).rx_queue_index }

@@ -79,12 +79,12 @@ pub struct SoaTimers {
     pub minimum: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ZoneSnapshot {
-    pub origin: DomainName,
-    pub state: ZoneState,
-    pub serial: Option<u32>,
-    pub soa_timers: Option<SoaTimers>,
+    origin: DomainName,
+    state: ZoneState,
+    serial: Option<u32>,
+    soa_timers: Option<SoaTimers>,
     soa_record_count: usize,
     dnssec_rrset_count: usize,
     rdata_record_count: usize,
@@ -117,13 +117,32 @@ impl Default for ZoneSnapshotLineage {
     }
 }
 
-impl PartialEq for ZoneSnapshotLineage {
-    fn eq(&self, _other: &Self) -> bool {
-        true
+impl PartialEq for ZoneSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        // Lineage is publication ancestry and an incremental-diff hint, not
+        // part of the zone's semantic contents. Keep that exclusion explicit
+        // here instead of giving ZoneSnapshotLineage surprising always-equal
+        // semantics.
+        self.origin == other.origin
+            && self.state == other.state
+            && self.serial == other.serial
+            && self.soa_timers == other.soa_timers
+            && self.soa_record_count == other.soa_record_count
+            && self.dnssec_rrset_count == other.dnssec_rrset_count
+            && self.rdata_record_count == other.rdata_record_count
+            && self.denial_indexes == other.denial_indexes
+            && self.shape_summary_cache == other.shape_summary_cache
+            && self.rdata_count_frequencies == other.rdata_count_frequencies
+            && self.origin_key == other.origin_key
+            && self.rrsets == other.rrsets
+            && self.name_classes == other.name_classes
+            && self.empty_non_terminal_classes == other.empty_non_terminal_classes
+            && self.delegation_rrsets == other.delegation_rrsets
+            && self.dname_rrsets == other.dname_rrsets
     }
 }
 
-impl Eq for ZoneSnapshotLineage {}
+impl Eq for ZoneSnapshot {}
 
 #[derive(Debug, Clone, Copy)]
 #[doc(hidden)]
@@ -514,6 +533,22 @@ const ZONE_SHAPE_BYTE_BUCKETS: &[ZoneShapeBucketDefinition] = &[
 ];
 
 impl ZoneSnapshot {
+    pub fn origin(&self) -> &DomainName {
+        &self.origin
+    }
+
+    pub fn state(&self) -> ZoneState {
+        self.state
+    }
+
+    pub fn serial(&self) -> Option<u32> {
+        self.serial
+    }
+
+    pub fn soa_timers(&self) -> Option<SoaTimers> {
+        self.soa_timers
+    }
+
     pub fn loading(origin: DomainName) -> Self {
         let origin_key = NameKey::from(origin.canonical_key());
         Self {
@@ -2960,11 +2995,25 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+const ZONE_DIRECTORY_SHARD_COUNT: usize = 256;
+
+#[derive(Debug, Clone)]
 struct ZoneDirectory {
-    by_origin: HashMap<String, Arc<ZoneStoreEntry>>,
-    suffix_index: HashMap<Vec<u8>, Arc<ZoneStoreEntry>>,
+    by_origin: [Arc<HashMap<String, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
+    suffix_index: [Arc<HashMap<Vec<u8>, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
+    len: usize,
     active_count: usize,
+}
+
+impl Default for ZoneDirectory {
+    fn default() -> Self {
+        Self {
+            by_origin: std::array::from_fn(|_| Arc::new(HashMap::new())),
+            suffix_index: std::array::from_fn(|_| Arc::new(HashMap::new())),
+            len: 0,
+            active_count: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3363,6 +3412,18 @@ impl ZoneStore {
         self.zones.store(Arc::new(next));
     }
 
+    /// Compile and atomically publish a complete snapshot.
+    pub fn try_insert_snapshot(
+        &self,
+        snapshot: ZoneSnapshot,
+    ) -> Result<ZoneMetadata, ZoneImageBuildError> {
+        self.try_replace_snapshot(Arc::new(snapshot), false)
+            .map(|entry| entry.control_metadata())
+    }
+
+    /// Infallible convenience retained only for internal and cross-crate tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn insert_snapshot(&self, snapshot: ZoneSnapshot) {
         let snapshot = Arc::new(snapshot);
         self.replace_snapshot(snapshot, false);
@@ -3797,8 +3858,10 @@ impl ZoneStore {
 
     fn clone_directory_for_publication(&self, current: &ZoneDirectory) -> ZoneDirectory {
         #[cfg(test)]
-        self.publication_clone_work
-            .fetch_add(current.len(), Ordering::Relaxed);
+        if !current.is_empty() {
+            self.publication_clone_work
+                .fetch_add(ZONE_DIRECTORY_SHARD_COUNT * 2, Ordering::Relaxed);
+        }
         current.clone()
     }
 
@@ -4066,41 +4129,49 @@ impl PublishedZoneView for PublishedZoneRef<'_> {
 impl ZoneDirectory {
     fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
         let suffix_key = canonical_reverse_label_key(&entry.origin);
-        if let Some(previous) = self.by_origin.insert(key.clone(), entry.clone()) {
+        let origin_shard = zone_directory_shard(key.as_bytes());
+        let suffix_shard = zone_directory_shard(&suffix_key);
+        let previous = Arc::make_mut(&mut self.by_origin[origin_shard]).insert(key, entry.clone());
+        if let Some(previous) = previous {
             self.active_count = self.active_count.saturating_sub(usize::from(
                 previous.state == ZoneState::Active && !previous.hidden,
             ));
+        } else {
+            self.len = self.len.saturating_add(1);
         }
         self.active_count = self.active_count.saturating_add(usize::from(
             entry.state == ZoneState::Active && !entry.hidden,
         ));
-        self.suffix_index.insert(suffix_key, entry);
+        Arc::make_mut(&mut self.suffix_index[suffix_shard]).insert(suffix_key, entry);
     }
 
     fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
-        let entry = self.by_origin.remove(key)?;
+        let origin_shard = zone_directory_shard(key.as_bytes());
+        let entry = Arc::make_mut(&mut self.by_origin[origin_shard]).remove(key)?;
+        self.len = self.len.saturating_sub(1);
         self.active_count = self.active_count.saturating_sub(usize::from(
             entry.state == ZoneState::Active && !entry.hidden,
         ));
-        self.suffix_index
-            .remove(canonical_reverse_label_key(&entry.origin).as_slice());
+        let suffix_key = canonical_reverse_label_key(&entry.origin);
+        let suffix_shard = zone_directory_shard(&suffix_key);
+        Arc::make_mut(&mut self.suffix_index[suffix_shard]).remove(suffix_key.as_slice());
         Some(entry)
     }
 
     fn contains_key(&self, key: &str) -> bool {
-        self.by_origin.contains_key(key)
+        self.get(key).is_some()
     }
 
     fn get(&self, key: &str) -> Option<&Arc<ZoneStoreEntry>> {
-        self.by_origin.get(key)
+        self.by_origin[zone_directory_shard(key.as_bytes())].get(key)
     }
 
     fn values(&self) -> impl Iterator<Item = &Arc<ZoneStoreEntry>> {
-        self.by_origin.values()
+        self.by_origin.iter().flat_map(|shard| shard.values())
     }
 
     fn len(&self) -> usize {
-        self.by_origin.len()
+        self.len
     }
 
     fn active_count(&self) -> usize {
@@ -4108,7 +4179,7 @@ impl ZoneDirectory {
     }
 
     fn is_empty(&self) -> bool {
-        self.by_origin.is_empty()
+        self.len == 0
     }
 
     fn find_best_match(
@@ -4137,13 +4208,13 @@ impl ZoneDirectory {
         let (qname_key, prefix_lengths) =
             canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
         for prefix_len in prefix_lengths.into_iter().rev() {
-            if let Some(entry) = self.suffix_index.get(&qname_key[..prefix_len])
+            if let Some(entry) = self.suffix_get(&qname_key[..prefix_len])
                 && !entry.hidden
             {
                 return Some(entry);
             }
         }
-        if let Some(entry) = self.suffix_index.get([].as_slice())
+        if let Some(entry) = self.suffix_get([].as_slice())
             && !entry.hidden
         {
             return Some(entry);
@@ -4158,23 +4229,35 @@ impl ZoneDirectory {
     ) -> Option<&ZoneStoreEntry> {
         let (qname_key, prefix_lengths) =
             canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
-        let exact = self.suffix_index.get(qname_key.as_slice())?;
+        let exact = self.suffix_get(qname_key.as_slice())?;
         if exact.hidden || prefix_lengths.is_empty() {
             return None;
         }
 
         for prefix_len in prefix_lengths[..prefix_lengths.len() - 1].iter().rev() {
-            if let Some(entry) = self.suffix_index.get(&qname_key[..*prefix_len])
+            if let Some(entry) = self.suffix_get(&qname_key[..*prefix_len])
                 && !entry.hidden
             {
                 return Some(entry.as_ref());
             }
         }
-        self.suffix_index
-            .get([].as_slice())
+        self.suffix_get([].as_slice())
             .filter(|entry| !entry.hidden)
             .map(Arc::as_ref)
     }
+
+    fn suffix_get(&self, key: &[u8]) -> Option<&Arc<ZoneStoreEntry>> {
+        self.suffix_index[zone_directory_shard(key)].get(key)
+    }
+}
+
+fn zone_directory_shard(bytes: &[u8]) -> usize {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash as usize) & (ZONE_DIRECTORY_SHARD_COUNT - 1)
 }
 
 fn canonical_reverse_label_key(name: &DomainName) -> Vec<u8> {
@@ -6066,7 +6149,7 @@ mod tests {
     }
 
     #[test]
-    fn ten_thousand_zone_batch_publication_has_linear_clone_work() {
+    fn ten_thousand_zone_batch_publication_has_bounded_shallow_clone_work() {
         let store = ZoneStore::new();
         let initial = (0..10_000)
             .map(|index| {
@@ -6093,8 +6176,8 @@ mod tests {
         assert_eq!(store.len(), 10_000);
         assert_eq!(
             store.publication_clone_work(),
-            10_000,
-            "a 1k-zone replacement must clone the 10k directory once, not once per zone"
+            ZONE_DIRECTORY_SHARD_COUNT * 2,
+            "a 1k-zone replacement must shallow-clone only the fixed shard handles"
         );
         assert!(store.contains_exact_zone_for_control(&replacements[999]));
         assert!(!store.contains_exact_zone_for_control(&initial[999]));

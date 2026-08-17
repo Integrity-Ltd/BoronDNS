@@ -17,7 +17,8 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::Semaphore,
+    sync::{Semaphore, watch},
+    task::JoinSet,
 };
 use tracing::{info, warn};
 
@@ -30,6 +31,7 @@ use crate::{
 };
 
 const MAX_CONNECTIONS: usize = 65_535;
+const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct ServerConfig {
@@ -241,6 +243,7 @@ impl BoundServer {
         );
 
         tokio::pin!(shutdown);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let tcp_loop = tcp_accept_loop(
             tcp,
             scenario.clone(),
@@ -250,15 +253,24 @@ impl BoundServer {
             stats.clone(),
             serial_clock.clone(),
             ixfr_max_generations,
+            shutdown_rx,
         );
         let udp_loop = udp_receive_loop(udp, scenario, tsig_key, stats.clone(), serial_clock);
         tokio::pin!(tcp_loop);
         tokio::pin!(udp_loop);
 
+        let mut tcp_completed = false;
         tokio::select! {
-            result = &mut tcp_loop => result?,
+            result = &mut tcp_loop => {
+                result?;
+                tcp_completed = true;
+            },
             result = &mut udp_loop => result?,
             () = &mut shutdown => {}
+        }
+        let _ = shutdown_tx.send(true);
+        if !tcp_completed {
+            tcp_loop.await?;
         }
         let snapshot = stats.snapshot();
         info!(
@@ -293,9 +305,26 @@ async fn tcp_accept_loop(
     stats: Arc<ServerStatsInner>,
     serial_clock: Arc<SerialClock>,
     ixfr_max_generations: u32,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), ServerError> {
+    let mut connection_tasks = JoinSet::new();
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (stream, peer) = tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+            completed = connection_tasks.join_next(), if !connection_tasks.is_empty() => {
+                if let Some(Err(error)) = completed {
+                    warn!(%error, "BoronGen TCP connection task failed");
+                }
+                continue;
+            }
+            accepted = listener.accept() => accepted?,
+        };
         let Ok(permit) = connections.clone().try_acquire_owned() else {
             stats.tcp_overload_drops.fetch_add(1, Ordering::Relaxed);
             warn!(
@@ -311,7 +340,7 @@ async fn tcp_accept_loop(
         let tsig_key = tsig_key.clone();
         let stats = stats.clone();
         let serial_clock = serial_clock.clone();
-        tokio::spawn(async move {
+        connection_tasks.spawn(async move {
             let _permit = permit;
             if let Err(error) = handle_tcp(
                 stream,
@@ -336,6 +365,32 @@ async fn tcp_accept_loop(
             }
         });
     }
+    drop(listener);
+    let drain = async {
+        while let Some(result) = connection_tasks.join_next().await {
+            if let Err(error) = result {
+                warn!(%error, "BoronGen TCP connection task failed during drain");
+            }
+        }
+    };
+    if tokio::time::timeout(CONNECTION_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
+        warn!(
+            outstanding = connection_tasks.len(),
+            "BoronGen TCP connection drain timed out; aborting remaining tasks"
+        );
+        connection_tasks.abort_all();
+        while let Some(result) = connection_tasks.join_next().await {
+            if let Err(error) = result
+                && !error.is_cancelled()
+            {
+                warn!(%error, "BoronGen TCP connection task failed during abort");
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn udp_receive_loop(
@@ -787,6 +842,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_boundedly_drains_and_aborts_incomplete_tcp_connection() {
+        let scenario = Scenario::new(ScenarioConfig::default()).unwrap();
+        let server = BoundServer::bind(
+            scenario,
+            ServerConfig {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                message_bytes: 1_500,
+                max_connections: 1,
+                tsig_key: None,
+                ixfr_churn_interval_ms: 0,
+                ixfr_churn_start_delay_ms: 0,
+                ixfr_max_generations: 16,
+            },
+        )
+        .await
+        .unwrap();
+        let address = server.local_addr();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_task = tokio::spawn(server.run_until(async {
+            let _ = shutdown_rx.await;
+        }));
+
+        let mut connection = TcpStream::connect(address).await.unwrap();
+        connection.write_all(&[0]).await.unwrap();
+        let _ = shutdown_tx.send(());
+        let stats = tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("BoronGen shutdown must be bounded")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.queries, 0);
+        assert_eq!(stats.rejected, 0);
+        let mut byte = [0u8; 1];
+        assert_eq!(connection.read(&mut byte).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn signed_axfr_and_unchanged_ixfr_round_trip_through_production_parsers() {
         let scenario = Scenario::new(ScenarioConfig {
             profile: ContentProfile::RegistryNsec3,
@@ -846,7 +938,7 @@ mod tests {
             .verify_tcp_response_stream_owned(messages, &query.mac, unix_time())
             .unwrap();
         let snapshot = parse_axfr_response(0x5151, &origin, 1, &unsigned).unwrap();
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.serial(), Some(1));
 
         let current_soa = snapshot.soa_record_view(1).unwrap();
         let ixfr_query = client_key
@@ -973,7 +1065,7 @@ mod tests {
         let IxfrResponse::Updated(updated) = response else {
             panic!("timed server should advance beyond the base serial")
         };
-        assert!(updated.serial.unwrap() >= 2);
+        assert!(updated.serial().unwrap() >= 2);
         assert_eq!(updated.rdata_record_count(), base.rdata_record_count());
 
         let _ = shutdown_tx.send(());

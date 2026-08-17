@@ -73,6 +73,24 @@ struct UdpHdr {
     check: u16,
 }
 
+// SAFETY: implementors are repr(C) packet headers containing only integer or
+// byte-array fields, so every input bit pattern is a valid Rust value.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-001
+unsafe trait PacketPod: Copy {}
+// SAFETY: EthHdr is repr(C), Copy, has no padding read by the program, and any
+// bit pattern is valid for its byte-array fields.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-002
+unsafe impl PacketPod for EthHdr {}
+// SAFETY: Ipv4Hdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-003
+unsafe impl PacketPod for Ipv4Hdr {}
+// SAFETY: Ipv6Hdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-004
+unsafe impl PacketPod for Ipv6Hdr {}
+// SAFETY: UdpHdr is repr(C), Copy, and every field accepts every bit pattern.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-005
+unsafe impl PacketPod for UdpHdr {}
+
 #[xdp]
 pub fn borondns_xdp_redirect(ctx: XdpContext) -> u32 {
     match try_borondns_xdp_redirect(&ctx) {
@@ -188,22 +206,27 @@ fn ipv6_address_matches(packet: &[u8; 16], configured: &[u8; 16]) -> bool {
         && packet[15] == configured[15]
 }
 
-fn read_at<T: Copy>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {
+fn read_at<T: PacketPod>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
     let size = mem::size_of::<T>();
-    if start + offset + size > end {
+    let location = start.checked_add(offset).ok_or(())?;
+    let limit = location.checked_add(size).ok_or(())?;
+    if limit > end {
         return Err(());
     }
-    let ptr = (start + offset) as *const T;
-    // SAFETY: bounds are checked against data_end above; unaligned access is
-    // required because packet headers are byte streams, not Rust-aligned structs.
+    let ptr = location as *const T;
+    // SAFETY: bounds are checked against data_end above, PacketPod guarantees
+    // all input bit patterns are valid T values, and unaligned access is
+    // required because packet headers are byte streams.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-006
     Ok(unsafe { ptr::read_unaligned(ptr) })
 }
 
 fn rx_queue_index(ctx: &XdpContext) -> u32 {
     // SAFETY: `ctx.ctx` is the kernel-provided xdp_md pointer for this program
     // invocation and remains valid for the duration of the call.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-007
     unsafe { (*ctx.ctx).rx_queue_index }
 }
 

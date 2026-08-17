@@ -2541,11 +2541,11 @@ mod tests {
         )
         .expect("valid AXFR");
 
-        assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
-        assert_eq!(snapshot.origin, apex);
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.state(), crate::zone::ZoneState::Active);
+        assert_eq!(snapshot.origin(), &apex);
+        assert_eq!(snapshot.serial(), Some(1));
         assert_eq!(
-            snapshot.soa_timers,
+            snapshot.soa_timers(),
             Some(SoaTimers {
                 refresh: 3600,
                 retry: 600,
@@ -2655,8 +2655,8 @@ mod tests {
         let snapshot = parse_axfr_response(0x1234, &apex, 1, &[first, second])
             .expect("multi-message AXFR with omitted later questions");
 
-        assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.state(), crate::zone::ZoneState::Active);
+        assert_eq!(snapshot.serial(), Some(1));
         assert!(
             snapshot
                 .offline_oracle()
@@ -3232,8 +3232,8 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected updated zone");
         };
-        assert_eq!(snapshot.state, ZoneState::Active);
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.state(), ZoneState::Active);
+        assert_eq!(snapshot.serial(), Some(1));
     }
 
     #[test]
@@ -3302,7 +3302,7 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected AXFR fallback update");
         };
-        assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(snapshot.serial(), Some(2));
     }
 
     #[test]
@@ -3359,7 +3359,7 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected updated zone");
         };
-        assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(snapshot.state(), ZoneState::Active);
     }
 
     #[test]
@@ -3605,7 +3605,7 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected updated zone");
         };
-        assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(snapshot.serial(), Some(2));
         assert!(
             snapshot
                 .offline_oracle()
@@ -4254,7 +4254,7 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected updated zone");
         };
-        assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(snapshot.serial(), Some(2));
         assert_eq!(
             snapshot
                 .offline_oracle()
@@ -4874,7 +4874,7 @@ mod tests {
         )
         .expect("mixed-case apex SOA and NS owners");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.serial(), Some(1));
     }
 
     #[test]
@@ -4991,7 +4991,7 @@ mod tests {
         )
         .expect("CNAME with DNSSEC exception data");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.serial(), Some(1));
     }
 
     #[test]
@@ -5160,7 +5160,7 @@ mod tests {
         )
         .expect("structurally distinct DNAME owners must not be merged");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(snapshot.serial(), Some(1));
     }
 
     #[test]

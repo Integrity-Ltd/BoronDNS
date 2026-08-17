@@ -668,6 +668,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | TransferError::Timeout { .. }
                 | TransferError::Axfr(_)
                 | TransferError::Ixfr(_)
+                | TransferError::ValidationWorker { .. }
                 | TransferError::Soa(_)
                 | TransferError::TcpFrame(_)
                 | TransferError::RandomQueryId(_)

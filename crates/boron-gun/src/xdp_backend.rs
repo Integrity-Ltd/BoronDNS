@@ -296,6 +296,7 @@ impl TxByteAccountant {
 // SAFETY: the worker owns the AF_XDP socket, rings, UMEM, slabs, and packets as
 // one unit. Packets are never shared concurrently; moving the worker to a
 // thread transfers ownership of the UMEM and all ring handles together.
+// SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-001
 unsafe impl Send for BoundXdpWorker {}
 
 #[derive(Debug)]
@@ -412,6 +413,7 @@ struct DropConfig {
 
 // SAFETY: DropConfig is repr(C), Copy, contains only integer fields, and has no
 // padding-sensitive references or invalid bit patterns.
+// SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-002
 unsafe impl Pod for DropConfig {}
 
 #[repr(C)]
@@ -424,6 +426,7 @@ struct ReplyRedirectConfig {
 
 // SAFETY: ReplyRedirectConfig is repr(C), Copy, contains only integer fields,
 // and has no references or invalid bit patterns.
+// SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-003
 unsafe impl Pod for ReplyRedirectConfig {}
 
 struct KernelDropGuard {
@@ -659,13 +662,24 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     let mut aggregate = Stats::default();
     let mut send_duration = Duration::ZERO;
     let mut queue_stats = Vec::with_capacity(queue_count as usize);
+    let mut worker_failures = Vec::new();
     for handle in handles {
-        let outcome = handle
-            .join()
-            .map_err(|_| anyhow!("XDP queue worker panicked"))??;
-        send_duration = send_duration.max(outcome.send_duration);
-        queue_stats.push(XdpQueueOutputRecord::from_outcome(&outcome));
-        merge_stats(&mut aggregate, outcome.stats);
+        match handle.join() {
+            Ok(Ok(outcome)) => {
+                send_duration = send_duration.max(outcome.send_duration);
+                queue_stats.push(XdpQueueOutputRecord::from_outcome(&outcome));
+                merge_stats(&mut aggregate, outcome.stats);
+            }
+            Ok(Err(error)) => worker_failures.push(error.to_string()),
+            Err(_) => worker_failures.push("XDP queue worker panicked".to_owned()),
+        }
+    }
+    if !worker_failures.is_empty() {
+        bail!(
+            "{} XDP queue worker(s) failed after all workers were joined: {}",
+            worker_failures.len(),
+            worker_failures.join("; ")
+        );
     }
     aggregate.queries_unanswered = aggregate
         .tx_packets
@@ -907,6 +921,7 @@ fn bind_xdp_worker(config: &FileConfig) -> Result<BoundXdpWorker> {
     if config.recv.mode == RecvMode::Process {
         // SAFETY: all RX frame addresses come from `umem`, and both the UMEM
         // mapping and AF_XDP socket outlive the fill/RX rings in this worker.
+        // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-004
         unsafe {
             rings
                 .fill_ring
@@ -1090,6 +1105,7 @@ fn run_bound_worker(
             // SAFETY: returned packet stays within this function, is either handed
             // to the TX ring while `umem` and `socket` remain alive, or immediately
             // freed back to the same UMEM on error.
+            // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-005
             let Some(mut packet) = (unsafe { worker.umem.alloc() }) else {
                 dequeue_xdp_completions(
                     &mut worker.completion_ring,
@@ -1156,6 +1172,7 @@ fn run_bound_worker(
         let queued_before = send_slab.len();
         let wakeup = should_wakeup_tx(tx_wakeup_interval, tx_send_passes);
         tx_send_passes = tx_send_passes.wrapping_add(1);
+        // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-006
         let sent = match unsafe { worker.tx_ring.send(&mut send_slab, wakeup) } {
             Ok(sent) => sent,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -1647,6 +1664,7 @@ fn flush_xdp_tx(
 #[inline(never)]
 fn kick_xdp_tx(socket_fd: RawFd) -> io::Result<()> {
     // SAFETY: zero-length AF_XDP sendto is the kernel wakeup/kick operation.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-007
     let ret = unsafe {
         libc::sendto(
             socket_fd,
@@ -1755,17 +1773,31 @@ fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+pub(super) fn cpu_affinity_capacity() -> usize {
+    std::mem::size_of::<libc::cpu_set_t>() * 8
+}
+
 fn pin_current_thread_to_cpu(cpu: usize) -> io::Result<()> {
+    let capacity = cpu_affinity_capacity();
+    if cpu >= capacity {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("CPU index {cpu} exceeds cpu_set_t capacity {capacity}"),
+        ));
+    }
     // SAFETY: zeroed is valid for cpu_set_t before CPU_ZERO initializes the
     // implementation-specific bitset representation.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-008
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` is
-    // validated by the kernel in sched_setaffinity.
+    // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` was
+    // bounded to the userspace cpu_set_t bit capacity above before CPU_SET.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-009
     unsafe {
         libc::CPU_ZERO(&mut set);
         libc::CPU_SET(cpu, &mut set);
     }
     // SAFETY: the affinity set pointer is valid for the duration of the call.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-010
     let result = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
     if result == 0 {
         Ok(())
@@ -1868,6 +1900,7 @@ fn receive_available_xdp(
     };
     // SAFETY: received packet views are consumed and returned to the same UMEM
     // before this function returns; `umem` outlives the RX ring and socket.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-011
     let received = unsafe { rx_ring.recv(umem, recv_slab) };
     for _ in 0..received {
         let Some(packet) = recv_slab.pop_back() else {
@@ -1951,6 +1984,7 @@ fn receive_available_xdp(
     }
     // SAFETY: enqueued frame addresses come from `umem`, and the UMEM mapping
     // outlives the fill ring and AF_XDP socket.
+    // SAFETY-ID: UNSAFE-BORON-GUN-XDP-BACKEND-012
     unsafe {
         fill_ring
             .enqueue(umem, received, true)

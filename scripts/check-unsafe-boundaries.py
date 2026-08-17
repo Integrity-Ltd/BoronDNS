@@ -33,7 +33,10 @@ CURRENT_SOURCE_SHAPE = {
     "posix-secret-store-open": "use rustix::fs::{Mode, OFlags, openat};",
 }
 
-SAFE_DEPENDENCY_BOUNDARY_KINDS = {"posix-safe-syscall-wrapper"}
+SAFE_DEPENDENCY_BOUNDARY_KINDS = {
+    "posix-safe-open-flags",
+    "posix-safe-syscall-wrapper",
+}
 
 REQUIRED_DEFERRED = {
     "xdp-af-xdp",
@@ -107,6 +110,7 @@ DEFERRED_REQUIRED_TERMS = {
 
 ALLOW_UNSAFE_RE = re.compile(r"#!?\[allow\(unsafe_code\)\]")
 UNSAFE_CONSTRUCT_RE = re.compile(r"\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)")
+SAFETY_ID_RE = re.compile(r"^\s*// SAFETY-ID: ([A-Z0-9-]+)\s*$")
 
 
 def fail(message: str) -> None:
@@ -159,6 +163,60 @@ def assert_safety_comments(repo_root: Path, relative_path: str) -> None:
             )
 
 
+def read_operation_registry(path: Path) -> dict[str, dict[str, str]]:
+    expected_header = ["id", "path", "unsafe_surface"]
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames != expected_header:
+            fail(f"{path} must use the expected TSV header: {expected_header}")
+        rows = list(reader)
+    result = {}
+    for row_number, row in enumerate(rows, start=2):
+        if not all(row.values()):
+            fail(f"{path}:{row_number}: every field is required")
+        if row["id"] in result:
+            fail(f"{path}:{row_number}: duplicate operation id {row['id']}")
+        result[row["id"]] = row
+    return result
+
+
+def assert_operation_registry(repo_root: Path) -> None:
+    registry_path = repo_root / "docs" / "unsafe-operations.tsv"
+    registry = read_operation_registry(registry_path)
+    observed = {}
+    for path in sorted((repo_root / "crates").glob("*/src/**/*.rs")):
+        relative_path = path.relative_to(repo_root).as_posix()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if not UNSAFE_CONSTRUCT_RE.search(line):
+                continue
+            if index == 0 or (match := SAFETY_ID_RE.match(lines[index - 1])) is None:
+                fail(
+                    f"{relative_path}:{index + 1}: unsafe construct lacks an immediately "
+                    "preceding stable SAFETY-ID"
+                )
+            operation_id = match.group(1)
+            if operation_id in observed:
+                fail(f"{relative_path}:{index}: duplicate source SAFETY-ID {operation_id}")
+            observed[operation_id] = {
+                "id": operation_id,
+                "path": relative_path,
+                "unsafe_surface": line.strip(),
+            }
+    if observed != registry:
+        missing = sorted(set(observed) - set(registry))
+        stale = sorted(set(registry) - set(observed))
+        changed = sorted(
+            operation_id
+            for operation_id in set(observed) & set(registry)
+            if observed[operation_id] != registry[operation_id]
+        )
+        fail(
+            "unsafe operation source and docs/unsafe-operations.tsv disagree: "
+            f"missing={missing} stale={stale} changed={changed}"
+        )
+
+
 def assert_current_source_shape(repo_root: Path, row_id: str, relative_path: str) -> None:
     required = CURRENT_SOURCE_SHAPE.get(row_id)
     if required is None:
@@ -175,6 +233,7 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     registry_path = repo_root / "docs" / "unsafe-boundaries.tsv"
     registry = read_registry(registry_path)
+    assert_operation_registry(repo_root)
 
     missing_current = set(REQUIRED_CURRENT) - set(registry)
     if missing_current:

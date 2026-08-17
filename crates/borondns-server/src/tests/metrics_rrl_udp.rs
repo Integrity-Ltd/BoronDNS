@@ -1070,6 +1070,65 @@ fn rrl_limiter_slips_udp_query_responses() {
 }
 
 #[test]
+#[ignore = "manual release-mode scaling evidence"]
+fn metrics_and_rrl_recency_scaling_benchmark() {
+    const TOUCHES: usize = 50_000;
+    for cardinality in [1_000_usize, 10_000, 100_000] {
+        let config = RrlConfig {
+            max_keys: cardinality,
+            ipv6_prefix_len: 128,
+            positive_per_second: u32::MAX,
+            ..RrlConfig::default()
+        };
+        let metrics = RuntimeMetrics::new();
+        let limiter = RrlLimiter::from_config(&config, metrics);
+        let response = positive_query_response();
+        for index in 0..cardinality {
+            let source = IpAddr::V6(std::net::Ipv6Addr::from(index as u128));
+            let _ = limiter.apply(source, response.clone());
+        }
+        let started = std::time::Instant::now();
+        for index in 0..TOUCHES {
+            let source = IpAddr::V6(std::net::Ipv6Addr::from((index % cardinality) as u128));
+            let _ = limiter.apply(source, response.clone());
+        }
+        let rrl_ns_per_touch = started.elapsed().as_nanos() / TOUCHES as u128;
+
+        let metrics = RuntimeMetrics::new_with_settings(
+            cardinality,
+            DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+            false,
+            MetricsHotPathDetail::Full,
+        );
+        let settings = CookiePrefixMetricSettings {
+            ipv4_prefix_len: 32,
+            ipv6_prefix_len: 128,
+        };
+        for index in 0..cardinality {
+            let source = IpAddr::V6(std::net::Ipv6Addr::from(index as u128));
+            metrics.record_dns_cookie_status(
+                DnsCookieRequestStatus::NoCookie,
+                source,
+                settings,
+            );
+        }
+        let started = std::time::Instant::now();
+        for index in 0..TOUCHES {
+            let source = IpAddr::V6(std::net::Ipv6Addr::from((index % cardinality) as u128));
+            metrics.record_dns_cookie_status(
+                DnsCookieRequestStatus::NoCookie,
+                source,
+                settings,
+            );
+        }
+        let cookie_ns_per_touch = started.elapsed().as_nanos() / TOUCHES as u128;
+        eprintln!(
+            "recency_scaling cardinality={cardinality} rrl_ns_per_touch={rrl_ns_per_touch} cookie_ns_per_touch={cookie_ns_per_touch}"
+        );
+    }
+}
+
+#[test]
 fn rrl_periodic_summary_reports_aggregate_deltas() {
     let config = RrlConfig {
         positive_per_second: 0,

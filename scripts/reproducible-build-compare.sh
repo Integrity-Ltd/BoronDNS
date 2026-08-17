@@ -149,7 +149,7 @@ run_build() {
         printf 'builder=%s\n' "$label"
         printf 'target_dir=%s\n' "$target_dir"
         printf 'target_dir_for_cargo=%s\n' "$target_dir_for_cargo"
-        printf '%q build --locked --release --target-dir %q --target %q -p borondns-cli --features af-xdp\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
+        printf '%q build --locked --release --target-dir %q --target %q -p borondns-cli\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
         printf '%q build --locked --release --target-dir %q --target %q -p boron-gun --features xdp\n\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
     } >"$log"
 
@@ -163,7 +163,7 @@ run_build() {
             BORONDNS_BUILD_RUST_VERSION="$rust_version" \
             BORONDNS_BUILD_TIMESTAMP="$commit_timestamp" \
             "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
-            --target "$target_triple" -p borondns-cli --features af-xdp
+            --target "$target_triple" -p borondns-cli
         env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
             PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
             CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
@@ -211,7 +211,7 @@ write_manifest_and_compare() {
             local command
             if [[ "$artifact" == "borondns" ]]; then
                 features="af-xdp"
-                command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli --features af-xdp"
+                command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli"
             else
                 features="xdp"
                 command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p boron-gun --features xdp"

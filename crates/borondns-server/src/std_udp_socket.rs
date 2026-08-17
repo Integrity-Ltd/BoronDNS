@@ -45,6 +45,7 @@ fn bind_std(
     };
     // SAFETY: `socket` is called with a supported datagram domain and returns
     // either a valid owned file descriptor or -1 with errno set.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-001
     let fd = unsafe {
         libc::socket(
             domain,
@@ -59,6 +60,7 @@ fn bind_std(
     let close_on_error = |fd| {
         // SAFETY: `fd` is an owned descriptor created above and is closed only
         // on the error path before ownership is transferred to `UdpSocket`.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-002
         let _ = unsafe { libc::close(fd) };
     };
 
@@ -102,6 +104,7 @@ fn bind_std(
 
     // SAFETY: `fd` is a valid owned UDP socket descriptor and ownership is
     // transferred exactly once into the standard library socket.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-003
     Ok(unsafe { std::net::UdpSocket::from_raw_fd(fd) })
 }
 
@@ -145,6 +148,7 @@ fn set_socket_bool(
     let value: libc::c_int = i32::from(value);
     // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
     // is valid for the duration of the call with the correct size.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-004
     let result = unsafe {
         libc::setsockopt(
             fd,
@@ -176,6 +180,7 @@ fn set_socket_int(
     })?;
     // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
     // is valid for the duration of the call with the correct size.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-005
     let result = unsafe {
         libc::setsockopt(
             fd,
@@ -205,6 +210,7 @@ fn set_socket_u32(
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, range_error))?;
     // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
     // is valid for the duration of the call with the correct size.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-006
     let result = unsafe {
         libc::setsockopt(
             fd,
@@ -226,6 +232,7 @@ fn bind_socket_addr(fd: libc::c_int, addr: SocketAddr) -> io::Result<()> {
     let (storage, len) = socket_addr_to_raw(addr);
     // SAFETY: `storage` contains a properly initialized sockaddr matching
     // `len`, both derived from the Rust `SocketAddr` value.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-007
     let result = unsafe { libc::bind(fd, (&storage as *const libc::sockaddr_storage).cast(), len) };
     if result == 0 {
         Ok(())
@@ -240,7 +247,9 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
         SocketAddr::V4(addr) => {
             // SAFETY: zeroed is valid for sockaddr_storage and sockaddr_in;
             // all semantically relevant fields are filled below.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-008
             let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-009
             let mut raw: libc::sockaddr_in = unsafe { std::mem::zeroed() };
             raw.sin_family = libc::AF_INET as libc::sa_family_t;
             raw.sin_port = addr.port().to_be();
@@ -249,6 +258,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
             };
             // SAFETY: `storage` has enough space and alignment for
             // `sockaddr_in`; the destination is uniquely borrowed.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-010
             unsafe {
                 std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
             }
@@ -260,7 +270,9 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
         SocketAddr::V6(addr) => {
             // SAFETY: zeroed is valid for sockaddr_storage and sockaddr_in6;
             // all semantically relevant fields are filled below.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-011
             let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-012
             let mut raw: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
             raw.sin6_family = libc::AF_INET6 as libc::sa_family_t;
             raw.sin6_port = addr.port().to_be();
@@ -271,6 +283,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
             raw.sin6_scope_id = addr.scope_id();
             // SAFETY: `storage` has enough space and alignment for
             // `sockaddr_in6`; the destination is uniquely borrowed.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-013
             unsafe {
                 std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
             }
@@ -293,14 +306,17 @@ fn pin_current_thread_to_cpu_impl(cpu: usize) -> io::Result<()> {
     }
     // SAFETY: zeroed is valid for cpu_set_t before CPU_ZERO initializes the
     // implementation-specific bitset representation.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-014
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
     // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` is
     // bounded to the local cpu_set_t bit capacity before CPU_SET.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-015
     unsafe {
         libc::CPU_ZERO(&mut set);
         libc::CPU_SET(cpu, &mut set);
     }
     // SAFETY: the affinity set pointer is valid for the duration of the call.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-SOCKET-016
     let result = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
     if result == 0 {
         Ok(())

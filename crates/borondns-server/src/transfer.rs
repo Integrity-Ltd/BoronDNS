@@ -44,6 +44,23 @@ pub(crate) const DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT: u64 = 4096;
 const MAX_TCP_DNS_MESSAGE_BYTES: u64 = u16::MAX as u64;
 pub(crate) type XotClientConfig = Arc<ClientConfig>;
 
+/// Keeps the conservative resident-memory reservation alive through catalog
+/// validation, persistence, ZoneImage compilation, and atomic publication.
+pub(crate) struct GuardedTransfer<T> {
+    value: T,
+    _reservation: TransferIngestTracker,
+}
+
+impl<T> GuardedTransfer<T> {
+    pub(crate) fn into_parts(self) -> (T, TransferIngestTracker) {
+        (self.value, self._reservation)
+    }
+
+    fn into_inner(self) -> T {
+        self.value
+    }
+}
+
 pub async fn transfer_axfr_from_primary(
     primary: SocketAddr,
     zone_apex: &DomainName,
@@ -107,6 +124,31 @@ pub(crate) async fn transfer_axfr_from_target_with_tsig_and_source(
     timeout_duration: Duration,
     connect_timeout: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
+    transfer_axfr_from_target_with_tsig_and_source_guarded(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        session,
+        transfer_source,
+        timeout_duration,
+        connect_timeout,
+    )
+    .await
+    .map(GuardedTransfer::into_inner)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn transfer_axfr_from_target_with_tsig_and_source_guarded(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    session: TransferSession<'_>,
+    transfer_source: Option<SocketAddr>,
+    timeout_duration: Duration,
+    connect_timeout: Duration,
+) -> Result<GuardedTransfer<ZoneSnapshot>, TransferError> {
     let session = session.with_transfer_source(transfer_source);
     tokio::time::timeout(timeout_duration, async {
         transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, session, connect_timeout)
@@ -1174,6 +1216,31 @@ pub(crate) async fn transfer_ixfr_from_target_with_tsig(
     timeout_duration: Duration,
     connect_timeout: Duration,
 ) -> Result<IxfrResponse, TransferError> {
+    transfer_ixfr_from_target_with_tsig_guarded(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        current_zone,
+        session,
+        timeout_duration,
+        connect_timeout,
+    )
+    .await
+    .map(GuardedTransfer::into_inner)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn transfer_ixfr_from_target_with_tsig_guarded(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    current_zone: &ZoneSnapshot,
+    session: TransferSession<'_>,
+    timeout_duration: Duration,
+    connect_timeout: Duration,
+) -> Result<GuardedTransfer<IxfrResponse>, TransferError> {
     tokio::time::timeout(timeout_duration, async {
         transfer_ixfr_from_primary_inner(
             primary,
@@ -1200,7 +1267,7 @@ async fn transfer_ixfr_from_primary_inner(
     current_zone: &ZoneSnapshot,
     session: TransferSession<'_>,
     connect_timeout: Duration,
-) -> Result<IxfrResponse, TransferError> {
+) -> Result<GuardedTransfer<IxfrResponse>, TransferError> {
     let mut stream = connect_transfer_stream(
         primary,
         session.transfer_source,
@@ -1233,7 +1300,7 @@ async fn transfer_ixfr_from_primary_inner(
     // Declare retained messages after the tracker so Rust drops the message
     // buffers before releasing their aggregate-budget reservations.
     let mut messages = Vec::new();
-    let mut completion_probe = IxfrCompletionProbe::new(current_zone.serial);
+    let mut completion_probe = IxfrCompletionProbe::new(current_zone.serial());
     loop {
         let mut length_prefix = [0u8; 2];
         match stream.read_exact(&mut length_prefix).await {
@@ -1244,14 +1311,15 @@ async fn transfer_ixfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_ixfr_response(
+                return parse_ixfr_response_blocking(
                     qid,
-                    zone_apex,
+                    zone_apex.clone(),
                     qclass,
-                    current_zone,
-                    &verified_messages,
+                    current_zone.clone(),
+                    verified_messages,
+                    ingest,
                 )
-                .map_err(TransferError::Ixfr);
+                .await;
             }
             Err(source) => {
                 return Err(TransferError::Io {
@@ -1294,14 +1362,15 @@ async fn transfer_ixfr_from_primary_inner(
                 query.request_mac.as_deref(),
             ) {
                 Ok(verified_messages) => {
-                    return axfr::parse_ixfr_response(
+                    return parse_ixfr_response_blocking(
                         qid,
-                        zone_apex,
+                        zone_apex.clone(),
                         qclass,
-                        current_zone,
-                        &verified_messages,
+                        current_zone.clone(),
+                        verified_messages,
+                        ingest,
                     )
-                    .map_err(TransferError::Ixfr);
+                    .await;
                 }
                 Err(error) => return Err(error),
             }
@@ -1474,19 +1543,49 @@ pub(crate) struct TransferIngestBudget {
 #[derive(Debug)]
 struct TransferIngestBudgetInner {
     limit_bytes: u64,
+    wire_charge_multiplier: u64,
     in_flight_bytes: AtomicU64,
+    peak_in_flight_bytes: AtomicU64,
+    rejections_total: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransferIngestBudgetSnapshot {
+    pub(crate) limit_bytes: u64,
+    pub(crate) in_flight_bytes: u64,
+    pub(crate) peak_in_flight_bytes: u64,
+    pub(crate) rejections_total: u64,
 }
 
 impl TransferIngestBudget {
+    #[cfg(test)]
     pub(crate) fn new(limit_bytes: u64) -> Self {
+        Self::with_wire_charge_multiplier(limit_bytes, 1)
+    }
+
+    fn with_wire_charge_multiplier(limit_bytes: u64, wire_charge_multiplier: u64) -> Self {
         Self {
             inner: Arc::new(TransferIngestBudgetInner {
                 limit_bytes,
+                wire_charge_multiplier,
                 in_flight_bytes: AtomicU64::new(0),
+                peak_in_flight_bytes: AtomicU64::new(0),
+                rejections_total: AtomicU64::new(0),
             }),
         }
     }
 
+    /// Reserve a deliberately conservative resident-memory estimate for every
+    /// retained transfer wire byte. RFC name compression can expand a name by
+    /// almost 128x; the second 128x covers owned decoded labels/records,
+    /// indexes, builder scratch, the new immutable image, and overlap with the
+    /// prior serving generation. The explicit global limit is operator-sized
+    /// against the service cgroup rather than inferred from protocol limits.
+    pub(crate) fn for_resident_limit(limit_bytes: u64) -> Self {
+        Self::with_wire_charge_multiplier(limit_bytes, 256)
+    }
+
+    #[cfg(test)]
     pub(crate) fn for_concurrent_sessions(
         per_session_limit_bytes: u64,
         max_concurrent_sessions: usize,
@@ -1501,22 +1600,25 @@ impl TransferIngestBudget {
         addr: SocketAddr,
         message_bytes: u64,
     ) -> Result<TransferIngestReservation, TransferError> {
+        let charged_bytes = message_bytes.saturating_mul(self.inner.wire_charge_multiplier);
         let mut in_flight = self.inner.in_flight_bytes.load(Ordering::Acquire);
         loop {
-            let Some(next) = in_flight.checked_add(message_bytes) else {
+            let Some(next) = in_flight.checked_add(charged_bytes) else {
+                self.inner.rejections_total.fetch_add(1, Ordering::Relaxed);
                 return Err(TransferError::IngestGlobalSizeLimit {
                     protocol,
                     addr,
-                    requested_bytes: message_bytes,
+                    requested_bytes: charged_bytes,
                     in_flight_bytes: in_flight,
                     limit_bytes: self.inner.limit_bytes,
                 });
             };
             if next > self.inner.limit_bytes {
+                self.inner.rejections_total.fetch_add(1, Ordering::Relaxed);
                 return Err(TransferError::IngestGlobalSizeLimit {
                     protocol,
                     addr,
-                    requested_bytes: message_bytes,
+                    requested_bytes: charged_bytes,
                     in_flight_bytes: in_flight,
                     limit_bytes: self.inner.limit_bytes,
                 });
@@ -1528,9 +1630,12 @@ impl TransferIngestBudget {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    self.inner
+                        .peak_in_flight_bytes
+                        .fetch_max(next, Ordering::Relaxed);
                     return Ok(TransferIngestReservation {
                         inner: self.inner.clone(),
-                        reserved_bytes: message_bytes,
+                        reserved_bytes: charged_bytes,
                     });
                 }
                 Err(observed) => in_flight = observed,
@@ -1541,6 +1646,15 @@ impl TransferIngestBudget {
     #[cfg(test)]
     pub(crate) fn in_flight_bytes(&self) -> u64 {
         self.inner.in_flight_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn snapshot(&self) -> TransferIngestBudgetSnapshot {
+        TransferIngestBudgetSnapshot {
+            limit_bytes: self.inner.limit_bytes,
+            in_flight_bytes: self.inner.in_flight_bytes.load(Ordering::Acquire),
+            peak_in_flight_bytes: self.inner.peak_in_flight_bytes.load(Ordering::Relaxed),
+            rejections_total: self.inner.rejections_total.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -1557,7 +1671,7 @@ impl Drop for TransferIngestReservation {
     }
 }
 
-pub(crate) struct TransferIngestTracker<'a> {
+pub(crate) struct TransferIngestTracker {
     protocol: &'static str,
     addr: SocketAddr,
     limit_bytes: u64,
@@ -1565,11 +1679,11 @@ pub(crate) struct TransferIngestTracker<'a> {
     received_bytes: u64,
     limit_messages: u64,
     received_messages: u64,
-    ingest_budget: Option<&'a TransferIngestBudget>,
+    ingest_budget: Option<TransferIngestBudget>,
     reservations: Vec<TransferIngestReservation>,
 }
 
-impl<'a> TransferIngestTracker<'a> {
+impl TransferIngestTracker {
     pub(crate) fn new(protocol: &'static str, addr: SocketAddr, limit_bytes: u64) -> Self {
         Self {
             protocol,
@@ -1586,9 +1700,9 @@ impl<'a> TransferIngestTracker<'a> {
 
     pub(crate) fn with_ingest_budget(
         mut self,
-        ingest_budget: Option<&'a TransferIngestBudget>,
+        ingest_budget: Option<&TransferIngestBudget>,
     ) -> Self {
-        self.ingest_budget = ingest_budget;
+        self.ingest_budget = ingest_budget.cloned();
         self
     }
 
@@ -1617,7 +1731,7 @@ impl<'a> TransferIngestTracker<'a> {
                 limit_bytes: self.limit_bytes,
             });
         }
-        if let Some(ingest_budget) = self.ingest_budget {
+        if let Some(ingest_budget) = &self.ingest_budget {
             self.reservations.push(ingest_budget.try_reserve(
                 self.protocol,
                 self.addr,
@@ -1628,6 +1742,54 @@ impl<'a> TransferIngestTracker<'a> {
         self.received_bytes = next;
         Ok(())
     }
+}
+
+async fn parse_ixfr_response_blocking(
+    qid: u16,
+    zone_apex: DomainName,
+    qclass: u16,
+    current_zone: ZoneSnapshot,
+    messages: Vec<Vec<u8>>,
+    ingest: TransferIngestTracker,
+) -> Result<GuardedTransfer<IxfrResponse>, TransferError> {
+    tokio::task::spawn_blocking(move || {
+        // Retain aggregate memory reservations until parsing and all temporary
+        // decoded transfer state have been released, including after timeout
+        // cancellation of the awaiting async task.
+        let value = axfr::parse_ixfr_response(qid, &zone_apex, qclass, &current_zone, &messages)
+            .map_err(TransferError::Ixfr)?;
+        Ok(GuardedTransfer {
+            value,
+            _reservation: ingest,
+        })
+    })
+    .await
+    .map_err(|error| TransferError::ValidationWorker {
+        protocol: "IXFR",
+        message: error.to_string(),
+    })?
+}
+
+async fn parse_axfr_response_blocking(
+    qid: u16,
+    zone_apex: DomainName,
+    qclass: u16,
+    messages: Vec<Vec<u8>>,
+    ingest: TransferIngestTracker,
+) -> Result<GuardedTransfer<ZoneSnapshot>, TransferError> {
+    tokio::task::spawn_blocking(move || {
+        let value = axfr::parse_axfr_response(qid, &zone_apex, qclass, &messages)
+            .map_err(TransferError::Axfr)?;
+        Ok(GuardedTransfer {
+            value,
+            _reservation: ingest,
+        })
+    })
+    .await
+    .map_err(|error| TransferError::ValidationWorker {
+        protocol: "AXFR",
+        message: error.to_string(),
+    })?
 }
 
 fn maybe_sign_transfer_query(
@@ -1733,7 +1895,7 @@ async fn transfer_axfr_from_primary_inner(
     qid: u16,
     session: TransferSession<'_>,
     connect_timeout: Duration,
-) -> Result<ZoneSnapshot, TransferError> {
+) -> Result<GuardedTransfer<ZoneSnapshot>, TransferError> {
     let mut stream = connect_transfer_stream(
         primary,
         session.transfer_source,
@@ -1775,8 +1937,14 @@ async fn transfer_axfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
-                    .map_err(TransferError::Axfr);
+                return parse_axfr_response_blocking(
+                    qid,
+                    zone_apex.clone(),
+                    qclass,
+                    verified_messages,
+                    ingest,
+                )
+                .await;
             }
             Err(source) => {
                 return Err(TransferError::Io {
@@ -1833,8 +2001,14 @@ async fn transfer_axfr_from_primary_inner(
                 query.request_mac.as_deref(),
             ) {
                 Ok(verified_messages) => {
-                    return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
-                        .map_err(TransferError::Axfr);
+                    return parse_axfr_response_blocking(
+                        qid,
+                        zone_apex.clone(),
+                        qclass,
+                        verified_messages,
+                        ingest,
+                    )
+                    .await;
                 }
                 Err(error) => return Err(error),
             }

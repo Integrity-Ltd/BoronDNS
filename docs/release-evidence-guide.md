@@ -255,7 +255,8 @@ digest mismatches, and archives exceeding any bound fail closed.
 Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
 files for the two shipped release binaries. The Cargo SBOM pass uses
 `cargo-cyclonedx` against the workspace lockfile, the musl release target, and
-the shipped feature set `borondns-cli/af-xdp,boron-gun/xdp`. It also writes
+the shipped feature set `borondns-cli/default,boron-gun/xdp`. Server AF_XDP
+remains a separately qualified lab feature and is not present in the release binary. It also writes
 `target/dist/borondns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
 with the source, feature set, tool version, path, and hash for each SBOM.
 

@@ -862,15 +862,15 @@ impl ZoneImage {
         info!(
             event = "zone_image_build_phase",
             phase = "compile_start",
-            zone = %snapshot.origin,
+            zone = %snapshot.origin(),
             "ZoneImage build phase"
         );
-        let origin_key = snapshot.origin.canonical_key();
+        let origin_key = snapshot.origin().canonical_key();
         let mut rrsets = Vec::new();
 
         for rrset in snapshot.rrsets() {
             let owner_key = rrset.owner.canonical_key();
-            if !rrset.owner.is_equal_or_subdomain_of(&snapshot.origin) {
+            if !rrset.owner.is_equal_or_subdomain_of(snapshot.origin()) {
                 return Err(ZoneImageBuildError::OutOfZoneOwner {
                     owner: owner_key,
                     origin: origin_key,
@@ -882,7 +882,7 @@ impl ZoneImage {
         info!(
             event = "zone_image_build_phase",
             phase = "snapshot_rrsets_collected",
-            zone = %snapshot.origin,
+            zone = %snapshot.origin(),
             rrset_count = rrsets.len(),
             "ZoneImage build phase"
         );
@@ -896,12 +896,12 @@ impl ZoneImage {
         info!(
             event = "zone_image_build_phase",
             phase = "snapshot_rrsets_sorted",
-            zone = %snapshot.origin,
+            zone = %snapshot.origin(),
             rrset_count = rrsets.len(),
             "ZoneImage build phase"
         );
 
-        let mut builder = ZoneImageBuilder::new(snapshot.origin.clone());
+        let mut builder = ZoneImageBuilder::new(snapshot.origin().clone());
         for (owner_key, rrset) in rrsets {
             let mut records = rrset
                 .rdatas()
@@ -932,7 +932,7 @@ impl ZoneImage {
         }
         builder.log_phase("image_arenas_built");
 
-        builder.finish(snapshot.serial)
+        builder.finish(snapshot.serial())
     }
 
     pub fn origin(&self) -> &DomainName {

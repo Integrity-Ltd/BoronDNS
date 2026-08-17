@@ -223,13 +223,19 @@ ixfr_timeout_secs = 60
 # Cooldown after IXFR is found unsupported. Default: 3600 seconds.
 ixfr_disabled_cooldown_secs = 3600
 # Per-session AXFR/IXFR cumulative received payload cap. The runtime's aggregate
-# guard is derived as this value times max_concurrent_transfers, so concurrent
-# sessions do not compete for one session's allowance. Default: 4 GiB.
+# protocol guard is independent of the global resident-memory envelope below.
+# Default: 4 GiB.
 max_transfer_ingest_bytes = 4294967296
 # Per-session AXFR/IXFR DNS message-count cap. This separately bounds streams
 # made from many small messages. Raise it deliberately for synthetic large-zone
-# tests alongside max_transfer_ingest_bytes. Default: 4096.
+# tests alongside max_transfer_ingest_bytes. Maximum: 1048576. Default: 4096.
 max_transfer_ingest_messages = 4096
+# Global conservative transfer resident-memory envelope. Each retained wire
+# byte is charged at 256x to cover worst-case name decompression, decoded owned
+# records/indexes, publication workspace, the new image, and overlap with the
+# currently served generation. Size this below the service cgroup memory limit
+# with headroom for baseline serving state and query traffic. Default: 64 GiB.
+max_transfer_resident_bytes = 68719476736
 # Per-zone accepted NOTIFY deduplication window. Default: 1 second.
 notify_dedup_secs = 1
 # Window for rate-limited unauthorized/TSIG-failed NOTIFY warning logs. Default: 60 seconds.

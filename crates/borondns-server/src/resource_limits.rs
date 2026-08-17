@@ -19,6 +19,7 @@ pub(crate) fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
     // SAFETY: `limit` points to a valid, initialized `libc::rlimit` value
     // owned by this stack frame, and `getrlimit` writes only to that out
     // parameter for the constant `RLIMIT_NOFILE` resource.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-001
     let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
     if result == 0 {
         Ok(limit.rlim_cur)
@@ -34,11 +35,13 @@ pub(crate) fn filesystem_stats(path: &str) -> Result<FilesystemStats, std::io::E
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: `path` is NUL-terminated and lives for the duration of the call;
     // `stat` points to writable stack storage for the `statvfs` out parameter.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-002
     let result = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) };
     if result != 0 {
         return Err(std::io::Error::last_os_error());
     }
     // SAFETY: `statvfs` returned success and initialized the out parameter.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-RESOURCE-LIMITS-003
     let stat = unsafe { stat.assume_init() };
     let block_size = statvfs_value_to_u64(stat.f_frsize);
     Ok(FilesystemStats {

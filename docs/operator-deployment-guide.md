@@ -754,9 +754,12 @@ Large-zone operators should use
 the default 4 GiB/4,096-message transfer-ingest guards, and reload working-set
 planning. Zones whose transfers exceed either default must raise
 `limits.max_transfer_ingest_bytes` and/or
-`limits.max_transfer_ingest_messages` deliberately and provision enough memory
-for the decoded snapshot, builder workspace, new image, and still-referenced
-prior generation.
+`limits.max_transfer_ingest_messages` deliberately. Also size
+`limits.max_transfer_resident_bytes` below the service cgroup limit with
+headroom for baseline serving state and query traffic. The global envelope
+charges each retained transfer-wire byte at 256x for decoded names and records,
+indexes, builder workspace, the new image, and overlap with the prior
+generation; a rejected candidate leaves the last valid generation serving.
 
 SRS v0.9.1 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained

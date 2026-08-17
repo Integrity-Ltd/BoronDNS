@@ -217,7 +217,7 @@ fi
         BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
         SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0 \
         CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release \
-        --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli --features af-xdp
+        --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
         CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \
@@ -269,7 +269,7 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
     printf 'rustc_executable=rustc\n'
     sha256_file "$rustc_bin" | awk '{print "rustc_sha256="$1}'
     printf 'binary=bin/borondns\n'
-    printf 'binary_features=af-xdp\n'
+    printf 'binary_features=default\n'
     printf 'tool_binary=bin/boron-gun\n'
     printf 'tool_binary_features=xdp\n'
     sha256_file "$run_staging/install.sh" | awk '{print "installer_sha256="$1}'

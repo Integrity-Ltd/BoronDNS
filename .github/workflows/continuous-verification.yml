@@ -1,0 +1,46 @@
+name: Continuous verification
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: continuous-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUST_TOOLCHAIN_VERSION: "1.96.1"
+  CARGO_DENY_VERSION: "0.19.8"
+  ACTIONLINT_VERSION: "1.7.12"
+  SHFMT_VERSION: "3.13.1"
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal --component clippy,rustfmt
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default "$RUST_TOOLCHAIN_VERSION"
+
+      - name: Install verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+          go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
+          go install "mvdan.cc/sh/v3/cmd/shfmt@v${SHFMT_VERSION}"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Verify source
+        run: scripts/check.sh

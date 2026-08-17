@@ -37,13 +37,13 @@ until their corresponding retained runs exist.
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous plus release review | `cargo fmt --all --check`; `cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check`; `scripts/check-shell-scripts.sh` (non-mutating `shfmt -d` plus `shellcheck`); `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings`; `scripts/check-github-actions.sh`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous plus release review | `cargo fmt --all --check`; `cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check`; `rustup run 1.95.0 cargo check --workspace --all-targets --locked` (declared MSRV); `scripts/check-shell-scripts.sh` (non-mutating `shfmt -d` plus `shellcheck`); `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings`; `scripts/check-github-actions.sh`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | Default-feature `cargo test --workspace -- --test-threads=1` plus `cargo test --workspace --all-targets --all-features -- --test-threads=1` so the feature-gated server AF_XDP and BoronGun XDP adapter suites remain blocking; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/borondns-cli/tests` | Rust test names and ledger rows |
 | Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
 | Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; fuzz-crate formatting and warning-free Clippy gates; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
-| Dependency security audit | Continuous | `cargo deny check` | `docs/verification-ledger.md` dependency audit row |
+| Dependency security audit | Continuous | `cargo deny check`; separate locked-graph `cargo deny` checks for `crates/borondns-server-ebpf/Cargo.toml` and `crates/boron-gun-ebpf/Cargo.toml` | `docs/verification-ledger.md` dependency audit row |
 | Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; `docs/two-host-fuzz-soak-campaign.md` and `scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400` prepare the local two-host split; Engineering MVP setup records `campaign-summary.tsv`, later release/operations execution retains the full campaign artifacts | retained fuzz campaign summary, logs, and artifacts |
 | Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the Engineering MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
@@ -87,10 +87,11 @@ evidence because it depends on `cargo-geiger` scanner behavior and can be
 slow or partial. It is not part of the default Engineering MVP evidence
 profile.
 
-Hosted continuous CI for every main-branch candidate is intentionally deferred
-while the repository remains private. This avoids spending GitHub Actions
-minutes on heavyweight evidence tooling before a public-release gate exists;
-`scripts/check.sh` is the current local continuous verification entry point.
+Hosted continuous CI runs for every pull request and main-branch candidate
+through `.github/workflows/continuous-verification.yml`, which invokes
+`scripts/check.sh` using the pinned primary toolchain and the
+declared 1.95 MSRV. The same script remains the local continuous-verification
+entry point and the release workflow reruns it against the exact tag source.
 
 `scripts/test-operations-harnesses.sh` is the focused fault-injection gate for
 campaign and interop lifecycle helpers. Its Docker-image setup fixtures use a

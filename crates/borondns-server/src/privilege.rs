@@ -180,6 +180,7 @@ fn errno_result(result: libc::c_int) -> Result<(), io::Error> {
 fn empty_passwd() -> libc::passwd {
     // SAFETY: `libc::passwd` is a plain C record used as an out-parameter for
     // `getpwnam_r`; zero-initialization is valid before libc fills it.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-001
     unsafe { std::mem::zeroed() }
 }
 
@@ -192,6 +193,7 @@ fn getpwnam_r(
     // SAFETY: `name` is a NUL-terminated C string, `passwd` and `result` are
     // valid writable out-parameters, and `buffer` is a live mutable byte slice
     // whose pointer and length are passed exactly for libc scratch storage.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-002
     unsafe {
         libc::getpwnam_r(
             name.as_ptr(),
@@ -206,12 +208,14 @@ fn getpwnam_r(
 fn initgroups(name: &CStr, gid: u32) -> Result<(), io::Error> {
     // SAFETY: `name` is a valid NUL-terminated C string for the target user,
     // and `gid` is the primary group id resolved from libc passwd data.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-003
     errno_result(unsafe { libc::initgroups(name.as_ptr(), gid) })
 }
 
 fn setresgid(gid: u32) -> Result<(), io::Error> {
     // SAFETY: `setresgid` does not retain pointers; all three group IDs are set
     // to the same resolved unprivileged gid so the drop is irrevocable.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-004
     errno_result(unsafe { libc::setresgid(gid, gid, gid) })
 }
 
@@ -219,21 +223,25 @@ fn setresuid(uid: u32) -> Result<(), io::Error> {
     // SAFETY: `setresuid` does not retain pointers; all three user IDs are set
     // to the same resolved unprivileged uid so root privileges cannot be
     // regained through saved IDs.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-005
     errno_result(unsafe { libc::setresuid(uid, uid, uid) })
 }
 
 fn effective_uid() -> u32 {
     // SAFETY: `geteuid` reads process credentials and takes no pointers.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-006
     unsafe { libc::geteuid() }
 }
 
 fn effective_gid() -> u32 {
     // SAFETY: `getegid` reads process credentials and takes no pointers.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-007
     unsafe { libc::getegid() }
 }
 
 fn sysconf_getpw_r_size_max() -> libc::c_long {
     // SAFETY: `sysconf` is called with a constant and takes no pointers.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-PRIVILEGE-008
     unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) }
 }
 

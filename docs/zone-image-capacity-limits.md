@@ -85,7 +85,17 @@ raised for a transfer requiring more frames even when the byte allowance is
 sufficient. The equivalent environment override is
 `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES`. Keeping separate byte and
 message bounds prevents a hostile primary from evading the byte-oriented
-resource policy with an unbounded stream of tiny messages.
+resource policy with an unbounded stream of tiny messages. Configuration also
+rejects values above 1,048,576 messages so per-message allocation metadata has
+a finite upper bound.
+
+`[limits].max_transfer_resident_bytes` is the independent global admission
+envelope for concurrent transfer work and defaults to 64 GiB. Each retained
+wire byte consumes 256 bytes of this budget. The deliberately conservative
+factor covers maximum DNS name-compression expansion plus owned decoded labels
+and records, indexes, publication workspace, the new image, and overlap with
+the currently served generation. Synthetic TLD-scale tests must raise this
+limit deliberately while keeping it below the service cgroup memory ceiling.
 
 The usable zone size is bounded by peak reload memory, not merely the final
 image size. Capacity planning must include:
@@ -96,9 +106,10 @@ image size. Capacity planning must include:
 4. any previous published generation still held by in-flight queries.
 
 Allocation failure is not converted into a recoverable zone-build error by the
-Rust global allocator. Operators must therefore configure transfer limits and
-host memory so an accepted zone cannot drive the process into allocator abort
-or system OOM handling.
+Rust global allocator. The resident envelope rejects candidates before its
+conservative estimate exhausts configured headroom, but it cannot measure
+unrelated process or kernel allocations. Operators must therefore leave room
+between this budget and the actual cgroup ceiling.
 
 ## Deployment Interpretation
 

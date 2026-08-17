@@ -132,6 +132,7 @@ scripts/test-boron-gen-external-performance-coordinator.sh
 scripts/test-docker-image-daemon-state.sh
 scripts/test-package-publication-recovery.sh
 cargo check --manifest-path fuzz/Cargo.toml
+rustup run 1.95.0 cargo check --workspace --all-targets --locked
 cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
 cargo fmt --all --check
@@ -139,3 +140,5 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace -- --test-threads=1
 cargo test --workspace --all-targets --all-features -- --test-threads=1
 cargo deny check
+cargo deny --manifest-path crates/borondns-server-ebpf/Cargo.toml --locked check
+cargo deny --manifest-path crates/boron-gun-ebpf/Cargo.toml --locked check

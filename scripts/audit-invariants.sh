@@ -39,7 +39,10 @@ with unsafe_registry.open(newline="", encoding="utf-8") as handle:
         Path(row["path"])
         for row in csv.DictReader(handle, delimiter="\t")
         if row["status"] == "current"
-        and row["boundary_kind"] != "posix-safe-syscall-wrapper"
+        and row["boundary_kind"] not in {
+            "posix-safe-open-flags",
+            "posix-safe-syscall-wrapper",
+        }
         and not row["path"].startswith("future:")
     }
 audited_unsafe_adapter_paths = {
@@ -93,8 +96,8 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         ],
     ),
     (
-        "BDS-INV-004 no persistent operational state writes",
-        "No runtime filesystem write/delete/rename APIs found before test-only code.",
+        "BDS-INV-004 bounded last-good persistence only",
+        "No runtime filesystem mutation APIs found outside the dedicated last-good zone persistence module.",
         [
             re.compile(r"\bstd::fs::write\b"),
             re.compile(r"\btokio::fs::write\b"),
@@ -106,7 +109,11 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             re.compile(r"\b(?:std::fs::|tokio::fs::)?rename\s*\("),
             re.compile(r"\bset_permissions\b"),
         ],
-        list(runtime_sources),
+        [
+            path
+            for path in runtime_sources
+            if path != Path("crates/borondns-server/src/zone_persistence.rs")
+        ],
     ),
     (
         "BDS-INV-005 static configuration/control surface",
@@ -1451,7 +1458,10 @@ for title, success, patterns, paths in checks:
                         path == Path("crates/borondns-server/src/secret_store.rs")
                         or (
                             path == Path("crates/borondns-server/src/lib.rs")
-                            and "secrets.reload()" in line
+                            and (
+                                "secrets.reload()" in line
+                                or "secret reload worker failed" in line
+                            )
                         )
                     ):
                         continue
@@ -1501,7 +1511,11 @@ print()
 print("check=BDS-INV-003 atomic publish evidence")
 required_fragments = [
     ("ZoneStore ArcSwap", "ArcSwap<ZoneDirectory>", zone_text),
-    ("ZoneDirectory suffix index", "suffix_index: HashMap<Vec<u8>, Arc<ZoneStoreEntry>>", zone_text),
+    (
+        "ZoneDirectory sharded suffix index",
+        "suffix_index: [Arc<HashMap<Vec<u8>, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT]",
+        zone_text,
+    ),
     ("suffix-index lookup", "fn find_best_match", zone_text),
     ("writer publish lock", "publish_lock: Arc<Mutex<()>>", zone_text),
     ("published zone handle", "pub struct PublishedZone", zone_text),
@@ -5173,16 +5187,6 @@ if "Result<ZoneSnapshot, TransferError>" not in server_text:
     snapshot_lookup_failures.append("transfer workers no longer expose ZoneSnapshot builder output")
 if "parse_axfr_response" not in axfr_text or "ZoneSnapshot::active" not in axfr_text:
     snapshot_lookup_failures.append("AXFR ingestion no longer builds ZoneSnapshot state")
-if "augment_lookup_result_with_dnssec" in zone_text:
-    snapshot_lookup_failures.append("ZoneSnapshot still exposes old materialized DNSSEC augmentation")
-for marker in [
-    "DnssecAugmentationState",
-    "nsec3_hash_name",
-    "nsec3_owner_hash_label",
-    "nsec3_next_hash_label",
-]:
-    if marker in zone_text:
-        snapshot_lookup_failures.append(f"ZoneSnapshot old DNSSEC oracle helper remains: {marker}")
 if snapshot_lookup_failures:
     print("status=failed")
     for failure in snapshot_lookup_failures:
@@ -5193,7 +5197,7 @@ if snapshot_lookup_failures:
     )
 else:
     print("status=passed")
-    print("evidence=Non-test runtime source outside ZoneSnapshot itself contains no offline-oracle lookup calls; transfer ingestion still produces ZoneSnapshot builder state for publication into ZoneImage.")
+    print("evidence=Non-test runtime source outside ZoneSnapshot itself contains no offline-oracle lookup calls; transfer ingestion still produces ZoneSnapshot builder state for publication into ZoneImage, while materialized DNSSEC helpers remain confined behind the explicitly hidden offline oracle.")
 
 print()
 print("check=ZoneSnapshot offline oracle API stays explicitly hidden")
@@ -5269,8 +5273,10 @@ if "    pub(crate) fn records(&self) -> Vec<ResourceRecord>" in zone_snapshot_te
     snapshot_records_failures.append("ZoneSnapshot still exposes a generic crate-internal records() materializer")
 if "    pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord>" not in zone_snapshot_text:
     snapshot_records_failures.append("ZoneSnapshot::transfer_records() transfer materialization helper not found")
-if "current_zone.transfer_records()" not in axfr_text:
-    snapshot_records_failures.append("IXFR incremental transfer does not use the transfer-specific snapshot materializer")
+if "current_zone.transfer_rrset_records_by_key(" not in axfr_text:
+    snapshot_records_failures.append("IXFR incremental transfer does not use the RRset-granular transfer materializer")
+if ".transfer_records_at_name_key(" not in axfr_text:
+    snapshot_records_failures.append("IXFR incremental validation does not use the owner-granular transfer materializer")
 if "current_zone.records()" in axfr_text:
     snapshot_records_failures.append("IXFR incremental transfer still calls generic current_zone.records()")
 if "    pub fn records(&self) -> Vec<ResourceRecord>" in zone_text:
@@ -5291,7 +5297,7 @@ if snapshot_records_failures:
     )
 else:
     print("status=passed")
-    print("evidence=Whole-snapshot ResourceRecord materialization is crate-internal and transfer-named for IXFR rebuilds, while RRset materialization helpers remain crate-internal for transfer and offline oracle use, not public serving APIs.")
+    print("evidence=Whole-snapshot ResourceRecord materialization is crate-internal and transfer-named for fallback/export use, while incremental IXFR uses RRset- and owner-granular transfer materializers and RRset helpers remain crate-internal for transfer and offline oracle use, not public serving APIs.")
 
 print()
 print("check=ZoneSnapshot SOA access avoids public owned materialization")

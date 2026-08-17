@@ -135,6 +135,7 @@ impl StdUdpMmsg {
                 self.iovecs[index].iov_len = buffer_len;
                 // SAFETY: zeroed is valid for msghdr; all pointer and length
                 // fields used by recvmmsg are set immediately below.
+                // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-001
                 self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
                 self.messages[index].msg_hdr.msg_name =
                     (&mut self.names[index] as *mut libc::sockaddr_storage).cast();
@@ -150,6 +151,7 @@ impl StdUdpMmsg {
         // initialized mmsghdr entries whose iovecs reference the live inbound
         // packet buffers for the duration of the call. MSG_DONTWAIT matches the
         // socket's nonblocking dedicated-worker contract, and timeout is null.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-002
         let result = unsafe {
             libc::recvmmsg(
                 socket.as_raw_fd(),
@@ -289,6 +291,7 @@ impl StdUdpMmsg {
         // SAFETY: `socket` is a live UDP socket; `messages[..count]` has
         // msghdr entries pointing to live response buffers and sockaddr
         // storage owned by `self` for the duration of the call.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-003
         let result = unsafe {
             libc::sendmmsg(
                 socket.as_raw_fd(),
@@ -351,6 +354,7 @@ impl StdUdpMmsg {
             self.messages[index].msg_len = 0;
             // SAFETY: zeroed is valid for msghdr; all pointer and length
             // fields used by sendmmsg are set immediately below.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-004
             self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
             self.messages[index].msg_hdr.msg_name =
                 (&mut self.names[index] as *mut libc::sockaddr_storage).cast();
@@ -396,11 +400,40 @@ pub(crate) struct StdUdpMmsgStats {
 }
 
 #[cfg(target_os = "linux")]
-fn zeroed_vec<T>(len: usize) -> Vec<T> {
+/// Marker for C-compatible values whose zero byte pattern is initialized.
+///
+/// # Safety
+///
+/// Implementors must be `Copy`, contain no references or invalid niches, and
+/// accept an all-zero byte pattern as a valid initialized value.
+// SAFETY: implementors must be plain C-compatible values for which every
+// all-zero byte pattern is a valid initialized value.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-005
+unsafe trait ZeroValid: Copy {}
+
+#[cfg(target_os = "linux")]
+// SAFETY: Linux defines sockaddr_storage as a suitably aligned opaque socket
+// address container whose all-zero state is valid before the kernel fills it.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-006
+unsafe impl ZeroValid for libc::sockaddr_storage {}
+#[cfg(target_os = "linux")]
+// SAFETY: a zeroed iovec has a null base and zero length, which is a valid
+// initialized value before this adapter assigns both fields.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-007
+unsafe impl ZeroValid for libc::iovec {}
+#[cfg(target_os = "linux")]
+// SAFETY: a zeroed mmsghdr contains a valid empty msghdr and zero message
+// length; the adapter initializes every field consumed by recvmmsg/sendmmsg.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-008
+unsafe impl ZeroValid for libc::mmsghdr {}
+
+#[cfg(target_os = "linux")]
+fn zeroed_vec<T: ZeroValid>(len: usize) -> Vec<T> {
     (0..len)
         .map(|_| {
-            // SAFETY: callers use this only for libc POD socket structs where
-            // all-zero is a valid initial representation before fields are set.
+            // SAFETY: the private ZeroValid bound records that all-zero is a
+            // valid initialized representation for T.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-009
             unsafe { std::mem::zeroed() }
         })
         .collect()
@@ -409,6 +442,7 @@ fn zeroed_vec<T>(len: usize) -> Vec<T> {
 #[cfg(target_os = "linux")]
 fn current_errno() -> libc::c_int {
     // SAFETY: Linux exposes thread-local errno through __errno_location.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-010
     unsafe { *libc::__errno_location() }
 }
 
@@ -428,6 +462,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
         SocketAddr::V4(addr) => {
             // SAFETY: zeroed is valid for sockaddr_storage and sockaddr_in;
             // all semantically relevant fields are initialized below.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-011
             let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
             let raw = libc::sockaddr_in {
                 sin_family: libc::AF_INET as libc::sa_family_t,
@@ -439,6 +474,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
             };
             // SAFETY: sockaddr_storage is large and aligned enough for
             // sockaddr_in, and `storage` is uniquely borrowed.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-012
             unsafe {
                 std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
             }
@@ -450,6 +486,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
         SocketAddr::V6(addr) => {
             // SAFETY: zeroed is valid for sockaddr_storage; all relevant
             // sockaddr_in6 fields are initialized below.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-013
             let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
             let raw = libc::sockaddr_in6 {
                 sin6_family: libc::AF_INET6 as libc::sa_family_t,
@@ -462,6 +499,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
             };
             // SAFETY: sockaddr_storage is large and aligned enough for
             // sockaddr_in6, and `storage` is uniquely borrowed.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-014
             unsafe {
                 std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
             }
@@ -488,6 +526,7 @@ fn socket_addr_from_raw(
             }
             // SAFETY: ss_family and len identify a sockaddr_in stored by the
             // kernel in the suitably aligned sockaddr_storage.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-015
             let raw = unsafe { *std::ptr::from_ref(storage).cast::<libc::sockaddr_in>() };
             let ip = Ipv4Addr::from(u32::from_be(raw.sin_addr.s_addr).to_be_bytes());
             Ok(SocketAddr::V4(SocketAddrV4::new(
@@ -504,6 +543,7 @@ fn socket_addr_from_raw(
             }
             // SAFETY: ss_family and len identify a sockaddr_in6 stored by the
             // kernel in the suitably aligned sockaddr_storage.
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-STD-UDP-MMSG-016
             let raw = unsafe { *std::ptr::from_ref(storage).cast::<libc::sockaddr_in6>() };
             Ok(SocketAddr::V6(SocketAddrV6::new(
                 Ipv6Addr::from(raw.sin6_addr.s6_addr),

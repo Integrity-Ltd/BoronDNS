@@ -24,12 +24,12 @@ fn current_zone_with_serial(apex: &DomainName, serial: u32) -> ZoneSnapshot {
 
 fn zone_metadata_for(snapshot: &ZoneSnapshot) -> ZoneMetadata {
     ZoneMetadata {
-        origin: snapshot.origin.clone(),
-        origin_key: Arc::from(snapshot.origin.canonical_key()),
-        origin_name: Arc::from(snapshot.origin.to_string()),
-        state: snapshot.state,
-        serial: snapshot.serial,
-        soa_timers: snapshot.soa_timers,
+        origin: snapshot.origin().clone(),
+        origin_key: Arc::from(snapshot.origin().canonical_key()),
+        origin_name: Arc::from(snapshot.origin().to_string()),
+        state: snapshot.state(),
+        serial: snapshot.serial(),
+        soa_timers: snapshot.soa_timers(),
         shape: None,
         shape_histograms: None,
         zone_image_stats: None,
@@ -53,8 +53,8 @@ async fn transfer_axfr_from_primary_reads_tcp_messages() {
             .await
             .expect("AXFR transfer");
 
-    assert_eq!(snapshot.state, ZoneState::Active);
-    assert_eq!(snapshot.serial, Some(1));
+    assert_eq!(snapshot.state(), ZoneState::Active);
+    assert_eq!(snapshot.serial(), Some(1));
     assert_eq!(
         snapshot
             .offline_oracle()
@@ -94,8 +94,8 @@ async fn signed_axfr_completes_on_tsig_only_message_after_unsigned_terminating_s
     .expect("AXFR should finish while the primary keeps the TCP stream open")
     .expect("signed AXFR transfer");
 
-    assert_eq!(snapshot.state, ZoneState::Active);
-    assert_eq!(snapshot.serial, Some(1));
+    assert_eq!(snapshot.state(), ZoneState::Active);
+    assert_eq!(snapshot.serial(), Some(1));
 }
 
 #[tokio::test]
@@ -236,8 +236,8 @@ async fn transfer_ixfr_from_primary_accepts_mode2_axfr_fallback() {
     let IxfrResponse::Updated(snapshot) = response else {
         panic!("expected updated zone");
     };
-    assert_eq!(snapshot.state, ZoneState::Active);
-    assert_eq!(snapshot.serial, Some(2));
+    assert_eq!(snapshot.state(), ZoneState::Active);
+    assert_eq!(snapshot.serial(), Some(2));
     assert_eq!(
         snapshot
             .offline_oracle()
@@ -346,6 +346,31 @@ fn transfer_ingest_global_budget_releases_after_success() {
     reuse
         .record_message(16)
         .expect("released budget is reusable");
+}
+
+#[test]
+fn transfer_resident_budget_conservatively_charges_wire_amplification() {
+    let primary = "192.0.2.53:53".parse().unwrap();
+    let budget = TransferIngestBudget::for_resident_limit(512);
+    let mut ingest =
+        TransferIngestTracker::new("AXFR", primary, 16).with_ingest_budget(Some(&budget));
+
+    ingest.record_message(2).expect("2 wire bytes charge 512 resident bytes");
+    assert_eq!(budget.in_flight_bytes(), 512);
+    let error = ingest
+        .record_message(1)
+        .expect_err("one more wire byte exceeds the resident envelope");
+    assert!(matches!(error, TransferError::IngestGlobalSizeLimit { .. }));
+    assert_eq!(budget.in_flight_bytes(), 512);
+    assert_eq!(
+        budget.snapshot(),
+        TransferIngestBudgetSnapshot {
+            limit_bytes: 512,
+            in_flight_bytes: 512,
+            peak_in_flight_bytes: 512,
+            rejections_total: 1,
+        }
+    );
 }
 
 #[test]
@@ -503,7 +528,7 @@ async fn transfer_ixfr_from_primary_applies_mode1_incremental_diff() {
     let IxfrResponse::Updated(snapshot) = response else {
         panic!("expected updated zone");
     };
-    assert_eq!(snapshot.serial, Some(2));
+    assert_eq!(snapshot.serial(), Some(2));
     assert!(
         snapshot
             .offline_oracle()
@@ -760,7 +785,7 @@ async fn axfr_binds_configured_transfer_source() {
         .expect("AXFR primary should send peer address");
     let expected_ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
 
-    assert_eq!(snapshot.serial, Some(7));
+    assert_eq!(snapshot.serial(), Some(7));
     assert_eq!(peer.ip(), expected_ip);
     assert_ne!(peer.port(), 0);
 }

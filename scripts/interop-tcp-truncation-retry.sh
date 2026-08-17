@@ -412,18 +412,26 @@ if struct.unpack("!H", holder_response[2:4])[0] & 0x000F:
 
 started = time.monotonic()
 overflow = socket.create_connection((HOST, PORT), timeout=2.0)
-overflow.settimeout(2.0)
+overflow.settimeout(0.25)
 try:
     overflow_data = overflow.recv(1)
-except ConnectionResetError:
-    overflow_data = b""
-elapsed_ms = int((time.monotonic() - started) * 1000)
-overflow.close()
+except socket.timeout:
+    overflow_data = None
+except ConnectionResetError as error:
+    raise AssertionError("over-limit TCP connection was accepted and reset instead of queued") from error
+queued_ms = int((time.monotonic() - started) * 1000)
+if overflow_data is not None:
+    raise AssertionError("over-limit TCP connection was accepted or closed instead of remaining queued")
 holder.close()
-if overflow_data:
-    raise AssertionError("over-limit TCP connection returned data instead of closing")
+overflow.settimeout(2.0)
+overflow_query = query(0x6004)
+overflow.sendall(frame(overflow_query))
+overflow_response = read_tcp_response(overflow)
+overflow.close()
+if response_id(overflow_response) != 0x6004:
+    raise AssertionError("queued TCP connection response ID mismatch")
 
-limit_summary = f"over_limit_closed=1 over_limit_close_ms={elapsed_ms}"
+limit_summary = f"over_limit_backlog_queued=1 backlog_observation_ms={queued_ms} admitted_after_capacity=1"
 with open(LIMIT_SUMMARY_PATH, "w", encoding="utf-8") as handle:
     print(limit_summary, file=handle)
 log(limit_summary)
@@ -614,8 +622,8 @@ client_summary="$(python3 "$client" "$borondns_dns_port" "$client_log" "$limit_s
 metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
     'borondns_zones_active 1' \
-    'borondns_secondary_queries_total{zone="tcp.test."} 5' \
-    'borondns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 5' \
+    'borondns_secondary_queries_total{zone="tcp.test."} 6' \
+    'borondns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 6' \
     'borondns_queries_truncated_total 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected TCP truncation retry line: $expected" >&2
@@ -628,7 +636,7 @@ wait "$borondns_pid"
 borondns_pid=""
 
 for expected in \
-    'TCP connection limit reached; closing accepted connection' \
+    'TCP connection limit reached; pausing accept and applying kernel backlog pressure' \
     'shutdown signal received; draining runtime' \
     'TCP connection drain completed'; do
     if ! grep -q "$expected" "$workdir/borondns.log"; then
@@ -643,7 +651,7 @@ BDS-FR-TCP-001	retained-runtime	tcp_framing_and_multi_message_exchange	client-su
 BDS-FR-TCP-002	retained-runtime	tcp_persistence_until_shutdown	tcp-pipeline-summary.env; graceful-drain-summary.env; readyz-draining.txt; borondns.log	The pipelined connection remains open for subsequent queries, and an accepted TCP query completes after SIGTERM while new TCP traffic is rejected or closed.
 BDS-FR-TCP-003	retained-runtime	idle_timeout_close	tcp-timeout-summary.env; borondns.toml; crates/borondns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout	The retained config applies a one-second idle timeout, and the harness records server-side closure of a TCP connection that sends no data.
 BDS-FR-TCP-004	retained-runtime-plus-support	partial_frame_read_timeout_close	tcp-timeout-summary.env; borondns.toml; crates/borondns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/borondns-server/src/lib.rs::tcp_write_times_out_when_backpressured	The runtime harness records closure of a connection stalled after the two-octet length prefix; focused unit tests cover both read-timeout and write-timeout failure paths.
-BDS-FR-TCP-005	retained-runtime	over_limit_connection_close	tcp-limit-summary.env; borondns.toml; borondns.log	The retained config sets max_tcp_connections=1; a second accepted connection is promptly closed and the expected warning log is present.
+BDS-FR-TCP-005	retained-runtime	over_limit_kernel_backlog	tcp-limit-summary.env; borondns.toml; borondns.log	The retained config sets max_tcp_connections=1; a second connection remains queued without application data or close while saturated, is admitted after capacity returns, and one saturation warning is retained.
 BDS-FR-TCP-006	supporting-unit	optional_per_source_cap	crates/borondns-core/src/config.rs::parses_custom_tcp_connection_limit; crates/borondns-core/src/config.rs::rejects_zero_tcp_connection_limit; crates/borondns-server/src/lib.rs::tcp_listener_closes_connections_over_per_source_limit; docs/engineering-mvp-scope.md; config/borondns.example.toml	The SRS makes per-source TCP connection limits optional with default no per-source cap; focused config and listener tests cover the configured per-source cap path and prompt close behavior.
 BDS-FR-TCP-007	retained-runtime	pipelined_large_then_small_out_of_order	tcp-pipeline-summary.env; client.log	Two in-flight queries on one TCP connection return matching QIDs, and the intentionally smaller second query is answered before the larger first query.
 BDS-FR-TCP-008	retained-runtime	udp_truncation_tcp_complete_retry	client-summary.env; metrics.txt	For the same large answer, UDP returns TC=1 at the 512-octet ceiling while TCP returns an untruncated response with the complete A RRset.

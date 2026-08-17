@@ -14,12 +14,11 @@ use borondns_core::{
     config::{MAX_UDP_BATCH_SIZE, UdpBackend, UdpIdleStrategy, UdpRuntime, XdpConfig},
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
-        DatagramAction, DnsCookieContext, DnsCookieRequestStatus, DomainName,
-        ExtendedDnsErrorsMode, Header, LookupMetrics, LookupTermination, Opcode, Question, Rcode,
-        RecordType, Transport, ZoneImageProvider,
-        answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
-        chaos_query_observation, default_zone_image_provider, dns_cookie_request_status,
-        request_has_valid_dns_server_cookie, request_udp_payload_ceiling,
+        DatagramAction, DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode, Header,
+        LookupMetrics, LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
+        ZoneImageProvider, answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
+        chaos_query_observation_from_parsed, default_zone_image_provider,
+        dns_cookie_request_status, request_udp_payload_ceiling,
     },
     zone::ZoneStore,
 };
@@ -1497,6 +1496,11 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     if let Some(prepared_hook) = prepared_hook {
         prepared_hook();
     }
+    let parsed_header = Header::parse(&prepared.packet).ok();
+    let parsed_question = parsed_header
+        .as_ref()
+        .filter(|header| header.qdcount == 1)
+        .and_then(|_| Question::parse(&prepared.packet).ok());
     let dns_cookie_secrets = settings
         .dns_cookie
         .policy
@@ -1505,10 +1509,12 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     let dns_cookie = dns_cookie_secrets
         .as_ref()
         .and_then(|secrets| dns_cookie_context(peer_ip, secrets, settings.dns_cookie));
-    let cookie_validated = dns_cookie
-        .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
-    let query_metrics = observe_query_metrics(
-        &prepared.packet,
+    let dns_cookie_status =
+        dns_cookie.and_then(|context| dns_cookie_request_status(&prepared.packet, Some(context)));
+    let cookie_validated = dns_cookie_status == Some(DnsCookieRequestStatus::ValidServerCookie);
+    let query_metrics = observe_query_metrics_from_parsed(
+        parsed_header.as_ref(),
+        parsed_question.as_ref(),
         zones,
         &settings.metrics,
         QueryObservationOptions {
@@ -1525,8 +1531,7 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         settings.edns_padding_block_size,
     );
     let dns_cookie_metrics = observe_dns_cookie_metrics(
-        &prepared.packet,
-        dns_cookie,
+        dns_cookie_status,
         peer_ip,
         settings.cookie_prefix_metrics,
         &settings.metrics,
@@ -1535,7 +1540,12 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         version: &settings.chaos_version,
         hostname: &settings.chaos_hostname,
     };
-    let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
+    let chaos_observation = chaos_query_observation_from_parsed(
+        parsed_header.as_ref()?,
+        parsed_question.as_ref(),
+        &settings.nsid,
+        chaos,
+    );
     let compose_started = settings.metrics.start_pipeline_timer();
     let answer_options = AnswerOptions {
         transport: Transport::Udp,
@@ -1674,8 +1684,24 @@ pub(crate) struct QueryObservationOptions {
     pub(crate) parse_duration: Option<Duration>,
 }
 
+#[cfg(test)]
 pub(crate) fn observe_query_metrics(
     packet: &[u8],
+    zones: &ZoneStore,
+    metrics: &RuntimeMetrics,
+    options: QueryObservationOptions,
+) -> QueryMetricObservation {
+    let header = Header::parse(packet).ok();
+    let question = header
+        .as_ref()
+        .filter(|header| header.qdcount == 1)
+        .and_then(|_| Question::parse(packet).ok());
+    observe_query_metrics_from_parsed(header.as_ref(), question.as_ref(), zones, metrics, options)
+}
+
+pub(crate) fn observe_query_metrics_from_parsed(
+    header: Option<&Header>,
+    question: Option<&Question>,
     zones: &ZoneStore,
     metrics: &RuntimeMetrics,
     options: QueryObservationOptions,
@@ -1705,7 +1731,7 @@ pub(crate) fn observe_query_metrics(
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
     };
-    let Ok(header) = Header::parse(packet) else {
+    let Some(header) = header else {
         return not_query();
     };
     if header.is_response() || header.opcode() != Some(Opcode::Query) {
@@ -1719,7 +1745,7 @@ pub(crate) fn observe_query_metrics(
     if header.qdcount != 1 {
         return observed_query(None);
     }
-    let Ok(question) = Question::parse(packet) else {
+    let Some(question) = question else {
         return observed_query(None);
     };
     if let Some(published_zone) = zones.find_published_zone_with_ascii_lowercase_hint(
@@ -1732,14 +1758,12 @@ pub(crate) fn observe_query_metrics(
 }
 
 pub(crate) fn observe_dns_cookie_metrics(
-    packet: &[u8],
-    context: Option<DnsCookieContext>,
+    status: Option<DnsCookieRequestStatus>,
     source: IpAddr,
     prefix_settings: CookiePrefixMetricSettings,
     metrics: &RuntimeMetrics,
 ) -> Option<DnsCookieRequestStatus> {
-    let context = context?;
-    let status = dns_cookie_request_status(packet, Some(context))?;
+    let status = status?;
     metrics.record_dns_cookie_status(status, source, prefix_settings);
     Some(status)
 }

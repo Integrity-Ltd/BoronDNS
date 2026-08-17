@@ -324,6 +324,7 @@ fn kick_af_xdp_ring(socket_fd: RawFd, kind: RingKickKind) -> io::Result<()> {
     // SAFETY: `socket_fd` is the live AF_XDP socket owned by the adapter; both
     // operations use a zero length and null data/address pointers, so the
     // kernel cannot dereference userspace packet memory through this call.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-001
     let result = unsafe {
         match kind {
             RingKickKind::Tx => libc::sendto(
@@ -620,6 +621,7 @@ impl RedirectConfig {
 
 // SAFETY: RedirectConfig is repr(C), Copy, contains only integer/byte fields,
 // and has no references or invalid bit patterns.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-002
 unsafe impl Pod for RedirectConfig {}
 
 struct XdpRedirectGuard {
@@ -692,6 +694,7 @@ impl XdpRedirectGuard {
 // outstanding packets as one unit. Packets are never shared concurrently; moving
 // the adapter between Tokio worker threads moves the owning UMEM and packet
 // handles together.
+// SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-003
 unsafe impl Send for AfXdpPacketIo {}
 
 fn drain_completions_into(
@@ -856,6 +859,7 @@ impl AfXdpPacketIo {
         // SAFETY: all fill-ring frame addresses are allocated from `umem`, and
         // the UMEM, rings, and socket are stored in one adapter so UMEM outlives
         // the AF_XDP rings that reference it.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-004
         let initially_filled = unsafe {
             rings
                 .fill_ring
@@ -1021,6 +1025,7 @@ impl AfXdpPacketIo {
         self.service_fill_kick(admission_open).await?;
         // SAFETY: the fill ring and UMEM are owned by this adapter. Packets
         // returned to UMEM are not accessed again before being re-enqueued.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-005
         let queued = unsafe {
             self.fill_ring
                 .enqueue(&mut self.umem, self.fill_ring_size, false)
@@ -1181,6 +1186,7 @@ impl PacketIo for AfXdpPacketIo {
             // dequeue, and no packet outlives the owning UMEM.
             let received = if self.active_inbound == 0 {
                 let mut readiness = wait_for_fd_readiness(&self.socket, Interest::READABLE).await?;
+                // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-006
                 let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
                 if received == 0 {
                     // A zero-sized dequeue is the AF_XDP ring equivalent of
@@ -1196,6 +1202,7 @@ impl PacketIo for AfXdpPacketIo {
                 // SAFETY: the RX ring, receive slab, and UMEM are owned by this
                 // adapter, and every dequeued packet is admitted, recycled, or
                 // retained in the slab before the owning UMEM can be dropped.
+                // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-007
                 let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
                 if received == 0 {
                     // The empty dequeue is the actual not-ready observation.
@@ -1325,6 +1332,7 @@ impl PacketIo for AfXdpPacketIo {
             // SAFETY: all packets in `tx_slab` came from this adapter's UMEM,
             // and the UMEM outlives the socket and TX ring.
             let pending_before = self.tx_slab.len();
+            // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-008
             let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
             let admitted = pending_before - self.tx_slab.len();
             admitted_batch.record(admitted);
@@ -1369,6 +1377,7 @@ impl PacketIo for AfXdpPacketIo {
                         // SAFETY: all packets in `tx_slab` came from this
                         // adapter's UMEM, which outlives the TX ring.
                         let pending_before = self.tx_slab.len();
+                        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-009
                         let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
                         let admitted = pending_before - self.tx_slab.len();
                         admitted_batch.record(admitted);

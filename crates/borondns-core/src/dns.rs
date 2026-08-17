@@ -1900,17 +1900,29 @@ pub fn chaos_query_observation(
     chaos: ChaosOptions<'_>,
 ) -> Option<ChaosQueryObservation> {
     let header = Header::parse(packet).ok()?;
+    let question = (header.qdcount == 1)
+        .then(|| Question::parse(packet).ok())
+        .flatten();
+    chaos_query_observation_from_parsed(&header, question.as_ref(), nsid, chaos)
+}
+
+pub fn chaos_query_observation_from_parsed(
+    header: &Header,
+    question: Option<&Question>,
+    nsid: &[u8],
+    chaos: ChaosOptions<'_>,
+) -> Option<ChaosQueryObservation> {
     if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount != 1 {
         return None;
     }
-    let question = Question::parse(packet).ok()?;
+    let question = question?;
     if question.qclass != DNS_CLASS_CH {
         return None;
     }
     Some(ChaosQueryObservation {
         qname: question.qname.to_string(),
         qtype: question.qtype,
-        outcome: classify_chaos_query(&question, nsid, chaos).outcome,
+        outcome: classify_chaos_query(question, nsid, chaos).outcome,
     })
 }
 

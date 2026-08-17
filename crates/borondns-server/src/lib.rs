@@ -150,15 +150,17 @@ use tcp::{
 use tcp::{TcpServerSettings, serve_tcp_until};
 #[cfg(test)]
 use transfer::{
-    DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT, TransferIngestBudget, TransferIngestTracker,
-    load_pem_certs, load_pem_private_key_from_file, poll_soa_from_primary_with_tsig,
-    poll_soa_from_primary_with_tsig_and_source, query_id_from_random_bytes,
-    tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
+    DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT, TransferIngestBudget, TransferIngestBudgetSnapshot,
+    TransferIngestTracker, load_pem_certs, load_pem_private_key_from_file,
+    poll_soa_from_primary_with_tsig, poll_soa_from_primary_with_tsig_and_source,
+    query_id_from_random_bytes, tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
+    transfer_axfr_from_target_with_tsig_and_source, transfer_ixfr_from_target_with_tsig,
 };
 use transfer::{
     TransferSession, TransferTsig, poll_soa_from_target_with_tsig_and_source,
-    transfer_axfr_from_target_with_tsig_and_source, transfer_ixfr_from_target_with_tsig,
-    transfer_query_id, tsig_time_signed, unix_timestamp_seconds,
+    transfer_axfr_from_target_with_tsig_and_source_guarded,
+    transfer_ixfr_from_target_with_tsig_guarded, transfer_query_id, tsig_time_signed,
+    unix_timestamp_seconds,
 };
 pub(crate) use transfer::{build_xot_client_config, load_pem_certs_for_primary};
 pub use transfer::{poll_soa_from_primary, transfer_axfr_from_primary, transfer_ixfr_from_primary};
@@ -175,14 +177,14 @@ use transfer_plan::{rotate_transfer_targets, uniform_index_from_u64};
 pub(crate) use udp::UDP_PACKET_BUFFER_LEN;
 #[cfg(test)]
 use udp::{
-    BoundUdpListener, StdUdpBatchIo, handle_udp_datagram_with_prepared_hook, send_std_udp_batch,
-    serve_udp, serve_udp_packet_io_until,
+    BoundUdpListener, StdUdpBatchIo, handle_udp_datagram_with_prepared_hook, observe_query_metrics,
+    send_std_udp_batch, serve_udp, serve_udp_packet_io_until,
 };
 #[cfg(any(test, feature = "af-xdp"))]
 pub(crate) use udp::{PacketIo, PacketIoSendError};
 use udp::{
     QueryMetricObservation, QueryObservationOptions, UdpServerSettings, bind_udp_listeners,
-    observe_dns_cookie_metrics, observe_query_metrics, record_chaos_query_if_observed,
+    observe_dns_cookie_metrics, observe_query_metrics_from_parsed, record_chaos_query_if_observed,
     record_dns_cookie_badcookie_if_emitted, record_query_lookup_metrics,
     record_query_response_metric, record_query_send_metric, record_response_cache_metric,
     response_cache_ineligible_reason, serve_bound_udp_until,
@@ -683,6 +685,7 @@ impl Runtime {
                     observability_auth: observability_auth.clone(),
                     observability_rate_limiter: observability_rate_limiter.clone(),
                     transfer_materials: transfer_materials.clone(),
+                    transfer_ingest_budget: transfer_plan.ingest_budget(),
                     secrets: secrets.clone(),
                     started_at: Instant::now(),
                     graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
@@ -4907,7 +4910,9 @@ async fn serve_control_plane_operations(
                 &refresh_tx,
                 &catalog_origins,
                 &secrets,
-            ) {
+            )
+            .await
+            {
                 Ok(()) => {
                     client
                         .complete(
@@ -4931,7 +4936,7 @@ async fn serve_control_plane_operations(
     }
 }
 
-fn execute_control_plane_operation_with_transfer_plan(
+async fn execute_control_plane_operation_with_transfer_plan(
     operation: &ControlPlaneOperation,
     zones: &ZoneStore,
     transfer_plan: &TransferPlan,
@@ -4939,6 +4944,29 @@ fn execute_control_plane_operation_with_transfer_plan(
     catalog_origins: &[DomainName],
     secrets: &SecretManager,
 ) -> Result<(), String> {
+    if matches!(
+        operation.operation,
+        ControlPlaneOperationKind::RepublishFeed | ControlPlaneOperationKind::RotateTsig
+    ) {
+        let operation = operation.clone();
+        let zones = zones.clone();
+        let transfer_plan = transfer_plan.clone();
+        let refresh_tx = refresh_tx.clone();
+        let catalog_origins = catalog_origins.to_vec();
+        let secrets = secrets.clone();
+        return tokio::task::spawn_blocking(move || {
+            execute_control_plane_operation_inner(
+                &operation,
+                &zones,
+                Some(&transfer_plan),
+                &refresh_tx,
+                &catalog_origins,
+                &secrets,
+            )
+        })
+        .await
+        .map_err(|error| format!("secret reload worker failed: {error}"))?;
+    }
     execute_control_plane_operation_inner(
         operation,
         zones,
@@ -6021,16 +6049,20 @@ async fn refresh_zone_metadata_from_primaries(
     })
 }
 
-fn schedule_zone_overlay_compaction(zones: &ZoneStore, origin: &DomainName) {
+async fn schedule_zone_overlay_compaction(zones: &ZoneStore, origin: &DomainName) {
     if !zones.overlay_compaction_due(origin) {
         return;
     }
     let zones = zones.clone();
     let origin = origin.clone();
-    tokio::task::spawn_blocking(move || match zones.compact_overlay_if_due(&origin) {
-        Ok(ZoneOverlayCompactionOutcome::Compacted {
+    let task_zones = zones.clone();
+    let task_origin = origin.clone();
+    let result =
+        tokio::task::spawn_blocking(move || task_zones.compact_overlay_if_due(&task_origin)).await;
+    match result {
+        Ok(Ok(ZoneOverlayCompactionOutcome::Compacted {
             remaining_dirty_owners,
-        }) => {
+        })) => {
             info!(
                 category = "transfer",
                 event = "zone_overlay_compaction_completed",
@@ -6048,19 +6080,26 @@ fn schedule_zone_overlay_compaction(zones: &ZoneStore, origin: &DomainName) {
                 );
             }
         }
-        Ok(
+        Ok(Ok(
             ZoneOverlayCompactionOutcome::NotNeeded
             | ZoneOverlayCompactionOutcome::AlreadyRunning
             | ZoneOverlayCompactionOutcome::Obsolete,
-        ) => {}
-        Err(error) => warn!(
+        )) => {}
+        Ok(Err(error)) => warn!(
             category = "transfer",
             event = "zone_overlay_compaction_failed",
             zone = %origin,
             %error,
             "large-zone IXFR overlay compaction failed; current serving snapshot remains active"
         ),
-    });
+        Err(error) => warn!(
+            category = "transfer",
+            event = "zone_overlay_compaction_task_failed",
+            zone = %origin,
+            %error,
+            "large-zone IXFR overlay compaction task failed"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -6305,7 +6344,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                         .expect("IXFR current snapshot metadata has a serial");
                     context.metrics.record_ixfr_started();
                     let ixfr_started = Instant::now();
-                    match transfer_ixfr_from_target_with_tsig(
+                    match transfer_ixfr_from_target_with_tsig_guarded(
                         &primary_target,
                         &plan.origin,
                         plan.qclass,
@@ -6324,153 +6363,169 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     )
                     .await
                     {
-                        Ok(IxfrResponse::Updated(snapshot)) => {
-                            let snapshot: Arc<ZoneSnapshot> = Arc::from(snapshot);
-                            let catalog_members = match catalog_manager
-                                .parse_candidate_snapshot(&snapshot)
-                            {
-                                Ok(parsed) => Some(parsed),
-                                Err(error) => {
-                                    context.metrics.record_ixfr_failed();
-                                    log_catalog_error(&error);
-                                    warn!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        reason = %context.reason,
-                                        "IXFR catalog validation failed before publication; falling back to AXFR"
-                                    );
-                                    None
-                                }
-                            };
-                            if let Some(catalog_members) = catalog_members {
-                                if let Err(error) = persist_last_good_before_publication(
-                                    &context.zone_persistence,
-                                    snapshot.clone(),
-                                )
-                                .await
-                                {
-                                    context.metrics.record_ixfr_failed();
-                                    warn!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        %error,
-                                        reason = %context.reason,
-                                        "IXFR last-good persistence failed before publication; falling back to AXFR"
-                                    );
-                                    continue;
-                                }
-                                match context
-                                    .transfer_plan
-                                    .if_current_plan(plan, || {
-                                        context.secrets.if_current_snapshot(
-                                            &secret_snapshot,
-                                            || {
-                                                zones.insert_snapshot_arc_for_transfer(
-                                                    snapshot.clone(),
-                                                )
-                                            },
+                        Ok(guarded) => {
+                            let (response, _transfer_memory_reservation) = guarded.into_parts();
+                            match response {
+                                IxfrResponse::Updated(snapshot) => {
+                                    let snapshot: Arc<ZoneSnapshot> = Arc::from(snapshot);
+                                    let catalog_members = match catalog_manager
+                                        .parse_candidate_snapshot(&snapshot)
+                                    {
+                                        Ok(parsed) => Some(parsed),
+                                        Err(error) => {
+                                            context.metrics.record_ixfr_failed();
+                                            log_catalog_error(&error);
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                reason = %context.reason,
+                                                "IXFR catalog validation failed before publication; falling back to AXFR"
+                                            );
+                                            None
+                                        }
+                                    };
+                                    if let Some(catalog_members) = catalog_members {
+                                        if let Err(error) = persist_last_good_before_publication(
+                                            &context.zone_persistence,
+                                            snapshot.clone(),
                                         )
-                                    })
-                                    .flatten()
-                                {
-                                    None => {
-                                        warn!(
-                                            zone = %plan.origin,
-                                            %primary,
-                                            reason = %context.reason,
-                                            "IXFR result discarded because zone no longer has a transfer plan"
-                                        );
-                                        return RefreshZoneOutcome::obsolete();
+                                        .await
+                                        {
+                                            context.metrics.record_ixfr_failed();
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                %error,
+                                                reason = %context.reason,
+                                                "IXFR last-good persistence failed before publication; falling back to AXFR"
+                                            );
+                                            continue;
+                                        }
+                                        match context
+                                            .transfer_plan
+                                            .if_current_plan(plan, || {
+                                                context.secrets.if_current_snapshot(
+                                                    &secret_snapshot,
+                                                    || {
+                                                        zones.insert_snapshot_arc_for_transfer(
+                                                            snapshot.clone(),
+                                                        )
+                                                    },
+                                                )
+                                            })
+                                            .flatten()
+                                        {
+                                            None => {
+                                                warn!(
+                                                    zone = %plan.origin,
+                                                    %primary,
+                                                    reason = %context.reason,
+                                                    "IXFR result discarded because zone no longer has a transfer plan"
+                                                );
+                                                return RefreshZoneOutcome::obsolete();
+                                            }
+                                            Some(Ok(metadata)) => {
+                                                context.metrics.record_ixfr_succeeded();
+                                                let serial = metadata.serial;
+                                                let elapsed_seconds =
+                                                    ixfr_started.elapsed().as_secs_f64();
+                                                let generations = serial.map(|serial| {
+                                                    serial.wrapping_sub(current_serial)
+                                                });
+                                                schedule_zone_overlay_compaction(
+                                                    zones,
+                                                    &metadata.origin,
+                                                )
+                                                .await;
+                                                info!(
+                                                    zone = %plan.origin,
+                                                    %primary,
+                                                    ?serial,
+                                                    from_serial = current_serial,
+                                                    ?generations,
+                                                    elapsed_seconds,
+                                                    reason = %context.reason,
+                                                    "IXFR completed"
+                                                );
+                                                return RefreshZoneOutcome::updated(
+                                                    metadata,
+                                                    catalog_members,
+                                                );
+                                            }
+                                            Some(Err(error)) => {
+                                                context.metrics.record_ixfr_failed();
+                                                warn!(
+                                                    zone = %plan.origin,
+                                                    %primary,
+                                                    %error,
+                                                    reason = %context.reason,
+                                                    "IXFR publication failed; falling back to AXFR"
+                                                );
+                                            }
+                                        }
                                     }
-                                    Some(Ok(metadata)) => {
-                                        context.metrics.record_ixfr_succeeded();
-                                        let serial = metadata.serial;
-                                        let elapsed_seconds = ixfr_started.elapsed().as_secs_f64();
-                                        let generations = serial
-                                            .map(|serial| serial.wrapping_sub(current_serial));
-                                        schedule_zone_overlay_compaction(zones, &metadata.origin);
-                                        info!(
-                                            zone = %plan.origin,
-                                            %primary,
-                                            ?serial,
-                                            from_serial = current_serial,
-                                            ?generations,
-                                            elapsed_seconds,
-                                            reason = %context.reason,
-                                            "IXFR completed"
-                                        );
-                                        return RefreshZoneOutcome::updated(
-                                            metadata,
-                                            catalog_members,
-                                        );
+                                }
+                                IxfrResponse::Current => {
+                                    let confirmation = record_ixfr_current_confirmation(
+                                        context.metrics,
+                                        confirm_current_zone_with_secret(
+                                            zones,
+                                            &context.transfer_plan,
+                                            &context.secrets,
+                                            plan,
+                                            &secret_snapshot,
+                                            &current,
+                                        ),
+                                    );
+                                    let cached_metadata = current.into_metadata();
+                                    match confirmation {
+                                        Ok(metadata) => {
+                                            debug_assert_eq!(
+                                                cached_metadata.origin_key,
+                                                metadata.origin_key
+                                            );
+                                            debug_assert_eq!(
+                                                cached_metadata.serial,
+                                                metadata.serial
+                                            );
+                                            info!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                current_serial,
+                                                reason = %context.reason,
+                                                "IXFR confirmed zone current"
+                                            );
+                                            return RefreshZoneOutcome::current(metadata);
+                                        }
+                                        Err(CurrentZoneConfirmationError::Obsolete) => {
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                reason = %context.reason,
+                                                "IXFR current result discarded because zone no longer has the same transfer plan"
+                                            );
+                                            return RefreshZoneOutcome::obsolete();
+                                        }
+                                        Err(CurrentZoneConfirmationError::Missing) => {
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                reason = %context.reason,
+                                                "current zone disappeared after IXFR"
+                                            );
+                                        }
+                                        Err(CurrentZoneConfirmationError::PublicationFailed(
+                                            error,
+                                        )) => {
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                reason = %context.reason,
+                                                %error,
+                                                "failed to reactivate current zone after IXFR"
+                                            );
+                                        }
                                     }
-                                    Some(Err(error)) => {
-                                        context.metrics.record_ixfr_failed();
-                                        warn!(
-                                            zone = %plan.origin,
-                                            %primary,
-                                            %error,
-                                            reason = %context.reason,
-                                            "IXFR publication failed; falling back to AXFR"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Ok(IxfrResponse::Current) => {
-                            let confirmation = record_ixfr_current_confirmation(
-                                context.metrics,
-                                confirm_current_zone_with_secret(
-                                    zones,
-                                    &context.transfer_plan,
-                                    &context.secrets,
-                                    plan,
-                                    &secret_snapshot,
-                                    &current,
-                                ),
-                            );
-                            let cached_metadata = current.into_metadata();
-                            match confirmation {
-                                Ok(metadata) => {
-                                    debug_assert_eq!(
-                                        cached_metadata.origin_key,
-                                        metadata.origin_key
-                                    );
-                                    debug_assert_eq!(cached_metadata.serial, metadata.serial);
-                                    info!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        current_serial,
-                                        reason = %context.reason,
-                                        "IXFR confirmed zone current"
-                                    );
-                                    return RefreshZoneOutcome::current(metadata);
-                                }
-                                Err(CurrentZoneConfirmationError::Obsolete) => {
-                                    warn!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        reason = %context.reason,
-                                        "IXFR current result discarded because zone no longer has the same transfer plan"
-                                    );
-                                    return RefreshZoneOutcome::obsolete();
-                                }
-                                Err(CurrentZoneConfirmationError::Missing) => {
-                                    warn!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        reason = %context.reason,
-                                        "current zone disappeared after IXFR"
-                                    );
-                                }
-                                Err(CurrentZoneConfirmationError::PublicationFailed(error)) => {
-                                    warn!(
-                                        zone = %plan.origin,
-                                        %primary,
-                                        reason = %context.reason,
-                                        %error,
-                                        "failed to reactivate current zone after IXFR"
-                                    );
                                 }
                             }
                         }
@@ -6520,7 +6575,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
             }
         };
         context.metrics.record_axfr_started();
-        match transfer_axfr_from_target_with_tsig_and_source(
+        match transfer_axfr_from_target_with_tsig_and_source_guarded(
             &primary_target,
             &plan.origin,
             plan.qclass,
@@ -6538,7 +6593,8 @@ async fn refresh_zone_from_primaries_with_snapshot(
         )
         .await
         {
-            Ok(snapshot) => {
+            Ok(guarded) => {
+                let (snapshot, _transfer_memory_reservation) = guarded.into_parts();
                 info!(
                     event = "zone_transfer_publication_phase",
                     phase = "axfr_snapshot_received",
@@ -6613,7 +6669,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     Some(Ok(metadata)) => {
                         context.metrics.record_axfr_succeeded();
                         let serial = metadata.serial;
-                        schedule_zone_overlay_compaction(zones, &metadata.origin);
+                        schedule_zone_overlay_compaction(zones, &metadata.origin).await;
                         info!(
                             zone = %plan.origin,
                             %primary,

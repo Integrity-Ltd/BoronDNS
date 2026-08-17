@@ -320,7 +320,7 @@ fn refresh_registry_clamps_soa_intervals_to_configured_bounds() {
     );
     let now = std::time::Instant::now();
     let origin = DomainName::from_absolute_str("example.test.").unwrap();
-    let mut snapshot = ZoneSnapshot::active(
+    let snapshot = ZoneSnapshot::active(
         origin.clone(),
         Some(1),
         vec![Rrset::new(
@@ -328,15 +328,9 @@ fn refresh_registry_clamps_soa_intervals_to_configured_bounds() {
             RecordType::Soa as u16,
             1,
             3600,
-            vec![soa_rdata()],
+            vec![soa_rdata_with_timers(10_000, 10_000, 86_400, 300)],
         )],
     );
-    snapshot.soa_timers = Some(SoaTimers {
-        refresh: 10_000,
-        retry: 10_000,
-        expire: 86_400,
-        minimum: 300,
-    });
 
     registry.record_success_at_with_timestamp(&zone_metadata_for(&snapshot), now, 1_700_000_000);
     let status = registry
@@ -370,7 +364,7 @@ fn refresh_registry_warns_when_soa_timers_approach_maximum_effective_interval() 
     );
     let now = std::time::Instant::now();
     let origin = DomainName::from_absolute_str("example.test.").unwrap();
-    let mut snapshot = ZoneSnapshot::active(
+    let snapshot = ZoneSnapshot::active(
         origin.clone(),
         Some(1),
         vec![Rrset::new(
@@ -378,15 +372,9 @@ fn refresh_registry_warns_when_soa_timers_approach_maximum_effective_interval() 
             RecordType::Soa as u16,
             1,
             3600,
-            vec![soa_rdata()],
+            vec![soa_rdata_with_timers(900, 1_500, 86_400, 300)],
         )],
     );
-    snapshot.soa_timers = Some(SoaTimers {
-        refresh: 900,
-        retry: 1_500,
-        expire: 86_400,
-        minimum: 300,
-    });
     let captured = CapturedEvents::new();
     let subscriber = CapturingSubscriber::new(captured.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
@@ -2435,7 +2423,7 @@ fn xot_transfer_logs_tls_session_establishment_and_close() {
                 .await
                 .expect("XoT AXFR should succeed");
 
-                assert_eq!(snapshot.serial, Some(1));
+                assert_eq!(snapshot.serial(), Some(1));
                 assert!(captured.contains_all(&[
                     "XoT TLS session established",
                     "category=\"xot\"",

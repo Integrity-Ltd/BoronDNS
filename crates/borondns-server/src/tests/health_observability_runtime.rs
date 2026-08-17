@@ -1492,6 +1492,7 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
                 &ObservabilityConfig::default(),
             ),
             transfer_materials: Vec::new(),
+            transfer_ingest_budget: TransferIngestBudget::for_resident_limit(64 * 1024 * 1024),
             secrets: SecretManager::empty_for_test(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
@@ -1517,6 +1518,10 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
     assert!(metrics.contains("borondns_zones_active 1"));
     assert!(metrics.contains("borondns_queries_received_total 2"));
     assert!(metrics.contains("borondns_queries_truncated_total 1"));
+    assert!(metrics.contains("borondns_transfer_memory_limit_bytes 67108864"));
+    assert!(metrics.contains("borondns_transfer_memory_reserved_bytes 0"));
+    assert!(metrics.contains("borondns_transfer_memory_peak_reserved_bytes 0"));
+    assert!(metrics.contains("borondns_transfer_memory_rejections_total 0"));
     assert!(metrics.contains("borondns_queries_cname_chain_limit_total 1"));
     assert!(metrics.contains("borondns_queries_cname_loop_total 1"));
     assert!(metrics.contains("borondns_query_responses_total{rcode=\"NOERROR\"} 1"));
@@ -1779,6 +1784,7 @@ async fn metrics_endpoint_rate_limits_per_source_without_limiting_health() {
                 &ObservabilityConfig::default(),
             ),
             transfer_materials: Vec::new(),
+            transfer_ingest_budget: TransferIngestBudget::for_resident_limit(64 * 1024 * 1024),
             secrets: SecretManager::empty_for_test(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
@@ -1900,6 +1906,7 @@ async fn health_endpoint_reports_draining_and_unready_during_shutdown() {
                 &ObservabilityConfig::default(),
             ),
             transfer_materials: Vec::new(),
+            transfer_ingest_budget: TransferIngestBudget::for_resident_limit(64 * 1024 * 1024),
             secrets: SecretManager::empty_for_test(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
