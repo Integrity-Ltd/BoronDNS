@@ -62,7 +62,7 @@ require_text "cargo clippy --workspace --all-targets --all-features -- -D warnin
 require_text "cargo test --workspace --all-targets --all-features -- --test-threads=1"
 require_text "scripts/check-interface-compatibility.py"
 require_text "scripts/check-functional-requirement-references.py"
-require_text "Hosted continuous CI runs for every pull request and main-branch candidate"
+require_text "Automatic hosted verification runs only for v-prefixed tag pushes"
 require_text "tag-push/workflow-dispatch release workflow"
 require_text "artifact publication automation"
 require_text "Release acceptance cadence"

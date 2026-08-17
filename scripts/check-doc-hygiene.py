@@ -189,7 +189,7 @@ REQUIRED_TEXT_BY_PATH = {
         "may require additional retained evidence without narrowing the",
     ],
     "docs/test-plan.md": [
-        "Hosted continuous CI runs for every pull request and main-branch candidate",
+        "Automatic hosted verification runs only for v-prefixed tag pushes",
         "tag-push/workflow-dispatch release workflow",
         "artifact publication automation",
         "it is not the standing Continuous gate",

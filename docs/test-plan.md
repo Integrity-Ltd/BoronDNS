@@ -65,9 +65,10 @@ generic network writers, unrelated typed defaults, and provably read-only
 
 ## Continuous Execution
 
-`scripts/check.sh` enacts the current Continuous cadence. It is the local
-stand-in for hosted continuous CI until a main-branch candidate workflow is
-enabled. The command must remain build-blocking for:
+`scripts/check.sh` enacts the current Continuous cadence locally and on the
+project's SSH verification hosts. Hosted GitHub Actions are deliberately
+reserved for release-tag verification while the repository is private. The
+command must remain build-blocking for:
 
 - Test Plan shape validation: `scripts/check-test-plan.sh`;
 - verification ledger consistency: `python3 scripts/check-verification-ledger.py`;
@@ -87,11 +88,12 @@ evidence because it depends on `cargo-geiger` scanner behavior and can be
 slow or partial. It is not part of the default Engineering MVP evidence
 profile.
 
-Hosted continuous CI runs for every pull request and main-branch candidate
-through `.github/workflows/continuous-verification.yml`, which invokes
-`scripts/check.sh` using the pinned primary toolchain and the
-declared 1.95 MSRV. The same script remains the local continuous-verification
-entry point and the release workflow reruns it against the exact tag source.
+Automatic hosted verification runs only for v-prefixed tag pushes through
+`.github/workflows/release-installer.yml`. That workflow invokes
+`scripts/check.sh` using the pinned primary toolchain and the declared 1.95
+MSRV before packaging the exact tag source. Its explicit `workflow_dispatch`
+entry remains an operator-invoked release diagnostic, not a push or pull-request
+trigger.
 
 `scripts/test-operations-harnesses.sh` is the focused fault-injection gate for
 campaign and interop lifecycle helpers. Its Docker-image setup fixtures use a

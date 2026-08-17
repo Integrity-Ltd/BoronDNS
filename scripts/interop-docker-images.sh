@@ -221,7 +221,7 @@ ensure_alpine_interop_image() (
     image_setup_build_dir=""
     image_setup_absolute_deadline_nanoseconds=""
     # Invoked indirectly by the EXIT trap below.
-    # shellcheck disable=SC2329
+    # shellcheck disable=SC2317,SC2329 # EXIT-trap callback; ShellCheck cannot see the indirect call.
     cleanup_image_setup() {
         local status=$? cleanup_status=0
         trap - EXIT
