@@ -14,6 +14,8 @@ env:
   SYFT_LINUX_AMD64_SHA256: "20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716"
   ACTIONLINT_VERSION: "1.7.12"
   ACTIONLINT_LINUX_AMD64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  SHELLCHECK_VERSION: "0.11.0"
+  SHELLCHECK_LINUX_AMD64_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
   CARGO_DENY_VERSION: "0.19.8"
   CARGO_LLVM_COV_VERSION: "0.8.7"
   CARGO_BLOAT_VERSION: "0.12.1"
@@ -64,10 +66,17 @@ jobs:
 
       - name: Install shell tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          mkdir -p "$HOME/.local/bin"
+          shellcheck_archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          /usr/bin/curl -sSfL \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${shellcheck_archive}" \
+            -o "/tmp/${shellcheck_archive}"
+          printf '%s  %s\n' "$SHELLCHECK_LINUX_AMD64_SHA256" "/tmp/${shellcheck_archive}" | /usr/bin/sha256sum -c -
+          /usr/bin/tar -C "$HOME/.local/bin" --strip-components=1 -xJf \
+            "/tmp/${shellcheck_archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install continuous verification tools
         run: |
