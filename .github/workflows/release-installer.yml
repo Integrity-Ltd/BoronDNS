@@ -339,7 +339,7 @@ jobs:
           cosign_source="$(command -v cosign)"
           cosign_source="$(/usr/bin/realpath -e "$cosign_source")"
           case "$cosign_source" in
-            "$RUNNER_TEMP"/* | "$RUNNER_TOOL_CACHE"/*) ;;
+            "$RUNNER_TEMP"/* | "$RUNNER_TOOL_CACHE"/* | "$HOME/.cosign/cosign") ;;
             *) printf 'cosign installer published an unexpected path: %s\n' "$cosign_source" >&2; exit 1 ;;
           esac
           gh_source="$(/usr/bin/realpath -e /usr/bin/gh)"
