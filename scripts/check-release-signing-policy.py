@@ -180,7 +180,7 @@ VERIFY_STEP_SHA256 = {
     "Verify clean source checkout": "d21ec3586293bde9e484f1a3720becf77ea9cbe22df05a27b9c05c3109742af8",
     "Record verified source commit": "7420c3820884d1daeca7c6cf74634fed5d9abd987a898cb584ca0dad24052eae",
     "Install shell tools": "d10d026d5834eed621079167703d02698d3bc21a0ab958f8fe7f658d5435a652",
-    "Install continuous verification tools": "9d273e7aea41d4907e3cb52fde3787e6360a4fc18dba0303b0c3d7e31c958916",
+    "Install continuous verification tools": "b3db8c9cf96bd79fc0533304e9f7838af3d65b7b858536803117bb325801a8c8",
     "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
     "Verify Tibor-signed annotated release tag": "c5d61eef575ea46af13c3177e738a249e79893a0448a80a41da26a7fd41316c7",
     "Continuous verification gate": "15db06eb26cb9bffb6fb7b67a970f3c24337ca5e02c78b15c5270270ac571cff",
@@ -189,7 +189,7 @@ VERIFY_STEP_SHA256 = {
 PACKAGE_STEP_SHA256 = {
     "Checkout verified source": "7eca7f77d7449358104f62e3fa7d337dfeed951c5769e0e1718fbfda313ae250",
     "Verify packaging source commit": "cb5e0c0c712eb7f630af958cbf4aa76a5cc10254739e7a55adf1286c177aabf9",
-    "Install packaging tools": "97f5ea4d323ca6cd52f68bf08ce1988a75a39823eace930f3a71b8ba78bd5dd1",
+    "Install packaging tools": "a210c8088ed7b9e159304de155aeee896a58b9cb5142bfbcf13ca3aee3fad699",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
     "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
     "Build installer": "a19e5a8a4448a1af99905d319d426c80d80ed01d864764f6f350fbf71125565b",
@@ -1846,7 +1846,10 @@ def run_mutation_regressions(text: str) -> None:
         persistent_env, "persistent tool override", "must not persist mutable job environment"
     )
 
-    packaging_tool_line = '          "$HOME/.cargo/bin/rustup" target add x86_64-unknown-linux-musl\n'
+    packaging_tool_line = (
+        '          "$HOME/.cargo/bin/rustup" target add --toolchain '
+        '"$RUST_TOOLCHAIN_VERSION" x86_64-unknown-linux-musl\n'
+    )
     inline_tool_override = text.replace(
         packaging_tool_line,
         packaging_tool_line + "          export RUSTC_WRAPPER=/tmp/attacker\n",
@@ -2190,8 +2193,8 @@ def run_mutation_regressions(text: str) -> None:
     )
 
     path_cargo = text.replace(
-        '          "$verified_cargo" install --locked cargo-cyclonedx',
-        "          cargo install --locked cargo-cyclonedx",
+        '          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-cyclonedx',
+        '          RUSTC="$verified_rustc" cargo install --locked cargo-cyclonedx',
         1,
     )
     if path_cargo == text:

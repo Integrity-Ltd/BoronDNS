@@ -72,12 +72,14 @@ jobs:
       - name: Install continuous verification tools
         run: |
           verified_cargo="${{ steps.source-commit.outputs.cargo-path }}"
+          verified_rustc="${{ steps.source-commit.outputs.rustc-path }}"
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ steps.source-commit.outputs.cargo-sha256 }}"
-          "$HOME/.cargo/bin/rustup" component add llvm-tools-preview
-          "$verified_cargo" install --locked cargo-deny --version "$CARGO_DENY_VERSION"
-          "$verified_cargo" install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
-          "$verified_cargo" install --locked cargo-bloat --version "$CARGO_BLOAT_VERSION"
-          "$verified_cargo" install --locked cargo-machete --version "$CARGO_MACHETE_VERSION"
+          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ steps.source-commit.outputs.rustc-sha256 }}"
+          "$HOME/.cargo/bin/rustup" component add --toolchain "$RUST_TOOLCHAIN_VERSION" llvm-tools-preview
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-bloat --version "$CARGO_BLOAT_VERSION"
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-machete --version "$CARGO_MACHETE_VERSION"
           mkdir -p "$HOME/.local/bin"
           actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           /usr/bin/curl -sSfL \
@@ -151,11 +153,13 @@ jobs:
       - name: Install packaging tools
         run: |
           verified_cargo="${{ steps.packaging-tools.outputs.cargo-path }}"
+          verified_rustc="${{ steps.packaging-tools.outputs.rustc-path }}"
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
+          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          "$HOME/.cargo/bin/rustup" target add x86_64-unknown-linux-musl
-          "$verified_cargo" install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+          "$HOME/.cargo/bin/rustup" target add --toolchain "$RUST_TOOLCHAIN_VERSION" x86_64-unknown-linux-musl
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
           mkdir -p "$HOME/.local/bin"
           syft_version="${SYFT_VERSION#v}"
           syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
