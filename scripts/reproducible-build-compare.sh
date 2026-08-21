@@ -210,7 +210,7 @@ write_manifest_and_compare() {
             local features
             local command
             if [[ "$artifact" == "borondns" ]]; then
-                features="af-xdp"
+                features=""
                 command="$logical_cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli"
             else
                 features="xdp"

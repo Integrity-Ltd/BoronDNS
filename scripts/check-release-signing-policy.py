@@ -34,7 +34,7 @@ DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 RELEASE_TAG_VERIFIER = ROOT / "scripts" / "verify-release-tag-signature.sh"
 EXPECTED_RELEASE_HELPER_SHA256 = {
     RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
-    RELEASE_REPRODUCIBILITY_VERIFIER: "08aff22afc106a84646aa25b7af684de9e30580ab4c757a8abd641c26607993b",
+    RELEASE_REPRODUCIBILITY_VERIFIER: "bd8bf24dbe3e781c000e7d236347860dca0801ef046cc86ac6a60806301a8acd",
     DOCKER_ARCHIVE_VERIFIER: "e461cb8aadf7b3fea389e3210e3a49ad69f0cbb33a8216a69a9710b421ba3923",
     RELEASE_TAG_VERIFIER: "645eb1af3a62a647c1f4c197d487e24d7ed49e4c097268178cd6646f3e3bac1b",
 }
@@ -2765,15 +2765,15 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
             f"{artifact}\tx86_64-unknown-linux-musl\trelease\t{digest}\t{digest}\t"
             f"{size}\t{size}\ttrue\tartifacts/a/{artifact}\tartifacts/b/{artifact}"
         )
-        features = "af-xdp" if artifact == "borondns" else "xdp"
+        features = "" if artifact == "borondns" else "xdp"
         for builder in ("a", "b"):
             manifest_rows.append(
                 f"{artifact}\t{builder}\tx86_64-unknown-linux-musl\trelease\t"
                 f"{features}\t{commit}\trustc 1.96.1 (fixture 1970-01-01)\t"
                 f"/fixture/cargo build --locked --release --target-dir "
                 f"<builder-target-dir> --target x86_64-unknown-linux-musl -p "
-                f"{'borondns-cli' if artifact == 'borondns' else 'boron-gun'} "
-                f"--features {features}\t{digest}\t"
+                f"{'borondns-cli' if artifact == 'borondns' else 'boron-gun'}"
+                f"{' --features ' + features if features else ''}\t{digest}\t"
                 f"{size}\tartifacts/{builder}/{artifact}"
             )
     (root / "comparison.tsv").write_text("\n".join(comparison_rows) + "\n", encoding="utf-8")
@@ -2836,7 +2836,7 @@ def run_release_reproducibility_regressions() -> None:
         manifest = root / "artifact-manifest.tsv"
         original_manifest = manifest.read_text(encoding="utf-8")
         manifest.write_text(
-            original_manifest.replace("\taf-xdp\t", "\txdp\t", 1),
+            original_manifest.replace("\trelease\t\t", "\trelease\txdp\t", 1),
             encoding="utf-8",
         )
         mismatched = subprocess.run(command, check=False, capture_output=True, text=True)
