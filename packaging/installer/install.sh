@@ -23,6 +23,7 @@ CONFIG_FILE="${BORONDNS_CONFIG_FILE:-$CONFIG_DIR/config.toml}"
 DOC_DIR="/usr/share/doc/borondns"
 DOC_FILE="$DOC_DIR/README.install.md"
 STATE_DIR="${BORONDNS_STATE_DIR:-/var/lib/borondns}"
+ZONE_CACHE_DIR="${BORONDNS_ZONE_CACHE_DIR:-$STATE_DIR/zones}"
 SYSTEMD_DIR="${BORONDNS_SYSTEMD_DIR:-/etc/systemd/system}"
 OPENRC_DIR="${BORONDNS_OPENRC_DIR:-/etc/init.d}"
 INIT_SYSTEM="${BORONDNS_INIT_SYSTEM:-auto}"
@@ -66,6 +67,7 @@ SERVICE_DIR=""
 SERVICE_DIR_IDENTITY=""
 DOC_DIR_IDENTITY=""
 STATE_DIR_IDENTITY=""
+ZONE_CACHE_DIR_IDENTITY=""
 RECOVERY_DIR_IDENTITY=""
 CONFIG_FILE_IDENTITY=""
 RUNTIME_GROUP_GID=""
@@ -495,6 +497,7 @@ validate_installer_inputs() {
     validate_service_path "--config" "$CONFIG_FILE"
     validate_service_path "installer lock file" "$INSTALL_LOCK_FILE"
     validate_service_path "state directory" "$STATE_DIR"
+    validate_service_path "zone cache directory" "$ZONE_CACHE_DIR"
     validate_service_path "installer recovery directory" "$RECOVERY_DIR"
     validate_service_path "systemd unit directory" "$SYSTEMD_DIR"
     validate_service_path "OpenRC service directory" "$OPENRC_DIR"
@@ -503,6 +506,7 @@ validate_installer_inputs() {
     validate_existing_directory_chain "$CONFIG_DIR" "--config directory" 0
     validate_existing_directory_chain "$(dirname "$INSTALL_LOCK_FILE")" "installer lock directory" 0
     validate_existing_directory_chain "$STATE_DIR" "state directory" 0
+    validate_existing_directory_chain "$ZONE_CACHE_DIR" "zone cache directory" 0
     validate_existing_directory_chain "$RECOVERY_DIR" "installer recovery directory" 0
     validate_existing_directory_chain "$SYSTEMD_DIR" "systemd unit directory" 0
     validate_existing_directory_chain "$OPENRC_DIR" "OpenRC service directory" 0
@@ -1721,6 +1725,14 @@ create_runtime_user() {
     verify_runtime_identity
 }
 
+prepare_zone_cache_directory() {
+    ensure_trusted_directory "$ZONE_CACHE_DIR" "zone cache directory" 0770 "$RUN_GROUP"
+    ZONE_CACHE_DIR_IDENTITY="$(trusted_directory_identity "$ZONE_CACHE_DIR" "zone cache directory")"
+    chown root:"$RUN_GROUP" "$ZONE_CACHE_DIR"
+    chmod 0770 "$ZONE_CACHE_DIR"
+    verify_trusted_directory_identity "$ZONE_CACHE_DIR" "zone cache directory" "$ZONE_CACHE_DIR_IDENTITY"
+}
+
 stage_binaries() {
     local source_bin="$PAYLOAD_ROOT/bin/borondns"
     local source_tool="$PAYLOAD_ROOT/bin/boron-gun"
@@ -2089,7 +2101,8 @@ write_config_candidate() {
     {
         printf '[server]\n'
         printf 'log_level = %s\n' "$(toml_quote info)"
-        printf 'log_format = %s\n\n' "$(toml_quote json)"
+        printf 'log_format = %s\n' "$(toml_quote json)"
+        printf 'zone_cache_directory = %s\n\n' "$(toml_quote "$ZONE_CACHE_DIR")"
         printf '[process]\n'
         printf 'run_as_user = %s\n' "$(toml_quote "$RUN_USER")"
         printf 'disable_core_dumps = true\n'
@@ -2209,6 +2222,7 @@ stage_systemd_unit() {
         -e "s|@CONFIG@|$CONFIG_FILE|g" \
         -e "s|@USER@|$RUN_USER|g" \
         -e "s|@GROUP@|$RUN_GROUP|g" \
+        -e "s|@STATE@|$STATE_DIR|g" \
         "$template" >"$STAGED_SERVICE"
     verify_installer_payload_file "$template" "systemd service template" ||
         die "systemd service template changed while it was staged: $template"
@@ -3232,6 +3246,7 @@ do_install_or_update() {
     prepare_state_and_recovery_directories
     info "Detected init system: $init"
     create_runtime_user
+    prepare_zone_cache_directory
     prepare_service_directory "$init"
     prepare_documentation
     stage_binaries
@@ -3270,6 +3285,7 @@ do_configure() {
     acquire_install_lock
     prepare_state_and_recovery_directories
     create_runtime_user
+    prepare_zone_cache_directory
     stage_binaries
     validate_staged_binaries
     maybe_set_bind_capability "$STAGED_BORONDNS"
