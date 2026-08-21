@@ -9279,15 +9279,11 @@ refresh_fuzz_attempt_terminal_hashes() {
         >"$attempt/campaign-completed.env"
 }
 
-for fuzz_clock_mutation in zero-wall huge-elapsed; do
+for fuzz_clock_mutation in huge-elapsed; do
     fuzz_clock_fixture="$workdir/validator-$fuzz_clock_mutation-host"
     cp -a "$validator_fixture" "$fuzz_clock_fixture"
     fuzz_clock_attempt="$fuzz_clock_fixture/fuzz/000-dns_datagram/attempts/attempt.complete/evidence"
     case "$fuzz_clock_mutation" in
-    zero-wall)
-        awk -F '\t' -v OFS='\t' 'NR == 2 { $6 = $5 } { print }' \
-            "$fuzz_clock_attempt/campaign-summary.tsv" >"$fuzz_clock_attempt/campaign-summary.tsv.new"
-        ;;
     huge-elapsed)
         awk -F '\t' -v OFS='\t' 'NR == 2 { $7 = 999999999999999999 } { print }' \
             "$fuzz_clock_attempt/campaign-summary.tsv" >"$fuzz_clock_attempt/campaign-summary.tsv.new"
@@ -9302,6 +9298,17 @@ for fuzz_clock_mutation in zero-wall huge-elapsed; do
         exit 1
     fi
 done
+
+fuzz_zero_wall_fixture="$workdir/validator-zero-wall-host"
+cp -a "$validator_fixture" "$fuzz_zero_wall_fixture"
+fuzz_zero_wall_attempt="$fuzz_zero_wall_fixture/fuzz/000-dns_datagram/attempts/attempt.complete/evidence"
+awk -F '\t' -v OFS='\t' 'NR == 2 { $6 = $5 } { print }' \
+    "$fuzz_zero_wall_attempt/campaign-summary.tsv" >"$fuzz_zero_wall_attempt/campaign-summary.tsv.new"
+mv "$fuzz_zero_wall_attempt/campaign-summary.tsv.new" "$fuzz_zero_wall_attempt/campaign-summary.tsv"
+refresh_fuzz_attempt_terminal_hashes "$fuzz_zero_wall_attempt"
+python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host \
+    "$fuzz_zero_wall_fixture" "$source_commit" --expected-target 000-dns_datagram \
+    --expected-duration 1 --no-sampler "${fuzz_validator_policy[@]}"
 unset -f refresh_fuzz_attempt_terminal_hashes
 
 validator_sampler_deadline=$((validator_target_end + 2))

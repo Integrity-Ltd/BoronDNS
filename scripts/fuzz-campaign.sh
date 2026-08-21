@@ -858,7 +858,10 @@ run_target() {
     local minimum_elapsed_nanoseconds=$((duration * 1000000000 - fuzz_elapsed_tolerance_nanoseconds))
     local wall_elapsed_seconds=$((ended_epoch - started_epoch))
     local minimum_wall_seconds=$((duration - 1))
-    ((minimum_wall_seconds >= 1)) || minimum_wall_seconds=1
+    # Epoch seconds are intentionally coarse.  A sub-second failed run can
+    # begin and end within the same epoch second; the monotonic bound below is
+    # the authoritative duration check for the one-second campaign case.
+    ((minimum_wall_seconds >= 0)) || minimum_wall_seconds=0
     if ((wall_elapsed_seconds < minimum_wall_seconds)); then
         append_summary_row "$target" "failed" 70 "$started_epoch" "$ended_epoch" "$elapsed_nanoseconds" "$target_log" "$artifact_dir" "$command_file"
         printf 'target wall-clock window was shorter than its authenticated duration: %s wall_seconds=%s required_seconds=%s\n' \

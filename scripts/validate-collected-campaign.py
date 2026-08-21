@@ -570,7 +570,10 @@ def verify_fuzz_attempt(
     minimum_elapsed = expected_duration * 1_000_000_000 - FUZZ_ELAPSED_TOLERANCE_NANOSECONDS
     elapsed_ns_value = int(elapsed_ns)
     wall_seconds = int(ended) - int(started)
-    minimum_wall_seconds = max(1, expected_duration - 1)
+    # Whole-second epoch timestamps can legitimately be equal for a failed
+    # one-second attempt. The authenticated monotonic duration below remains
+    # the authoritative lower bound.
+    minimum_wall_seconds = max(0, expected_duration - 1)
     if wall_seconds < minimum_wall_seconds:
         fail(f"remote target wall-clock window was shorter than its authenticated duration: {evidence}")
     if elapsed_ns_value < minimum_elapsed:
