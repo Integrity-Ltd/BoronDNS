@@ -111,10 +111,10 @@ campaign_env_load() {
                 return 1
             }
             read -r -a list_items <<<"$value"
-            ((${#list_items[@]} > 0)) && [[ "${list_items[*]}" == "$value" ]] || {
+            if ((${#list_items[@]} == 0)) || [[ "${list_items[*]}" != "$value" ]]; then
                 printf 'invalid non-canonical campaign list %s in %s\n' "$expected_key" "$path" >&2
                 return 1
-            }
+            fi
             for item in "${list_items[@]}"; do
                 [[ "$item" =~ ^[A-Za-z0-9_.@:+-]+$ ]] || {
                     printf 'invalid campaign list item for %s in %s: %s\n' "$expected_key" "$path" "$item" >&2
@@ -6213,12 +6213,12 @@ campaign_collection_read_live_marker() {
     local marker_fd="${CAMPAIGN_COLLECTION_MARKER_FDS[$marker]:-}"
     local expected_marker="${CAMPAIGN_COLLECTION_MARKER_IDENTITIES[$marker]:-}"
     local marker_content="${CAMPAIGN_COLLECTION_MARKER_CONTENTS[$marker]:-}"
-    [[ "$marker_fd" =~ ^[0-9]+$ && -n "$expected_marker" && -n "$marker_content" ]] &&
-        campaign_collection_assert_marker_broker "$marker" "$label" &&
-        [[ "$(stat -Lc '%d:%i:%u' "$marker")" == "$expected_marker" ]] || {
+    if [[ ! "$marker_fd" =~ ^[0-9]+$ || -z "$expected_marker" || -z "$marker_content" ]] ||
+        ! campaign_collection_assert_marker_broker "$marker" "$label" ||
+        [[ "$(stat -Lc '%d:%i:%u' "$marker")" != "$expected_marker" ]]; then
         printf '%s marker lacks live descriptor authority: %s\n' "$label" "$marker" >&2
         return 1
-    }
+    fi
     local resolved_marker_value="$marker_content"
     resolved_marker_value="${resolved_marker_value%$'\n'}"
     printf -v "$output_variable" '%s' "$resolved_marker_value"
