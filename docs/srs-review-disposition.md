@@ -100,13 +100,12 @@ missing configuration traceability entries (`BDS-IF-CONF-019` and
 memory-growth parameter, and replaced unsupported vulnerability-response and
 maintenance promises with the lightweight policy in `SECURITY.md`.
 
-The active release plan is: keep the source version at 0.9.0 during validation;
-run several independent 24-hour fuzz rounds; if the selected candidate is
-acceptable, publish exactly one additional prerelease, 0.9.1; then publish
-1.0.0 as a public beta if no release blocker remains. Optional longer soaks,
-external operator review, and independent security review remain useful
-supporting evidence but are not mandatory gates. The source version is not
-bumped by this documentation review.
+The active release plan has advanced the source version to 0.9.1 after several
+independent fuzz and focused validation rounds. Publish 0.9.1 as the final
+public validation prerelease once its selected candidate gates are clean; then
+publish 1.0.0 as a public beta if no release blocker remains. Optional longer
+soaks, external operator review, and independent security review remain useful
+supporting evidence but are not mandatory gates.
 
 The main SRS hygiene regressions from this review are also checked by
 `scripts/check-srs-hygiene.py`: old namespace artifacts, suffixed requirement

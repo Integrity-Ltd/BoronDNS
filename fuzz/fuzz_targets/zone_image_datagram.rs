@@ -133,7 +133,7 @@ fn assert_zone_image_matches_offline_oracle(
     let snapshot = fixture()
         .snapshots
         .iter()
-        .find(|snapshot| question.qname.is_equal_or_subdomain_of(&snapshot.origin))
+        .find(|snapshot| question.qname.is_equal_or_subdomain_of(snapshot.origin()))
         .expect("shaped query has a fixture snapshot");
     let oracle_lookup = snapshot.offline_oracle().lookup_with_options(
         &question.qname,
@@ -171,7 +171,9 @@ fn fixture() -> &'static Fixture {
         ];
         let store = ZoneStore::new();
         for snapshot in &snapshots {
-            store.insert_snapshot(snapshot.clone());
+            store
+                .try_insert_snapshot(snapshot.clone())
+                .expect("static fuzz zone compiles");
         }
         Fixture { store, snapshots }
     })

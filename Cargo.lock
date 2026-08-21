@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "boron-gen"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "borondns-core",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "boron-gun"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "aya",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "borondns-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "borondns-core",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "borondns-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arc-swap",
  "base64",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "borondns-server"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "axum",
  "aya",

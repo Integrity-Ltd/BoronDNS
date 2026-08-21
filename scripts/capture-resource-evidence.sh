@@ -71,6 +71,7 @@ cat >"$evidence_dir/borondns.toml" <<EOF
 [server]
 log_level = "info"
 log_format = "logfmt"
+zone_cache_directory = "$evidence_dir/zone-cache"
 
 [interfaces]
 dns = ["127.0.0.1:$dns_port"]

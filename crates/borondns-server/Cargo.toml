@@ -24,7 +24,7 @@ tokio-rustls.workspace = true
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
-borondns-core = { path = "../borondns-core", version = "0.9.0" }
+borondns-core = { path = "../borondns-core", version = "0.9.1" }
 xdp = { version = "0.7.3", optional = true }
 x509-parser.workspace = true
 
@@ -37,7 +37,7 @@ af-xdp = ["dep:aya", "dep:xdp"]
 fuzzing = []
 
 [dev-dependencies]
-borondns-core = { path = "../borondns-core", version = "0.9.0", features = ["test-support"] }
+borondns-core = { path = "../borondns-core", version = "0.9.1", features = ["test-support"] }
 rcgen.workspace = true
 
 [lints.rust]

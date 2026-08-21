@@ -38,11 +38,15 @@ fn run_worker(worker: usize, receiver: Receiver<WorkerJob>) {
             match opcode % 8 {
                 0 => job.store.insert_loading(origin.clone()),
                 1 => job.store.insert_loading_hidden(origin.clone()),
-                2 => job.store.insert_snapshot(ZoneSnapshot::active(
-                    origin.clone(),
-                    Some(serial),
-                    Vec::new(),
-                )),
+                2 => {
+                    job.store
+                        .try_insert_snapshot(ZoneSnapshot::active(
+                            origin.clone(),
+                            Some(serial),
+                            Vec::new(),
+                        ))
+                        .expect("empty fuzz zone compiles");
+                }
                 3 => {
                     job.store.hide_zone(origin);
                 }

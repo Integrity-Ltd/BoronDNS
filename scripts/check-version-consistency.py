@@ -60,6 +60,7 @@ def main() -> int:
         check_equal(errors, "release tag", args.tag, expected)
 
     for manifest_path, dependencies in [
+        ("crates/boron-gen/Cargo.toml", ["borondns-core"]),
         ("crates/borondns-cli/Cargo.toml", ["borondns-core", "borondns-server"]),
         ("crates/borondns-server/Cargo.toml", ["borondns-core"]),
     ]:
@@ -84,7 +85,13 @@ def main() -> int:
             expected,
         )
 
-    for package in ["boron-gun", "borondns-cli", "borondns-core", "borondns-server"]:
+    for package in [
+        "boron-gen",
+        "boron-gun",
+        "borondns-cli",
+        "borondns-core",
+        "borondns-server",
+    ]:
         check_equal(
             errors,
             f"Cargo.lock package {package}",
@@ -94,6 +101,7 @@ def main() -> int:
 
     for lock_path, package in [
         ("fuzz/Cargo.lock", "borondns-core"),
+        ("fuzz/Cargo.lock", "borondns-server"),
         ("crates/boron-gun-ebpf/Cargo.lock", "boron-gun-ebpf"),
         ("crates/borondns-server-ebpf/Cargo.lock", "borondns-server-ebpf"),
     ]:

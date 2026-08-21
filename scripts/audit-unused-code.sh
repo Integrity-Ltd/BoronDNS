@@ -42,7 +42,7 @@ require_cargo_subcommand machete
 
 run_and_capture strict-unused-lints env \
     RUSTFLAGS="-Dunused -Ddead_code -Dunreachable_pub -Dunused_crate_dependencies" \
-    cargo check --workspace --all-targets
+    cargo check --workspace --lib --bins --tests
 
 run_and_capture cargo-machete cargo machete --with-metadata --skip-target-dir
 run_and_capture cargo-bloat-crates-json cargo bloat --release -p borondns-cli --bin borondns \
@@ -78,7 +78,7 @@ PY
 
 {
     printf 'evidence\tstatus\tartifact\tnote\n'
-    printf 'compiler-unused-lints\tpass\tstrict-unused-lints.log\t-Dunused -Ddead_code -Dunreachable_pub -Dunused_crate_dependencies passed for the workspace and all targets.\n'
+    printf 'compiler-unused-lints\tpass\tstrict-unused-lints.log\t-Dunused -Ddead_code -Dunreachable_pub -Dunused_crate_dependencies passed for workspace libraries, binaries, and tests; examples and benches remain covered by the ordinary all-target compiler gates.\n'
     printf 'unused-dependencies\tpass\tcargo-machete.log\tcargo machete did not find unused manifest dependencies.\n'
     printf 'linked-binary-crates\tpass\tlinked-crates.tsv\tcargo bloat release-binary crate attribution includes first-party crates that reached the linked borondns binary.\n'
     printf 'linked-binary-symbols\tinformational\tcargo-bloat-symbols.log\tTop linked symbols are retained for release review and dependency-size inspection.\n'

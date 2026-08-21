@@ -23,7 +23,7 @@ fake_bin="$workdir/bin"
 archive_root="$workdir/archive"
 archive="$workdir/image.tar.xz"
 missing_blob_archive="$workdir/image-missing-blob.tar.xz"
-image_ref="borondns-smoke-fixture:0.9.0"
+image_ref="borondns-smoke-fixture:0.9.1"
 old_id="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 mkdir -m 0700 "$fake_bin" "$archive_root"
 
@@ -31,7 +31,7 @@ mkdir -m 0700 "$fake_bin" "$archive_root"
 printf '%s\n' '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'case "${1:-}" in' \
-    'metadata) printf "%s\n" '\''{"packages":[{"version":"0.9.0"}]}'\'' ;;' \
+    'metadata) printf "%s\n" '\''{"packages":[{"version":"0.9.1"}]}'\'' ;;' \
     '*) exit 97 ;;' \
     'esac' >"$fake_bin/cargo"
 

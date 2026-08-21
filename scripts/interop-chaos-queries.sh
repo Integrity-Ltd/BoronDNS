@@ -252,6 +252,7 @@ write_config() {
 listen_udp = ["127.0.0.1:$dns_port"]
 listen_tcp = ["127.0.0.1:$dns_port"]
 health = "127.0.0.1:$health_port"
+zone_cache_directory = "$workdir/zone-cache"
 log_level = "debug"
 log_format = "json"
 nsid = "nsid-bud-1"

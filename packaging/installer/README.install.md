@@ -6,7 +6,7 @@ binaries plus a systemd or OpenRC service for `borondns`.
 ## Quick install
 
 ```sh
-tag=v0.9.0
+tag=v0.9.1
 target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"

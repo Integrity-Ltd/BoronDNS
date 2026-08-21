@@ -29,6 +29,7 @@ MODULE_MAP = [
     ("crates/borondns-server/src/rate_limit.rs", "RRL, notify log limiting, and packet response categorisation helpers"),
     ("crates/borondns-server/src/transfer.rs", "SOA polling, AXFR/IXFR transfer sessions, and XoT transport"),
     ("crates/borondns-server/src/transfer_plan.rs", "transfer target planning and primary rotation"),
+    ("crates/borondns-server/src/zone_persistence.rs", "bounded last-good-zone persistence and restoration"),
     ("crates/borondns-server/src/secret_store.rs", "reloadable filesystem-backed TSIG/XoT secret store"),
     ("crates/borondns-server/src/dns_cookie.rs", "DNS Cookie secret and runtime settings helpers"),
     ("crates/borondns-server/src/config_validation.rs", "runtime configuration validation and warnings"),

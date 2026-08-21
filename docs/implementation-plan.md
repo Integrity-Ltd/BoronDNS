@@ -28,16 +28,16 @@ the gap register, release notes, or verification ledger.
 
 ## Current 0.9.1 to 1.0 Sequence
 
-The current source version remains 0.9.0 while validation is in progress. The
-planned release sequence is deliberately short:
+The current source version is 0.9.1, the final public validation candidate
+before version 1. The planned release sequence is deliberately short:
 
 1. Run several independent 24-hour fuzz rounds on the selected candidate,
    including resource sampling and targeted follow-up for any changed or weak
    input family.
 2. Resolve every release-blocking finding and rerun the affected focused and
    continuous checks.
-3. If the candidate is clean, publish exactly one additional prerelease,
-   `0.9.1`, as the final public validation build before version 1.
+3. Publish `0.9.1` as the final public validation build before version 1 once
+   the selected candidate gates are clean.
 4. Confirm the accepted 0.9.1 state with the selected fuzz, interoperability,
    packaging, signing, documentation, and release checks.
 5. Publish `1.0.0` as a public beta if no blocker remains and every accepted

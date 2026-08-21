@@ -9972,7 +9972,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'fixture_root="${fixture_manifest%/Cargo.toml}"' \
     'if [[ "$fixture_manifest" == "$fixture_main_manifest" ]]; then printf "%s\n" "$*" >>"$fixture_main_cargo_log"; fi' \
     'case "${1:-}" in' \
-    'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.0\"}]}" ;;' \
+    'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.1\"}]}" ;;' \
     'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == boron-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
     'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"boron-gun\"}}}" >"$fixture_root/crates/boron-gun/boron-gun_bin.cdx.json" ;;' \
     '*) exit 95 ;;' \
@@ -10132,8 +10132,8 @@ bash -c '
     source "$1"
     fd="" canonical=""
     BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
-        borondns:0.9.0 fd canonical
-    [[ "$canonical" == docker.io/library/borondns:0.9.0 ]]
+        borondns:0.9.1 fd canonical
+    [[ "$canonical" == docker.io/library/borondns:0.9.1 ]]
     : >"$3"
     while [[ ! -e "$4" ]]; do sleep 0.01; done
 ' package-docker-lock-first "$repo_root/scripts/package-common.sh" "$package_docker_lock_root" \
@@ -10149,7 +10149,7 @@ bash -c '
     source "$1"
     fd="" canonical=""
     BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
-        docker.io/library/borondns:0.9.0 fd canonical
+        docker.io/library/borondns:0.9.1 fd canonical
     : >"$3"
 ' package-docker-lock-second "$repo_root/scripts/package-common.sh" "$package_docker_lock_root" \
     "$package_docker_lock_second" &
@@ -11073,11 +11073,11 @@ package_build_env_log="$workdir/package-build-env.log"
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
         "$package_dirty_repo/scripts/package-installer.sh"
 )
-package_clean_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl/manifest.txt"
+package_clean_manifest="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl/manifest.txt"
 grep -Fqx 'source_clean=1' "$package_clean_manifest"
 grep -Fqx 'release_eligible=1' "$package_clean_manifest"
 grep -Fqx 'dirty_source_override=0' "$package_clean_manifest"
-package_clean_prefix="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
+package_clean_prefix="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
 [[ "$(stat -c '%a' "$package_clean_prefix")" == 755 ]]
 [[ "$(stat -c '%a' "$package_clean_manifest")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz")" == 644 ]]
@@ -11233,7 +11233,7 @@ PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_f
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh"
-package_clean_sbom_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-sbom-manifest.tsv"
+package_clean_sbom_manifest="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl-sbom-manifest.tsv"
 grep -Fq '# source_clean=1' "$package_clean_sbom_manifest"
 grep -Fq '# release_eligible=1' "$package_clean_sbom_manifest"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
@@ -11243,7 +11243,7 @@ PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_f
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh"
-package_clean_image_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+package_clean_image_manifest="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 grep -Fqx "image_id=$package_fake_image_id" \
     "$package_clean_image_manifest"
 grep -Fqx 'source_clean=1' "$package_clean_image_manifest"
@@ -11293,12 +11293,12 @@ PATH="$package_dynamic_tool_bin:$package_fake_bin:$PATH" \
     BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh"
-package_dynamic_prefix=borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dynamic
+package_dynamic_prefix=borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dynamic
 package_dynamic_manifest="$package_dynamic_dist/$package_dynamic_prefix/manifest.txt"
 grep -Fqx 'source_clean=1' "$package_dynamic_manifest"
 grep -Fqx 'release_eligible=0' "$package_dynamic_manifest"
 grep -Fqx 'dynamic_link_override=1' "$package_dynamic_manifest"
-[[ ! -e "$package_dynamic_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz" ]]
+[[ ! -e "$package_dynamic_dist/borondns-0.9.1-x86_64-unknown-linux-musl.tar.xz" ]]
 PATH="$package_dynamic_tool_bin:$package_fake_bin:$PATH" \
     CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_dynamic_dist" \
@@ -11309,7 +11309,7 @@ PATH="$package_dynamic_tool_bin:$package_fake_bin:$PATH" \
 package_dynamic_image_manifest="$package_dynamic_dist/$package_dynamic_prefix-docker-image.manifest.txt"
 grep -Fqx 'release_eligible=0' "$package_dynamic_image_manifest"
 grep -Fqx 'dynamic_link_override=1' "$package_dynamic_image_manifest"
-grep -Fq 'canonical_image_ref=docker.io/library/borondns:0.9.0-nonrelease-dynamic' \
+grep -Fq 'canonical_image_ref=docker.io/library/borondns:0.9.1-nonrelease-dynamic' \
     "$package_dynamic_image_manifest"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_DIST_DIR="$package_dynamic_dist" BORONDNS_SBOM_DOCKER=0 \
@@ -11328,7 +11328,7 @@ printf 'dirty source\n' >"$package_dirty_repo/diagnostic-dirty-source"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_diagnostic_dist" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input" \
-    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.0 BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.1 BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
     PACKAGE_DOCKER_TAG_STATE="$package_diagnostic_state" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh" >/dev/null
@@ -11338,7 +11338,7 @@ rm "$package_dirty_repo/diagnostic-dirty-source"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_diagnostic_dist-clean" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input-clean" \
-    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.0-nonrelease-dirty \
+    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.1-nonrelease-dirty \
     PACKAGE_DOCKER_IMAGE_ID="$package_fake_second_image_id" PACKAGE_DOCKER_CONFIG_VARIANT=second \
     PACKAGE_DOCKER_TAG_STATE="$package_diagnostic_state" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11417,7 +11417,7 @@ unset -f package_publication_hook
 grep -Fqx "$package_fake_image_id" \
     "$package_postcommit_state"
 grep -Fqx "image_id=$package_fake_image_id" \
-    "$package_postcommit_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+    "$package_postcommit_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 [[ -z "$(find "$package_postcommit_dist" "$package_postcommit_input" \
     -name '*.previous.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
@@ -11438,7 +11438,7 @@ printf '%s\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_PACKAGE_TARGET=target-a BORONDNS_DIST_DIR="$package_tag_race_dist_a" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_a" \
-    BORONDNS_DOCKER_IMAGE_REF=shared/borondns:0.9.0 \
+    BORONDNS_DOCKER_IMAGE_REF=shared/borondns:0.9.1 \
     BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
     PACKAGE_DOCKER_TAG_STATE="$package_tag_race_state" \
     PACKAGE_DOCKER_TAG_READY="$package_tag_race_ready" PACKAGE_DOCKER_TAG_RELEASE="$package_tag_race_release" \
@@ -11454,7 +11454,7 @@ done
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_PACKAGE_TARGET=target-b BORONDNS_DIST_DIR="$package_tag_race_dist_b" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_b" \
-    BORONDNS_DOCKER_IMAGE_REF=docker.io/shared/borondns:0.9.0 \
+    BORONDNS_DOCKER_IMAGE_REF=docker.io/shared/borondns:0.9.1 \
     BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
     PACKAGE_DOCKER_IMAGE_ID="$package_tag_race_image_b" PACKAGE_DOCKER_CONFIG_VARIANT=second \
     PACKAGE_DOCKER_TAG_STATE="$package_tag_race_state" \
@@ -11474,13 +11474,13 @@ set -e
 wait "$package_tag_race_pid_b"
 grep -Fqx "$package_tag_race_image_b" "$package_tag_race_state"
 grep -Fqx "image_id=$package_tag_race_image_b" \
-    "$package_tag_race_dist_b/borondns-0.9.0-target-b-docker-image.manifest.txt"
+    "$package_tag_race_dist_b/borondns-0.9.1-target-b-docker-image.manifest.txt"
 
 package_mutated_installer_dist="$workdir/package-mutated-installer-dist"
 package_mutated_installer_target="$workdir/package-mutated-installer-target"
-mkdir -p "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
-printf 'prior installer tree\n' >"$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl/prior-sentinel"
-printf 'prior installer archive\n' >"$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
+mkdir -p "$package_mutated_installer_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
+printf 'prior installer tree\n' >"$package_mutated_installer_dist/borondns-0.9.1-x86_64-unknown-linux-musl/prior-sentinel"
+printf 'prior installer archive\n' >"$package_mutated_installer_dist/borondns-0.9.1-x86_64-unknown-linux-musl.tar.xz"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_mutated_installer_target" BORONDNS_DIST_DIR="$package_mutated_installer_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
@@ -11491,18 +11491,18 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
 fi
 grep -Fq 'installer packaging source changed at after build' "$workdir/package-mutated-installer.log"
 grep -Fqx 'prior installer tree' \
-    "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl/prior-sentinel"
+    "$package_mutated_installer_dist/borondns-0.9.1-x86_64-unknown-linux-musl/prior-sentinel"
 grep -Fqx 'prior installer archive' \
-    "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
+    "$package_mutated_installer_dist/borondns-0.9.1-x86_64-unknown-linux-musl.tar.xz"
 rm "$package_dirty_repo/transient-build-mutation"
 
 package_mutated_docker_dist="$workdir/package-mutated-docker-dist"
 package_mutated_docker_input="$workdir/package-mutated-docker-input"
-mkdir -p "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
+mkdir -p "$package_mutated_docker_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context"
 printf 'prior Docker context\n' \
-    >"$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
+    >"$package_mutated_docker_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
 printf 'prior Docker archive\n' \
-    >"$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    >"$package_mutated_docker_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.tar.xz"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_mutated_docker_dist" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_mutated_docker_input" \
@@ -11514,9 +11514,9 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
 fi
 grep -Fq 'Docker packaging source changed at terminal publication' "$workdir/package-mutated-docker.log"
 grep -Fqx 'prior Docker context' \
-    "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
+    "$package_mutated_docker_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
 grep -Fqx 'prior Docker archive' \
-    "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    "$package_mutated_docker_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.tar.xz"
 [[ -z "$(find "$package_mutated_docker_input" \
     \( -path '*/.borondns-package-locks' -o -name '*.borondns-remove.*' \) -prune -o \
     -type f -print -quit)" ]]
@@ -11524,9 +11524,9 @@ rm "$package_dirty_repo/transient-docker-mutation"
 package_recursive_sentinel="$workdir/package-recursive-sentinel"
 mkdir "$package_recursive_sentinel"
 printf 'preserve recursive sentinel\n' >"$package_recursive_sentinel/sentinel"
-rm -rf "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
+rm -rf "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
 ln -s "$package_recursive_sentinel" \
-    "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
+    "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
@@ -11536,10 +11536,10 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     exit 1
 fi
 grep -Fqx 'preserve recursive sentinel' "$package_recursive_sentinel/sentinel"
-rm "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
-rm -rf "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
+rm "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
+rm -rf "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context"
 ln -s "$package_recursive_sentinel" \
-    "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
+    "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
     BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
@@ -11550,7 +11550,7 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     exit 1
 fi
 grep -Fqx 'preserve recursive sentinel' "$package_recursive_sentinel/sentinel"
-rm "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
+rm "$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-context"
 printf 'untracked packaging input\n' >"$package_dirty_repo/untracked-fixture"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11583,7 +11583,7 @@ grep -Fq 'dirty-source SBOM override is forbidden in GitHub Actions release path
 
 package_transient_dist="$workdir/package-transient-dist"
 rm "$package_dirty_repo/untracked-fixture"
-package_sbom_prefix=borondns-0.9.0-x86_64-unknown-linux-musl
+package_sbom_prefix=borondns-0.9.1-x86_64-unknown-linux-musl
 mkdir -p "$package_transient_dist"
 cp "$package_clean_dist/$package_sbom_prefix-sbom-manifest.tsv" \
     "$package_clean_dist/$package_sbom_prefix-borondns.cdx.json" \
@@ -11682,11 +11682,11 @@ for package_cross_target_sbom_pid in "${package_cross_target_sbom_pids[@]}"; do
 done
 [[ ! -e "$package_cyclonedx_overlap" && ! -e "$package_cyclonedx_active" ]]
 for package_cross_target in target-a target-b; do
-    [[ -f "$package_cross_target_sbom_dist/borondns-0.9.0-$package_cross_target-sbom-manifest.tsv" ]]
+    [[ -f "$package_cross_target_sbom_dist/borondns-0.9.1-$package_cross_target-sbom-manifest.tsv" ]]
     (
         cd "$package_cross_target_sbom_dist"
-        sha256sum -c "borondns-0.9.0-$package_cross_target-borondns.cdx.json.sha256"
-        sha256sum -c "borondns-0.9.0-$package_cross_target-boron-gun.cdx.json.sha256"
+        sha256sum -c "borondns-0.9.1-$package_cross_target-borondns.cdx.json.sha256"
+        sha256sum -c "borondns-0.9.1-$package_cross_target-boron-gun.cdx.json.sha256"
     )
 done
 
@@ -11715,7 +11715,7 @@ for package_cross_name_sbom_pid in "${package_cross_name_sbom_pids[@]}"; do
 done
 [[ ! -e "$package_cross_name_cyclonedx_overlap" && ! -e "$package_cross_name_cyclonedx_active" ]]
 for package_cross_name in alpha beta; do
-    package_cross_name_prefix="$package_cross_name-0.9.0-x86_64-unknown-linux-musl"
+    package_cross_name_prefix="$package_cross_name-0.9.1-x86_64-unknown-linux-musl"
     package_cross_name_dist="$workdir/package-cross-name-$package_cross_name"
     [[ -f "$package_cross_name_dist/$package_cross_name_prefix-sbom-manifest.tsv" ]]
     (
@@ -11804,9 +11804,9 @@ for package_script in package-installer.sh package-docker-image.sh package-sbom.
 done
 printf 'untracked packaging input\n' >"$package_dirty_repo/untracked-fixture"
 printf 'preserved clean installer\n' \
-    >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
+    >"$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl.tar.xz"
 printf 'preserved clean Docker archive\n' \
-    >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    >"$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.tar.xz"
 (
     cd "$foreign_workspace"
     PATH="$package_fake_bin:$PATH" \
@@ -11826,10 +11826,10 @@ printf 'preserved clean Docker archive\n' \
     sbom_status=$?
     set -e
     [[ "$sbom_status" == 2 ]]
-    [[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-sbom-manifest.tsv" ]]
+    [[ -f "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty-sbom-manifest.tsv" ]]
     printf '%s\n' '#!/usr/bin/env bash' 'printf "stale substituted binary\n"' \
-        >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin"
-    chmod +x "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin"
+        >"$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl.bin"
+    chmod +x "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl.bin"
     PATH="$package_fake_bin:$PATH" \
         CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
         CARGO_TARGET_DIR="$package_fake_target" BORONDNS_DIST_DIR="$package_fake_dist" \
@@ -11839,28 +11839,28 @@ printf 'preserved clean Docker archive\n' \
         EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
         "$package_dirty_repo/scripts/package-docker-image.sh"
 )
-[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.tar.xz" ]]
-[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-borondns.cdx.json" ]]
-[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.tar.xz" ]]
+[[ -f "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty.tar.xz" ]]
+[[ -f "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty-borondns.cdx.json" ]]
+[[ -f "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.tar.xz" ]]
 grep -Fqx 'preserved clean installer' \
-    "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
+    "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl.tar.xz"
 grep -Fqx 'preserved clean Docker archive' \
-    "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
-[[ "$("$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin")" == "stale substituted binary" ]]
-[[ "$("$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin")" == "borondns fake" ]]
-[[ "$("$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-context/borondns")" == "borondns fake" ]]
-package_docker_manifest="$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty/manifest.txt"
-package_docker_binary_sha256="$(sha256sum "$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin" | awk '{ print $1 }')"
+    "$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-docker-image.tar.xz"
+[[ "$("$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl.bin")" == "stale substituted binary" ]]
+[[ "$("$package_docker_input/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty.bin")" == "borondns fake" ]]
+[[ "$("$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty-docker-context/borondns")" == "borondns fake" ]]
+package_docker_manifest="$package_docker_input/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty/manifest.txt"
+package_docker_binary_sha256="$(sha256sum "$package_docker_input/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty.bin" | awk '{ print $1 }')"
 grep -Fqx "commit=$(git -C "$package_dirty_repo" rev-parse --short=12 HEAD)" "$package_docker_manifest"
 grep -Fqx 'source_clean=0' "$package_docker_manifest"
 grep -Fqx 'release_eligible=0' "$package_docker_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_docker_manifest"
 grep -Fqx "binary_sha256=$package_docker_binary_sha256" "$package_docker_manifest"
-package_image_manifest="$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.manifest.txt"
+package_image_manifest="$package_fake_dist/borondns-0.9.1-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.manifest.txt"
 grep -Fqx 'source_clean=0' "$package_image_manifest"
 grep -Fqx 'release_eligible=0' "$package_image_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_image_manifest"
-grep -Fqx 'image_ref=borondns:0.9.0-nonrelease-dirty' "$package_image_manifest"
+grep -Fqx 'image_ref=borondns:0.9.1-nonrelease-dirty' "$package_image_manifest"
 [[ -z "$(find "$package_fake_dist" -maxdepth 1 -name 'borondns-9.9.9-*' -print -quit)" ]]
 if grep -F 'metadata' "$package_cargo_log" | grep -Fv -- "--manifest-path $package_dirty_repo/Cargo.toml"; then
     printf 'packaging metadata escaped to the foreign caller workspace\n' >&2

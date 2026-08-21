@@ -13,7 +13,7 @@ exclude = ["fuzz", "crates/boron-gun-ebpf", "crates/borondns-server-ebpf"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-version = "0.9.0"
+version = "0.9.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

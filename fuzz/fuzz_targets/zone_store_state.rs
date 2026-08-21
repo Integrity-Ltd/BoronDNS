@@ -48,11 +48,13 @@ fuzz_target!(|data: &[u8]| {
             }
             2 => {
                 expected.serial = expected.serial.wrapping_add(serial_delta).wrapping_add(1);
-                store.insert_snapshot(ZoneSnapshot::active(
-                    origin.clone(),
-                    Some(expected.serial),
-                    Vec::new(),
-                ));
+                store
+                    .try_insert_snapshot(ZoneSnapshot::active(
+                        origin.clone(),
+                        Some(expected.serial),
+                        Vec::new(),
+                    ))
+                    .expect("empty fuzz zone compiles");
                 expected.present = true;
                 expected.state = Some(ZoneState::Active);
             }
@@ -83,11 +85,13 @@ fuzz_target!(|data: &[u8]| {
             }
             _ => {
                 expected.serial = expected.serial.wrapping_add(serial_delta).wrapping_add(1);
-                store.insert_snapshot(ZoneSnapshot::active(
-                    origin.clone(),
-                    Some(expected.serial),
-                    Vec::new(),
-                ));
+                store
+                    .try_insert_snapshot(ZoneSnapshot::active(
+                        origin.clone(),
+                        Some(expected.serial),
+                        Vec::new(),
+                    ))
+                    .expect("empty fuzz zone compiles");
                 expected.present = true;
                 expected.state = Some(ZoneState::Active);
                 if operation.get(2).copied().unwrap_or(0) & 0x80 != 0 {

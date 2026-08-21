@@ -6,6 +6,8 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+## 0.9.1 - 2026-08-21
+
 ### Changed
 
 - Promoted ZoneImage global arena offsets and record/relation ordinals to

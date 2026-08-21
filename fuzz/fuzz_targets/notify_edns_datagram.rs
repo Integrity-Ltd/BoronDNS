@@ -54,34 +54,36 @@ fn zones() -> &'static ZoneStore {
     ZONES.get_or_init(|| {
         let apex = DomainName::from_absolute_str("alpha.test.").expect("static apex is valid");
         let store = ZoneStore::new();
-        store.insert_snapshot(ZoneSnapshot::active(
-            apex.clone(),
-            Some(1),
-            vec![
-                Rrset::new(
-                    apex.clone(),
-                    RecordType::Soa as u16,
-                    QCLASS_IN,
-                    3600,
-                    vec![soa_rdata(1)],
-                ),
-                Rrset::new(
-                    apex.clone(),
-                    RecordType::Ns as u16,
-                    QCLASS_IN,
-                    3600,
-                    vec![name_wire("ns1.alpha.test.")],
-                ),
-                Rrset::new(
-                    DomainName::from_absolute_str("ns1.alpha.test.")
-                        .expect("static NS name is valid"),
-                    RecordType::A as u16,
-                    QCLASS_IN,
-                    3600,
-                    vec![vec![192, 0, 2, 53]],
-                ),
-            ],
-        ));
+        store
+            .try_insert_snapshot(ZoneSnapshot::active(
+                apex.clone(),
+                Some(1),
+                vec![
+                    Rrset::new(
+                        apex.clone(),
+                        RecordType::Soa as u16,
+                        QCLASS_IN,
+                        3600,
+                        vec![soa_rdata(1)],
+                    ),
+                    Rrset::new(
+                        apex.clone(),
+                        RecordType::Ns as u16,
+                        QCLASS_IN,
+                        3600,
+                        vec![name_wire("ns1.alpha.test.")],
+                    ),
+                    Rrset::new(
+                        DomainName::from_absolute_str("ns1.alpha.test.")
+                            .expect("static NS name is valid"),
+                        RecordType::A as u16,
+                        QCLASS_IN,
+                        3600,
+                        vec![vec![192, 0, 2, 53]],
+                    ),
+                ],
+            ))
+            .expect("static fuzz zone compiles");
         store
     })
 }

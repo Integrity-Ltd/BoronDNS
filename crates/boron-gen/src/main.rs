@@ -7,6 +7,11 @@ use boron_gen::{
 };
 use borondns_core::tsig::TsigKey;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+// Cargo exposes package-wide library dependencies to this mixed
+// library/binary package even though their APIs are consumed in lib modules.
+use serde as _;
+use sha1 as _;
+use thiserror as _;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 

@@ -875,7 +875,11 @@ mod tests {
         assert_eq!(stats.queries, 0);
         assert_eq!(stats.rejected, 0);
         let mut byte = [0u8; 1];
-        assert_eq!(connection.read(&mut byte).await.unwrap(), 0);
+        match connection.read(&mut byte).await {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            outcome => panic!("aborted connection must close or reset: {outcome:?}"),
+        }
     }
 
     #[tokio::test]

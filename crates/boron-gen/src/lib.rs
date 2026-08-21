@@ -1,3 +1,10 @@
+// Cargo exposes package-wide CLI dependencies to this mixed library/binary
+// package even though their APIs are consumed only by src/main.rs.
+use anyhow as _;
+use clap as _;
+use serde_json as _;
+use tracing_subscriber as _;
+
 pub mod scenario;
 pub mod server;
 pub mod wire;
