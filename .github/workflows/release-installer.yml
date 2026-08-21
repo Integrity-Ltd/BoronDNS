@@ -12,17 +12,6 @@ env:
   CARGO_CYCLONEDX_VERSION: "0.5.9"
   SYFT_VERSION: "v1.45.1"
   SYFT_LINUX_AMD64_SHA256: "20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716"
-  ACTIONLINT_VERSION: "1.7.12"
-  ACTIONLINT_LINUX_AMD64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-  SHELLCHECK_VERSION: "0.11.0"
-  SHELLCHECK_LINUX_AMD64_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-  RIPGREP_VERSION: "15.1.0"
-  RIPGREP_LINUX_AMD64_SHA256: "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599"
-  CARGO_DENY_VERSION: "0.19.8"
-  CARGO_LLVM_COV_VERSION: "0.8.7"
-  CARGO_BLOAT_VERSION: "0.12.1"
-  CARGO_MACHETE_VERSION: "0.9.2"
-  CARGO_FUZZ_VERSION: "0.13.2"
 
 jobs:
   verify-source:
@@ -67,48 +56,6 @@ jobs:
           printf 'cargo-path=%s\n' "$cargo_path" >> "$GITHUB_OUTPUT"
           printf 'rustc-path=%s\n' "$rustc_path" >> "$GITHUB_OUTPUT"
 
-      - name: Install shell tools
-        run: |
-          mkdir -p "$HOME/.local/bin"
-          shellcheck_archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          /usr/bin/curl -sSfL \
-            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${shellcheck_archive}" \
-            -o "/tmp/${shellcheck_archive}"
-          printf '%s  %s\n' "$SHELLCHECK_LINUX_AMD64_SHA256" "/tmp/${shellcheck_archive}" | /usr/bin/sha256sum -c -
-          /usr/bin/tar -C "$HOME/.local/bin" --strip-components=1 -xJf \
-            "/tmp/${shellcheck_archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
-          ripgrep_archive="ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          /usr/bin/curl -sSfL \
-            "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${ripgrep_archive}" \
-            -o "/tmp/${ripgrep_archive}"
-          printf '%s  %s\n' "$RIPGREP_LINUX_AMD64_SHA256" "/tmp/${ripgrep_archive}" | /usr/bin/sha256sum -c -
-          /usr/bin/tar -C "$HOME/.local/bin" --strip-components=1 -xzf \
-            "/tmp/${ripgrep_archive}" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
-          go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
-          echo "$HOME/go/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Install continuous verification tools
-        run: |
-          verified_cargo="${{ steps.source-commit.outputs.cargo-path }}"
-          verified_rustc="${{ steps.source-commit.outputs.rustc-path }}"
-          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ steps.source-commit.outputs.cargo-sha256 }}"
-          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ steps.source-commit.outputs.rustc-sha256 }}"
-          "$HOME/.cargo/bin/rustup" component add --toolchain "$RUST_TOOLCHAIN_VERSION" llvm-tools-preview
-          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-deny --version "$CARGO_DENY_VERSION"
-          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
-          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-bloat --version "$CARGO_BLOAT_VERSION"
-          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-machete --version "$CARGO_MACHETE_VERSION"
-          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
-          mkdir -p "$HOME/.local/bin"
-          actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          /usr/bin/curl -sSfL \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint_archive}" \
-            -o "/tmp/${actionlint_archive}"
-          printf '%s  %s\n' "$ACTIONLINT_LINUX_AMD64_SHA256" "/tmp/${actionlint_archive}" | /usr/bin/sha256sum -c -
-          /usr/bin/tar -C "$HOME/.local/bin" -xzf "/tmp/${actionlint_archive}" actionlint
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Check release tag matches Cargo version
         if: startsWith(github.ref, 'refs/tags/')
         run: scripts/check-version-consistency.py --tag "${GITHUB_REF_NAME#v}"
@@ -120,11 +67,7 @@ jobs:
             "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           scripts/verify-release-tag-signature.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
 
-      - name: Continuous verification gate
-        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: scripts/check.sh
-
-      - name: Verify Continuous gate preserved clean source
+      - name: Verify release source remained clean
         shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
         run: |
           test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"

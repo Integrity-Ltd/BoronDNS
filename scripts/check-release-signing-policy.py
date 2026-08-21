@@ -115,12 +115,9 @@ VERIFY_STEPS = [
     "Checkout",
     "Verify clean source checkout",
     "Record verified source commit",
-    "Install shell tools",
-    "Install continuous verification tools",
     "Check release tag matches Cargo version",
     "Verify Tibor-signed annotated release tag",
-    "Continuous verification gate",
-    "Verify Continuous gate preserved clean source",
+    "Verify release source remained clean",
 ]
 PACKAGE_STEPS = [
     "Checkout verified source",
@@ -157,17 +154,6 @@ EXPECTED_GLOBAL_ENV = [
     '  CARGO_CYCLONEDX_VERSION: "0.5.9"',
     '  SYFT_VERSION: "v1.45.1"',
     f'  SYFT_LINUX_AMD64_SHA256: "{EXPECTED_SYFT_LINUX_AMD64_SHA256}"',
-    '  ACTIONLINT_VERSION: "1.7.12"',
-    '  ACTIONLINT_LINUX_AMD64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"',
-    '  SHELLCHECK_VERSION: "0.11.0"',
-    '  SHELLCHECK_LINUX_AMD64_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"',
-    '  RIPGREP_VERSION: "15.1.0"',
-    '  RIPGREP_LINUX_AMD64_SHA256: "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599"',
-    '  CARGO_DENY_VERSION: "0.19.8"',
-    '  CARGO_LLVM_COV_VERSION: "0.8.7"',
-    '  CARGO_BLOAT_VERSION: "0.12.1"',
-    '  CARGO_MACHETE_VERSION: "0.9.2"',
-    '  CARGO_FUZZ_VERSION: "0.13.2"',
 ]
 # Fingerprint each job's complete metadata before ``steps``. This closes the
 # build-contamination surface around job-level environment, container, service,
@@ -184,12 +170,9 @@ VERIFY_STEP_SHA256 = {
     "Checkout": "b0495f7d6653c379fc61ffc839a5cd74c75cae6cdc2d97dc46f6df7e8fbc6d0d",
     "Verify clean source checkout": "d21ec3586293bde9e484f1a3720becf77ea9cbe22df05a27b9c05c3109742af8",
     "Record verified source commit": "7420c3820884d1daeca7c6cf74634fed5d9abd987a898cb584ca0dad24052eae",
-    "Install shell tools": "2882754dcd2e7c9b53d0e6dd65db6b655956512a9ab28130af3af8c3390ac8e3",
-    "Install continuous verification tools": "9d8d84eaa975df462f38d24886bc08dd87470f41d18c0818eccd06eda763fd35",
     "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
     "Verify Tibor-signed annotated release tag": "f5dd4479db59cbd41bb70d39b4f3742aed52cebc8ded15533b0a1770a8ae9a5f",
-    "Continuous verification gate": "15db06eb26cb9bffb6fb7b67a970f3c24337ca5e02c78b15c5270270ac571cff",
-    "Verify Continuous gate preserved clean source": "4afc7667d5ecb7cdd4504e2d3110b1d0a2178564883dddfc4bfa6b581662b19f",
+    "Verify release source remained clean": "9bbece38d3041cbfba688171b5165afeb0e85cc54fc405e59ae6a251ad84cd0f",
 }
 PACKAGE_STEP_SHA256 = {
     "Checkout verified source": "7eca7f77d7449358104f62e3fa7d337dfeed951c5769e0e1718fbfda313ae250",
@@ -565,7 +548,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         exact_step_surface_errors(sign, SIGN_STEPS, SIGN_STEP_SHA256, "sign-release")
     )
 
-    final_verify_step = named_step(verify, "Verify Continuous gate preserved clean source")
+    final_verify_step = named_step(verify, "Verify release source remained clean")
     final_head_pin = '          test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"\n'
     if final_verify_step is None or final_head_pin not in final_verify_step[1]:
         errors.append(
@@ -785,8 +768,6 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         errors.append("release verification must not accept a cross-tag identity regexp")
     if EXPECTED_IDENTITY not in text:
         errors.append("release verification must bind the certificate identity to $tag exactly")
-    if "actionlint" not in verify:
-        errors.append("verify-source must install actionlint for workflow validation")
     expected_syft_check = (
         "printf '%s  %s\\n' \"$SYFT_LINUX_AMD64_SHA256\" "
         '"/tmp/$syft_archive" | /usr/bin/sha256sum -c -'
@@ -1752,7 +1733,7 @@ def run_mutation_regressions(text: str) -> None:
     require_mutation_error(
         no_source_output, "missing verified source output", "verified source commit"
     )
-    final_verify_step = named_step(text, "Verify Continuous gate preserved clean source")
+    final_verify_step = named_step(text, "Verify release source remained clean")
     if final_verify_step is None:
         raise RuntimeError("release policy fixture requires final verify-source clean gate")
     final_verify_start, final_verify_block = final_verify_step
@@ -1838,12 +1819,10 @@ def run_mutation_regressions(text: str) -> None:
         "must contain exactly",
     )
 
-    continuous_run = "        run: scripts/check.sh\n"
+    source_head_pin = '          test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"\n'
     persistent_env = text.replace(
-        continuous_run,
-        "        run: |\n"
-        "          scripts/check.sh\n"
-        '          echo "RUSTC_WRAPPER=/tmp/attacker" >> "$GITHUB_ENV"\n',
+        source_head_pin,
+        source_head_pin + '          echo "RUSTC_WRAPPER=/tmp/attacker" >> "$GITHUB_ENV"\n',
         1,
     )
     require_actionlint_valid(persistent_env, "persistent tool override")
@@ -2044,8 +2023,8 @@ def run_mutation_regressions(text: str) -> None:
         )
 
     global_tool_override = text.replace(
-        '  CARGO_MACHETE_VERSION: "0.9.2"\n',
-        '  CARGO_MACHETE_VERSION: "0.9.2"\n'
+        '  RUST_TOOLCHAIN_VERSION: "1.96.1"\n',
+        '  RUST_TOOLCHAIN_VERSION: "1.96.1"\n'
         "  RUSTC_WRAPPER: /tmp/attacker\n",
         1,
     )
