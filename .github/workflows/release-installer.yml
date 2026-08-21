@@ -20,6 +20,7 @@ env:
   CARGO_LLVM_COV_VERSION: "0.8.7"
   CARGO_BLOAT_VERSION: "0.12.1"
   CARGO_MACHETE_VERSION: "0.9.2"
+  CARGO_FUZZ_VERSION: "0.13.2"
 
 jobs:
   verify-source:
@@ -89,6 +90,7 @@ jobs:
           RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
           RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-bloat --version "$CARGO_BLOAT_VERSION"
           RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-machete --version "$CARGO_MACHETE_VERSION"
+          RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
           mkdir -p "$HOME/.local/bin"
           actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           /usr/bin/curl -sSfL \

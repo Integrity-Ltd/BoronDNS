@@ -165,6 +165,7 @@ EXPECTED_GLOBAL_ENV = [
     '  CARGO_LLVM_COV_VERSION: "0.8.7"',
     '  CARGO_BLOAT_VERSION: "0.12.1"',
     '  CARGO_MACHETE_VERSION: "0.9.2"',
+    '  CARGO_FUZZ_VERSION: "0.13.2"',
 ]
 # Fingerprint each job's complete metadata before ``steps``. This closes the
 # build-contamination surface around job-level environment, container, service,
@@ -182,7 +183,7 @@ VERIFY_STEP_SHA256 = {
     "Verify clean source checkout": "d21ec3586293bde9e484f1a3720becf77ea9cbe22df05a27b9c05c3109742af8",
     "Record verified source commit": "7420c3820884d1daeca7c6cf74634fed5d9abd987a898cb584ca0dad24052eae",
     "Install shell tools": "487017346ec77bc2546e85372dfd6abe526433144ea61bd1915e365c0da5d3b5",
-    "Install continuous verification tools": "b3db8c9cf96bd79fc0533304e9f7838af3d65b7b858536803117bb325801a8c8",
+    "Install continuous verification tools": "9d8d84eaa975df462f38d24886bc08dd87470f41d18c0818eccd06eda763fd35",
     "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
     "Verify Tibor-signed annotated release tag": "f5dd4479db59cbd41bb70d39b4f3742aed52cebc8ded15533b0a1770a8ae9a5f",
     "Continuous verification gate": "15db06eb26cb9bffb6fb7b67a970f3c24337ca5e02c78b15c5270270ac571cff",
