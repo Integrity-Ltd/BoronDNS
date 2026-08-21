@@ -23,7 +23,7 @@ CONFIG_FILE="${BORONDNS_CONFIG_FILE:-$CONFIG_DIR/config.toml}"
 DOC_DIR="/usr/share/doc/borondns"
 DOC_FILE="$DOC_DIR/README.install.md"
 STATE_DIR="${BORONDNS_STATE_DIR:-/var/lib/borondns}"
-ZONE_CACHE_DIR="${BORONDNS_ZONE_CACHE_DIR:-$STATE_DIR/zones}"
+ZONE_CACHE_DIR=""
 SYSTEMD_DIR="${BORONDNS_SYSTEMD_DIR:-/etc/systemd/system}"
 OPENRC_DIR="${BORONDNS_OPENRC_DIR:-/etc/init.d}"
 INIT_SYSTEM="${BORONDNS_INIT_SYSTEM:-auto}"
@@ -67,7 +67,6 @@ SERVICE_DIR=""
 SERVICE_DIR_IDENTITY=""
 DOC_DIR_IDENTITY=""
 STATE_DIR_IDENTITY=""
-ZONE_CACHE_DIR_IDENTITY=""
 RECOVERY_DIR_IDENTITY=""
 CONFIG_FILE_IDENTITY=""
 RUNTIME_GROUP_GID=""
@@ -1726,11 +1725,23 @@ create_runtime_user() {
 }
 
 prepare_zone_cache_directory() {
-    ensure_trusted_directory "$ZONE_CACHE_DIR" "zone cache directory" 0770 "$RUN_GROUP"
-    ZONE_CACHE_DIR_IDENTITY="$(trusted_directory_identity "$ZONE_CACHE_DIR" "zone cache directory")"
-    chown root:"$RUN_GROUP" "$ZONE_CACHE_DIR"
-    chmod 0770 "$ZONE_CACHE_DIR"
-    verify_trusted_directory_identity "$ZONE_CACHE_DIR" "zone cache directory" "$ZONE_CACHE_DIR_IDENTITY"
+    verify_trusted_directory_identity "$STATE_DIR" "state directory" "$STATE_DIR_IDENTITY"
+    if [[ -e "$ZONE_CACHE_DIR" || -L "$ZONE_CACHE_DIR" ]]; then
+        [[ -d "$ZONE_CACHE_DIR" && ! -L "$ZONE_CACHE_DIR" ]] ||
+            die "zone cache directory must be a real directory: $ZONE_CACHE_DIR"
+    else
+        mkdir -m 0700 -- "$ZONE_CACHE_DIR" ||
+            die "cannot securely create zone cache directory: $ZONE_CACHE_DIR"
+        chown root:"$RUN_GROUP" "$ZONE_CACHE_DIR"
+        chmod 0770 "$ZONE_CACHE_DIR"
+    fi
+    local owner group mode
+    owner="$(stat -c '%u' -- "$ZONE_CACHE_DIR")"
+    group="$(stat -c '%g' -- "$ZONE_CACHE_DIR")"
+    mode="$(stat -c '%a' -- "$ZONE_CACHE_DIR")"
+    [[ "$owner" == 0 && "$group" == "$RUNTIME_GROUP_GID" && "$mode" == 770 ]] ||
+        die "zone cache directory must be root:$RUN_GROUP mode 0770: $ZONE_CACHE_DIR"
+    verify_trusted_directory_identity "$STATE_DIR" "state directory" "$STATE_DIR_IDENTITY"
 }
 
 stage_binaries() {
@@ -3530,6 +3541,9 @@ while (($#)); do
     esac
 done
 
+zone_cache_account_key="$(printf '%s' "$RUN_USER" | sha256sum | awk '{ print substr($1, 1, 16) }')"
+[[ "$zone_cache_account_key" =~ ^[0-9a-f]{16}$ ]] || die "cannot derive zone cache account identity"
+ZONE_CACHE_DIR="$STATE_DIR/zones-$zone_cache_account_key"
 validate_installer_inputs
 case "$ACTION" in
 install | update | configure | uninstall) validate_installer_payload ;;
