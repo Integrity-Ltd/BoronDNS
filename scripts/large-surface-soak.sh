@@ -2175,7 +2175,7 @@ run_bounded_scenario_command() {
             BORONDNS_SOAK_REAL_DOCKER="$real_docker"
             export BORONDNS_SOAK_REAL_DOCKER
             # Exported into the bounded scenario's Bash process.
-            # shellcheck disable=SC2329
+            # shellcheck disable=SC2317,SC2329
             docker() {
                 local resource_label="${BORONDNS_SOAK_DOCKER_LABEL:?}"
                 local real_docker="${BORONDNS_SOAK_REAL_DOCKER:?}"
