@@ -31,10 +31,12 @@ RELEASE_REPRODUCIBILITY_VERIFIER = (
     ROOT / "scripts" / "verify-release-reproducibility.py"
 )
 DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
+RELEASE_TAG_VERIFIER = ROOT / "scripts" / "verify-release-tag-signature.sh"
 EXPECTED_RELEASE_HELPER_SHA256 = {
     RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
     RELEASE_REPRODUCIBILITY_VERIFIER: "08aff22afc106a84646aa25b7af684de9e30580ab4c757a8abd641c26607993b",
     DOCKER_ARCHIVE_VERIFIER: "e461cb8aadf7b3fea389e3210e3a49ad69f0cbb33a8216a69a9710b421ba3923",
+    RELEASE_TAG_VERIFIER: "645eb1af3a62a647c1f4c197d487e24d7ed49e4c097268178cd6646f3e3bac1b",
 }
 DOCKERFILE = ROOT / "packaging" / "docker" / "Dockerfile"
 INSTALLER_README = ROOT / "packaging" / "installer" / "README.install.md"
@@ -116,6 +118,7 @@ VERIFY_STEPS = [
     "Install shell tools",
     "Install continuous verification tools",
     "Check release tag matches Cargo version",
+    "Verify Tibor-signed annotated release tag",
     "Continuous verification gate",
     "Verify Continuous gate preserved clean source",
 ]
@@ -179,6 +182,7 @@ VERIFY_STEP_SHA256 = {
     "Install shell tools": "d10d026d5834eed621079167703d02698d3bc21a0ab958f8fe7f658d5435a652",
     "Install continuous verification tools": "9d273e7aea41d4907e3cb52fde3787e6360a4fc18dba0303b0c3d7e31c958916",
     "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
+    "Verify Tibor-signed annotated release tag": "c5d61eef575ea46af13c3177e738a249e79893a0448a80a41da26a7fd41316c7",
     "Continuous verification gate": "15db06eb26cb9bffb6fb7b67a970f3c24337ca5e02c78b15c5270270ac571cff",
     "Verify Continuous gate preserved clean source": "4afc7667d5ecb7cdd4504e2d3110b1d0a2178564883dddfc4bfa6b581662b19f",
 }

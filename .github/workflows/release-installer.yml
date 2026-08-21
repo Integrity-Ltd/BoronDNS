@@ -91,6 +91,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: scripts/check-version-consistency.py --tag "${GITHUB_REF_NAME#v}"
 
+      - name: Verify Tibor-signed annotated release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: scripts/verify-release-tag-signature.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
+
       - name: Continuous verification gate
         shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
         run: scripts/check.sh

@@ -277,6 +277,14 @@ or the public handoff manifest.
 The workflow relies on the pinned download action's transport integrity plus
 that independent manifest, rather than exposing an artifact-digest output that
 the download action cannot compare against an expected value.
+Every automatic release begins from an annotated `v*` tag signed by Tibor
+Dravecz's repository-trusted OpenPGP key, fingerprint
+`E72382CD34A6DBC21070BAB1A0F90CBE53C07CA9`. The verification job imports only
+the checked-in public key, requires `git verify-tag` to report exactly that
+fingerprint, and checks that the tag peels to `GITHUB_SHA`. The private key is
+never stored in GitHub Actions. This signature records human authorization of
+the exact release commit; the independent keyless Sigstore bundles below bind
+the generated artifacts to the GitHub build identity.
 The release binaries are built on that fresh packaging runner in a freshly
 recreated, release-only Cargo target directory, so ignored fingerprints or
 executables from verification cannot be reused for packaging. The signing job installs the
@@ -297,8 +305,9 @@ before spawning a new process group, and waits for an explicit parent-authority
 token before it may start `gh`. Cancellation or timeout terminates and reaps the
 whole group; an API leader that exits while descendants remain is a failed
 operation. This closes the shell's spawn-to-PID window for release mutations.
-Release tags are an immutable provenance boundary: repository rules must protect
-`v*` tags from force-update and deletion after creation. The publishing job peels
+Release tags are an immutable provenance boundary: create them with
+`git tag -s vVERSION COMMIT -m "BoronDNS VERSION"`, and repository rules must
+protect `v*` tags from force-update and deletion after creation. The publishing job peels
 the remote tag to its commit immediately before release creation and again
 immediately afterward. If the second lookup fails or differs from the event
 commit, it deletes the just-created release and fails. That rollback is a final
