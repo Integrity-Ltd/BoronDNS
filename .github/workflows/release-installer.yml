@@ -95,7 +95,10 @@ jobs:
 
       - name: Verify Tibor-signed annotated release tag
         if: startsWith(github.ref, 'refs/tags/')
-        run: scripts/verify-release-tag-signature.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
+        run: |
+          git fetch --force --no-tags origin \
+            "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          scripts/verify-release-tag-signature.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
 
       - name: Continuous verification gate
         shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}

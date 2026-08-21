@@ -182,7 +182,7 @@ VERIFY_STEP_SHA256 = {
     "Install shell tools": "d10d026d5834eed621079167703d02698d3bc21a0ab958f8fe7f658d5435a652",
     "Install continuous verification tools": "b3db8c9cf96bd79fc0533304e9f7838af3d65b7b858536803117bb325801a8c8",
     "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
-    "Verify Tibor-signed annotated release tag": "c5d61eef575ea46af13c3177e738a249e79893a0448a80a41da26a7fd41316c7",
+    "Verify Tibor-signed annotated release tag": "f5dd4479db59cbd41bb70d39b4f3742aed52cebc8ded15533b0a1770a8ae9a5f",
     "Continuous verification gate": "15db06eb26cb9bffb6fb7b67a970f3c24337ca5e02c78b15c5270270ac571cff",
     "Verify Continuous gate preserved clean source": "4afc7667d5ecb7cdd4504e2d3110b1d0a2178564883dddfc4bfa6b581662b19f",
 }
