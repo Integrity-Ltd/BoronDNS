@@ -2546,6 +2546,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 
 			cat >"$readiness_root/config/legacy.toml" <<EOF
 [server]
+allow_non_rfc5936_cold_start = true
 listen_udp = ["127.0.0.1:15301"]
 listen_tcp = ["127.0.0.1:15301"]
 health = "127.0.0.1:18181"
@@ -2560,6 +2561,7 @@ primaries = ["127.0.0.1:9"]
 EOF
 			cat >"$readiness_root/config/multiline.toml" <<EOF
 [server]
+allow_non_rfc5936_cold_start = true
 [process]
 run_as_user = "borondns"
 [interfaces]
@@ -2579,6 +2581,7 @@ primaries = ["127.0.0.1:9"]
 EOF
 			cat >"$readiness_root/config/structured.toml" <<EOF
 [server]
+allow_non_rfc5936_cold_start = true
 [process]
 run_as_user = "borondns"
 [interfaces]
@@ -2614,6 +2617,7 @@ EOF
 				cp /bin/true "$port_zero_root/bin/boron-gun"
 				cat >"$port_zero_root/config/config.toml" <<EOF
 [server]
+allow_non_rfc5936_cold_start = true
 [process]
 run_as_user = "borondns"
 [interfaces]

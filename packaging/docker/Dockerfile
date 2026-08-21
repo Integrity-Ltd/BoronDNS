@@ -20,7 +20,8 @@ LABEL org.opencontainers.image.title="BoronDNS" \
 
 RUN addgroup -S -g "${BORONDNS_GID}" borondns \
     && adduser -S -D -H -u "${BORONDNS_UID}" -G borondns -s /sbin/nologin borondns \
-    && install -d -m 0750 -o root -g borondns /etc/borondns-secondary
+    && install -d -m 0750 -o root -g borondns /etc/borondns-secondary \
+    && install -d -m 0700 -o borondns -g borondns /var/lib/borondns/zones
 
 COPY --chown=root:root borondns /usr/local/bin/borondns
 COPY --chown=root:borondns borondns.example.toml /etc/borondns-secondary/config.toml
@@ -29,6 +30,7 @@ RUN chmod 0755 /usr/local/bin/borondns \
     && chmod 0640 /etc/borondns-secondary/config.toml
 
 USER borondns:borondns
+VOLUME ["/var/lib/borondns"]
 EXPOSE 5300/udp 5300/tcp 8080/tcp
 ENTRYPOINT ["/usr/local/bin/borondns"]
 CMD ["serve", "--config", "/etc/borondns-secondary/config.toml"]

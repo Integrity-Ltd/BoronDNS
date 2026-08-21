@@ -153,6 +153,7 @@ cat >"$workdir/borondns.toml" <<'EOF'
 log_level = "debug"
 log_format = "json"
 nsid = "docker-smoke"
+zone_cache_directory = "/var/lib/borondns/zones"
 
 [interfaces]
 dns = ["0.0.0.0:5300"]
