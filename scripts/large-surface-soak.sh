@@ -2116,16 +2116,24 @@ reconcile_retained_docker_cleanup_failures() {
 }
 
 run_timeout_with_process_group_cleanup() {
-    local timeout_pid timeout_pgid caller_pgid timeout_status=0
+    local timeout_pid timeout_pgid observed_timeout_pgid caller_pgid timeout_status=0
 
     timeout "$@" &
     timeout_pid=$!
-    timeout_pgid="$(ps -o pgid= -p "$timeout_pid")" || {
-        wait "$timeout_pid" || true
-        printf 'failed to determine timeout process group: pid=%s\n' "$timeout_pid" >&2
-        return 70
-    }
-    timeout_pgid="${timeout_pgid//[[:space:]]/}"
+    # GNU timeout creates a process group whose ID is its own PID. A very short
+    # command can finish before ps observes the group leader; retain the launch
+    # identity so any surviving grandchildren can still be reaped by PGID.
+    timeout_pgid="$timeout_pid"
+    if observed_timeout_pgid="$(ps -o pgid= -p "$timeout_pid" 2>/dev/null)"; then
+        observed_timeout_pgid="${observed_timeout_pgid//[[:space:]]/}"
+        [[ "$observed_timeout_pgid" =~ ^[1-9][0-9]*$ ]] || {
+            wait "$timeout_pid" || true
+            printf 'timeout published an invalid process group: pid=%s pgid=%s\n' \
+                "$timeout_pid" "$observed_timeout_pgid" >&2
+            return 70
+        }
+        timeout_pgid="$observed_timeout_pgid"
+    fi
     caller_pgid="$(ps -o pgid= -p "$BASHPID")" || {
         wait "$timeout_pid" || true
         printf 'failed to determine scenario runner process group\n' >&2
