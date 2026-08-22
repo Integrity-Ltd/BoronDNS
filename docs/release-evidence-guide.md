@@ -167,6 +167,35 @@ reproducibility.
 
 ## Package and Docker Smoke Evidence
 
+Before creating a release tag, run the complete clean-container rehearsal:
+
+```sh
+scripts/release-preflight-container.sh
+```
+
+The launcher refuses modified or untracked source, builds a cached digest-pinned
+Ubuntu 24.04 tool image, and clones the selected commit from a read-only Git bundle into an
+otherwise clean container. The trusted container mounts the host Docker socket
+and an identically named temporary workspace so installer bind mounts and
+resource-constrained image smokes have the same cgroup-v2 behavior as the tagged
+runner. It uses host networking so loopback ports published by that daemon are
+visible to the smoke client. Docker-socket access is root-equivalent host
+authority; only reviewed
+committed source may be run through this operator gate. The packaging locks and
+rollback tests preserve pre-existing image tags. The tool container itself is
+limited to 32 GiB of memory and swap by default; set
+`BORONDNS_RELEASE_PREFLIGHT_MEMORY` to another explicit Docker memory value when
+needed.
+
+The rehearsal runs version and release-policy checks, publication recovery
+fault injection, two-build binary reproducibility, installer construction,
+Ubuntu and Alpine installer smokes, Docker-image construction and runtime
+smoke, required binary and Docker SBOM generation, static-link checks, and the
+final unsigned handoff/34-asset publication-plan validation. It deliberately
+does not create a tag, request an OIDC identity, sign an artifact, call the
+GitHub API, or publish anything. OIDC signing and GitHub upload therefore remain
+the only release operations that cannot be completed locally.
+
 Use `scripts/package-installer.sh` to build the release installer archive,
 standalone `borondns` and `boron-gun` binaries, package manifest, static-link
 reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the

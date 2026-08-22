@@ -24,6 +24,7 @@ python3 -m py_compile scripts/check-version-consistency.py
 python3 -m py_compile scripts/check-release-signing-policy.py
 python3 -m py_compile scripts/release-api-supervisor.py
 python3 -m py_compile scripts/verify-release-reproducibility.py
+python3 -m py_compile scripts/validate-release-preflight.py
 python3 -m py_compile scripts/verify-docker-archive.py
 python3 -m py_compile scripts/check-doc-hygiene.py
 python3 -m py_compile scripts/check-srs-hygiene.py

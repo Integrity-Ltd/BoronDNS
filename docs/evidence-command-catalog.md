@@ -13,6 +13,7 @@ snapshot commands.
 ## Release-Candidate Preflight Profile
 
 ```sh
+scripts/release-preflight-container.sh
 scripts/engineering-mvp-evidence.sh
 scripts/check-security-policy.sh
 scripts/capture-cli-evidence.sh
@@ -34,6 +35,12 @@ deferred list instead of executing them. Transitive unsafe dependency
 enumeration through `scripts/capture-unsafe-dependency-evidence.sh` is kept in
 the broader SRS acceptance profile because it depends on `cargo-geiger` and is
 release-review evidence rather than a cheap release-candidate gate.
+
+The clean-container release preflight is the mandatory packaging rehearsal
+before a signed release tag is created. It is listed here as an operator command
+rather than being nested inside `engineering-mvp-evidence.sh`, because it builds
+all release artifacts and uses the host Docker daemon from a bounded, trusted
+clean tool container.
 
 ## Broader SRS Acceptance Commands
 

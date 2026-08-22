@@ -89,11 +89,14 @@ slow or partial. It is not part of the default Engineering MVP evidence
 profile.
 
 Automatic hosted verification runs only for v-prefixed tag pushes through
-`.github/workflows/release-installer.yml`. That workflow invokes
-`scripts/check.sh` using the pinned primary toolchain and the declared 1.95
-MSRV before packaging the exact tag source. Its explicit `workflow_dispatch`
-entry remains an operator-invoked release diagnostic, not a push or pull-request
-trigger.
+`.github/workflows/release-installer.yml`. Before the tag is created,
+`scripts/release-preflight-container.sh` rehearses the complete packaging path
+from a clean committed checkout with the pinned Rust toolchain in a bounded
+clean tool container. The tagged workflow then verifies the source and tag,
+repeats reproducible packaging and smoke checks for the exact tag source, and
+performs the GitHub-only OIDC signing/publication step. Its explicit
+`workflow_dispatch` entry remains an operator-invoked release diagnostic, not a
+push or pull-request trigger.
 
 `scripts/test-operations-harnesses.sh` is the focused fault-injection gate for
 campaign and interop lifecycle helpers. Its Docker-image setup fixtures use a
