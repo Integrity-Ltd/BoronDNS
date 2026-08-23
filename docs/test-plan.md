@@ -1,6 +1,6 @@
 # BoronDNS Test Plan
 
-This Test Plan is the sibling document required by SRS v0.9.1 section 7.6. It
+This Test Plan is the sibling document required by SRS v1.0.0 section 7.6. It
 records the current verification harnesses, their SRS method classifications,
 and their execution cadence. It is intentionally a living plan: the test
 inventory stays at evidence-command and requirement-family level until release
@@ -9,7 +9,7 @@ and release evidence snapshots own that expansion.
 
 ## Scope
 
-- Normative source: `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
+- Normative source: `docs/BoronDNS-Secondary-SRS-v1.0.0.md`.
 - Working evidence ledger: `docs/verification-ledger.md`.
 - Family traceability matrix: `docs/appendix-a-traceability-matrix.md`.
 - Release evidence snapshot: `scripts/release-evidence-snapshot.sh`.
@@ -21,7 +21,7 @@ family-level requirement range.
 
 ## Cadence Classes
 
-The project uses the SRS v0.9.1 BDS-VER-011 cadence vocabulary exactly:
+The project uses the SRS v1.0.0 BDS-VER-011 cadence vocabulary exactly:
 
 - **Continuous**: build-blocking checks for every main-branch candidate.
 - **Periodic**: scheduled checks independent of a specific commit.

@@ -8,7 +8,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SRS = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
+SRS = ROOT / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md"
 
 REQUIRED_CATEGORIES = {
     "FR": ("Functional Requirement", "Required", "§4"),

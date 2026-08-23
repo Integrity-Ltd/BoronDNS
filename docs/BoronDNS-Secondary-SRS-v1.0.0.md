@@ -2,9 +2,9 @@
 
 ## BoronDNS-Secondary
 
-**Document Version:** v0.9.1
-**Date:** 15 August 2026
-**Status:** Current checked-in requirements baseline for the 0.9.1 validation release and planned 1.0.0 public beta; not a claim that every BDS-VER-008 release artifact already exists
+**Document Version:** v1.0.0
+**Date:** 22 August 2026
+**Status:** Requirements baseline for the BoronDNS 1.0.0 public beta. Requirements identified as future full-acceptance targets are not claims of completed 1.0 release evidence.
 
 ---
 
@@ -14,8 +14,8 @@
 |---|---|
 | Project | BoronDNS-Secondary |
 | Document | Software Requirements Specification (SRS) |
-| Version | v0.9.1 |
-| Date | 15 August 2026 |
+| Version | v1.0.0 |
+| Date | 22 August 2026 |
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
@@ -39,6 +39,7 @@
 | v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
 | v0.9.1 large-zone IXFR note | 13 Aug 2026 | Codex | Adds BDS-IF-CONF-019 for the externally visible compact/sharded/auto zone-publication policy used to keep small-zone query behavior while allowing delta-sensitive publication of large-zone IXFR. The policy is explicitly performance-only and does not weaken atomic refresh or DNS correctness requirements. |
 | v0.9.1 release-alignment review | 15 Aug 2026 | Codex | Reviews the complete current SRS against the implementation and active documentation after the RFC-compliance and large-zone IXFR work. Adds the missing BDS-IF-CONF-020 traceability for RFC 5936 last-good-zone persistence; replaces the unavailable 30-day soak/configuration promise with risk-based bounded-runtime evidence; replaces fixed vulnerability-response and embargo promises with truthful public-beta intake requirements; and aligns the acceptance gate to several independent 24-hour fuzz rounds, one final 0.9.1 validation release, then a 1.0.0 public-beta decision. Requirement identifiers remain stable. |
+| v1.0.0 | 22 Aug 2026 | Codex | Establishes the initial public-beta requirements baseline after the 0.9.1 validation release. Separates the supported 1.0 product boundary from future full-acceptance evidence targets, updates the XoT profile to the implemented TLS 1.3-only behavior, and retains stable requirement identifiers. |
 
 ---
 
@@ -1477,7 +1478,7 @@ The area code **XOT** is allocated.
 
 **BDS-FR-XOT-001.** The formal RFC 9103 XoT profile MUST use TLS 1.3 (RFC 8446) or later. TLS protocol implementation is delegated to the configured TLS library, but the BoronDNS release profile MUST prove that XoT handshakes for the formal profile do not negotiate TLS 1.2 or older protocol versions. Any TLS 1.2 support retained for interoperability with legacy or experimental primaries MUST be explicitly documented as a compatibility mode and MUST NOT be presented as RFC 9103 XoT conformance.
 *Source.* RFC 9103 §7.2.
-*Note.* Current Engineering MVP builds use the Rust TLS stack with TLS 1.2 enabled for compatibility testing; that is an implemented XoT-adjacent transfer behavior, not a complete formal RFC 9103 compliance claim until the release profile either disables TLS 1.2 for XoT or makes compatibility-mode selection explicit.
+*Note.* The production XoT client pins TLS 1.3. TLS 1.2 exists only in isolated test-peer support and is not an operator-selectable compatibility mode.
 *Verification.* Handshake tests against test peers offering TLS 1.2 only, TLS 1.3 only, and both; the formal profile must reject the TLS 1.2-only peer and negotiate TLS 1.3 or later where available. Compatibility-mode tests, if retained, must be separated from formal RFC 9103 evidence.
 
 **BDS-FR-XOT-002.** TLS cipher-suite selection MUST conform to the current recommendations of BCP 195 (RFC 9325): authenticated encryption with associated data (AEAD) cipher suites only; NULL, anonymous, RC4, 3DES, and export-grade cipher suites MUST NOT be offered or accepted. The specific suite list is determined by the underlying TLS implementation but MUST fall within these constraints.
@@ -3309,7 +3310,7 @@ borondns <version>
 build commit: <commit>
 build timestamp: <build-timestamp>
 rustc: <rustc-version>
-SRS: BoronDNS Secondary SRS v0.9.1
+SRS: BoronDNS Secondary SRS v1.0.0
 Role: secondary-only authoritative DNS server
 License: MIT OR Apache-2.0
 ```
@@ -3477,7 +3478,7 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 *Source.* Formal Alpha acceptance target recorded in this SRS.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of BDS-VER-011 (Gate methods).
 
-**BDS-VER-008 — Public-Beta Milestone.** This requirement defines the BoronDNS 1.0 public-beta release gate. It is separate from the repository's bounded local implementation-readiness profile. The milestone is achieved when the following are demonstrably satisfied or explicitly scoped as a documented public-beta limitation:
+**BDS-VER-008 — Public-Beta Milestone.** This requirement defines the BoronDNS 1.0 public-beta release gate. It is separate from future full SRS acceptance. The milestone is achieved when the implemented and documented product boundary has passed the release test plan and every unmet aspirational target below is explicitly recorded as a public-beta limitation rather than represented as verified:
 
 - All requirements of §3 through §6 to their full normative content;
 - Interoperability per §7.2 with all three primaries (NSD, Knot DNS, BIND 9);
@@ -3489,7 +3490,7 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 - Test coverage targets per BDS-NFR-MAINT-007 met (70% overall, 85% for wire-format parsers);
 - Signed release artifacts per BDS-NFR-MAINT-008 produced for the public release;
 - Documentation complete: this SRS, the Architecture Document, the Test Plan, and the Operator Deployment Guide (per BDS-NFR-MAINT-009);
-- The exact accepted commit published once as the `0.9.1` validation release before the `1.0.0` public-beta decision, unless a newly discovered release blocker requires another project decision; no additional prerelease train is required by this SRS.
+- The `0.9.1` validation release and its retained evidence reviewed before the final `1.0.0` public-beta decision; no additional prerelease train is required by this SRS.
 
 *Source.* Public-beta release-acceptance target recorded in this SRS and the project decision register.
 *Verification.* Review of the 0.9.1 validation evidence, fuzz campaign summaries, release notes, documented limitations, signed artifacts, and final 1.0.0 public-beta decision.

@@ -91,7 +91,7 @@ The metrics endpoint exposes these implemented metric families:
 - first-party metrics use the `borondns_` prefix; selected stable
   SRS-facing compatibility families retain the `borondns_secondary_` prefix
   where named below;
-- SRS v0.9.1 per-zone status series:
+- SRS v1.0.0 per-zone status series:
   `borondns_secondary_zone_state`,
   `borondns_secondary_zone_loading_seconds` (seconds the zone has been in
   LOADING state during this process uptime),

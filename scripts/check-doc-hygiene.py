@@ -113,7 +113,7 @@ SCRIPT_BANNED_PHRASES = [
 
 REQUIRED_TEXT_BY_PATH = {
     "README.md": [
-        "The current release-candidate scope is wider than a minimal static-zone secondary",
+        "The current public-beta scope is wider than a minimal static-zone secondary",
         "Retained feature slices stay in scope exactly as bounded in",
         "IXFR with AXFR fallback, outbound XoT transfers",
         "passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones",
@@ -183,7 +183,7 @@ REQUIRED_TEXT_BY_PATH = {
         "it is not the canonical inventory of every evidence script",
         "At plan level, release-candidate scope is the deployable",
         "exact retained feature slices, source ownership, representative evidence",
-        "put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v0.9.1.md`",
+        "put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v1.0.0.md`",
         "put evidence state by requirement family in `docs/verification-ledger.md`",
         "does not duplicate the acceptance",
         "may require additional retained evidence without narrowing the",

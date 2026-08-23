@@ -139,7 +139,7 @@ def check_three_role_docs(repo_root: Path) -> None:
     if "accepts authorized NOTIFY on the DNS listeners" not in readme:
         fail("README.md must state that NOTIFY is accepted on DNS listeners")
 
-    srs = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md").read_text(
+    srs = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md").read_text(
         encoding="utf-8"
     )
     if "with `dns`, `mgmt`, `transfer`, and `notify` sub-keys" in srs:

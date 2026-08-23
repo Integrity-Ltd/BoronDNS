@@ -38,7 +38,7 @@ def evidence_path(item: str) -> str | None:
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     matrix_path = repo_root / "docs" / "dnssec-conformance-matrix.tsv"
-    srs_text = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md").read_text(
+    srs_text = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md").read_text(
         encoding="utf-8"
     )
 

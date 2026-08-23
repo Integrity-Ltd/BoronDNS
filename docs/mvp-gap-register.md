@@ -1,6 +1,6 @@
 # SRS Acceptance Gap Register
 
-This register is the short active queue for release-candidate closeout. It
+This register is the short active queue for 1.0 public-beta closeout. It
 tracks the remaining implementation decisions, release blockers, and formal SRS
 acceptance evidence gaps that must be closed before claiming `BDS-VER-008`.
 It is not the detailed evidence ledger.
@@ -25,7 +25,7 @@ Detailed evidence ownership:
 
 Terminology:
 
-- **Release candidate** is the current source and documentation state: the
+- **Public-beta candidate** is the current source and documentation state: the
   server behavior is implemented and locally checked, but formal acceptance
   still depends on retained release artifacts and sign-off.
 - **Formal SRS acceptance execution** is the `BDS-VER-008` gate run. It needs
@@ -35,7 +35,7 @@ Terminology:
   notes: command logs, primary versions, configs, benchmark/fuzz summaries,
   signatures, and operator sign-off records.
 - **Current checked-in full SRS** is
-  `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
+  `docs/BoronDNS-Secondary-SRS-v1.0.0.md`.
 - **Pending project-decision rows** remain open until release review resolves
   or explicitly defers them. Resolved rows are already project decisions;
   release notes and acceptance review must not treat the pending subset as
@@ -57,7 +57,7 @@ No open product implementation decisions are currently tracked here.
 | XoT release evidence | TLS 1.3-or-later client profile, ALPN, certificate, mTLS, TSIG-over-XoT, no-cleartext-fallback, and revocation-posture checks exist; `docs/xot-release-evidence-v0.2.0.md` records retained Knot XoT, Knot XoT+TSIG, BIND catalog-over-XoT+TSIG, and local failure-class artifacts under `target/evidence/xot-release-20260614T014700Z` and `target/evidence/xot-failure-20260616T170617Z`. | Add real-primary mTLS evidence, ClientHello/prohibited-suite inspection, default-port evidence where required, and NSD XoT evidence if the selected NSD version exposes TLS-protected transfer configuration before claiming full formal XoT acceptance. |
 | DNS Cookie release evidence | Configured shared Server Secret support, current-plus-previous validation, strict/lenient policy behavior, BADCOOKIE handling, metrics, and retained two-instance staged-rollover evidence exist. | Decide whether external load-balanced or anycast deployment sign-off is required for the release; if yes, attach that operator evidence and publish the DNS Cookie acceptance summary in release notes. |
 | Performance and resources | Local DNS client benchmarks, tuned UDP/XDP benchmark documentation, `perf-smoke`, large-catalog/resource scripts, coverage/resource evidence, and benchmark handoff schemas exist. | Run the final Reference Hardware/Profile benchmark set or explicitly scope it out of this release: throughput, latency and p99, transfer performance, memory, published image size, capacity, per-record memory, idle CPU, overload behavior, and regression baseline updates. |
-| Fuzzing and extended runtime | The parser fuzz targets, two-host campaign tooling, and completed ASan-backed two-host 24-hour fuzz evidence are present; `docs/two-host-fuzz-soak-campaign.md` records campaign `20260614T003811Z` with 75 fuzz services across five targets, 104,361,257,036 total runs, and no crash/leak/OOM/timeout markers. Resource-sampling, allocator-stress, and optional soak tooling also exist. | Run several independent 24-hour rounds on the selected candidate, resolve findings, and retain resource summaries. Publish one final 0.9.1 validation release if clean, then confirm the accepted state before the 1.0.0 public-beta decision. No fixed 30-day soak is required. |
+| Fuzzing and extended runtime | The parser fuzz targets, two-host campaign tooling, and completed ASan-backed two-host 24-hour fuzz evidence are present; `docs/two-host-fuzz-soak-campaign.md` records campaign `20260614T003811Z` with 75 fuzz services across five targets, 104,361,257,036 total runs, and no crash/leak/OOM/timeout markers. The v0.9.1 two-host campaign `bdn-v0.9.1-20260822-24h-b` is currently running all nine targets on each host with resource sampling. | Let the active campaign complete, collect and review its evidence, resolve findings, and retain the resource summaries before the 1.0.0 public-beta decision. No fixed 30-day soak is required. |
 | Release signing and package/image artifact verification | Static-binary reproducibility is recorded in `docs/reproducible-build-v0.2.0.md`; release installer/Docker packaging smoke, checksum generation, static-link reports, and read-only Docker image smoke are recorded in `docs/package-docker-smoke-v0.2.0.md`; signing policy/runbooks exist. | Sign accepted release artifacts with the chosen mechanism and attach signature verification records; add installer archive or Docker-image archive reproducibility evidence only if those artifacts are claimed reproducible. |
 | Portability and deployment matrix | Current-host portability evidence, operator deployment guide, package/Docker scripts, installer smoke tests, and dual-stack-capable probes exist. | Add release-specific per-distribution/per-architecture smoke evidence, Kubernetes/container deployment evidence if in scope, and dual-stack operational evidence before claiming full portability acceptance. |
 | Operator documentation, release notes, and sign-off | Operator guide, release-note template, RFC compliance assertions, architecture, interface compatibility policy, and project decision register exist. | Populate release notes with concrete evidence pointers, final version/tag/date, primary interop versions, RFC assertions, Appendix C.5 dispositions, interface compatibility state, signed-artifact manifest, release-time first-party Rust source line count/rationale, and role/operator sign-off. |

@@ -12,7 +12,7 @@
 | Component | BoronGun |
 | Document | Software Requirements Specification |
 | Source draft | `~/Downloads/BoronGun-SRS-v0_1_1, May 26, 2026.md` |
-| Related documents | `docs/boron-gun.md`, `docs/boron-gun-mvp-plan.md`, `docs/implemented-feature-scope.md`, `docs/unsafe-boundaries.tsv`, `docs/BoronDNS-Secondary-SRS-v0.9.1.md` |
+| Related documents | `docs/boron-gun.md`, `docs/boron-gun-mvp-plan.md`, `docs/implemented-feature-scope.md`, `docs/unsafe-boundaries.tsv`, `docs/BoronDNS-Secondary-SRS-v1.0.0.md` |
 
 ## Revision History
 

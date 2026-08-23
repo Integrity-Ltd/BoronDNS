@@ -129,7 +129,7 @@ timestamp_future_tolerance_seconds = 300
 # periodic regeneration without persisting secret material. For anycast or
 # load-balanced deployments, configure the same 32-hex-character server_secret
 # on every instance. During staged rollover, deploy the new value as
-# server_secret and the old value as previous_server_secret. Do not combine a
+# server_secret and the old value as previous_server_secret.
 # The configured server_secret is the initial secret; automatic rotation keeps
 # its use within RFC 7873's 36-day maximum lifetime.
 # server_secret = "00112233445566778899aabbccddeeff"
@@ -189,6 +189,14 @@ udp_runtime = "tokio"
 # Dedicated UDP idle behavior. "park" is the conservative default, while
 # "spin" keeps polling continuously for saturation benchmarks.
 udp_idle_strategy = "park"
+# UDP I/O backend. "standard" is the portable default; "af_xdp" requires the
+# Linux-only [xdp] settings below.
+udp_backend = "standard"
+# Optional standard-socket buffer and Linux pacing requests. Leave unset to use
+# operating-system defaults.
+#udp_socket_receive_buffer_bytes = 16777216
+#udp_socket_send_buffer_bytes = 16777216
+#udp_socket_max_pacing_rate_bytes_per_second = 0
 # Optional Linux CPU affinity list for dedicated standard UDP workers. Length
 # must match udp_reuseport_workers and requires udp_runtime = "dedicated".
 # Leave unset unless benchmark evidence justifies it.
@@ -240,6 +248,8 @@ max_transfer_resident_bytes = 68719476736
 notify_dedup_secs = 1
 # Window for rate-limited unauthorized/TSIG-failed NOTIFY warning logs. Default: 60 seconds.
 notify_log_rate_window_secs = 60
+# Maximum retained per-key NOTIFY log rate-limit entries. Default: 100000.
+notify_log_max_keys = 100000
 
 # Maximum concurrent transfer sessions. Default: 4.
 max_concurrent_transfers = 4
@@ -250,6 +260,21 @@ zsm_initial_retry_secs = 60
 zsm_initial_retry_max_secs = 3600
 # Long-LOADING warning threshold and repeat interval. Default: 3600 seconds.
 zsm_loading_warning_threshold_secs = 3600
+
+#[observability]
+# Optional detailed management API under the existing management listener.
+# Keep disabled unless the endpoint is isolated and authenticated.
+#enabled = false
+#path_prefix = "/observability/v1"
+#rate_limit_per_minute = 60
+#rate_limit_idle_seconds = 300
+#include_filesystems = true
+#include_process_resources = true
+#include_time_sync_status = true
+#include_certificate_status = true
+#include_zone_detail = true
+#include_config_summary = true
+#bearer_token_file = "/etc/borondns/observability-token"
 
 #[xdp]
 # Experimental AF_XDP backend controls. These are used only when

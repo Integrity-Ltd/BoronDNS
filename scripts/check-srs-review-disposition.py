@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
 FEATURE_SCOPE_PATH = ROOT / "docs" / "implemented-feature-scope.md"
-SRS_CURRENT_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
+SRS_CURRENT_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
 README_PATH = ROOT / "README.md"

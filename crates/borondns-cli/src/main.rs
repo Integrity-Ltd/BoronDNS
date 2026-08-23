@@ -275,7 +275,7 @@ fn default_config_path() -> PathBuf {
 
 fn version_text() -> String {
     format!(
-        "borondns {BUILD_VERSION}\nbuild commit: {BUILD_COMMIT}\nbuild timestamp: {BUILD_TIMESTAMP}\nrustc: {BUILD_RUST_VERSION}\nSRS: BoronDNS Secondary SRS v0.9.1\nRole: secondary-only authoritative DNS server\nLicense: {}",
+        "borondns {BUILD_VERSION}\nbuild commit: {BUILD_COMMIT}\nbuild timestamp: {BUILD_TIMESTAMP}\nrustc: {BUILD_RUST_VERSION}\nSRS: BoronDNS Secondary SRS v1.0.0\nRole: secondary-only authoritative DNS server\nLicense: {}",
         env!("CARGO_PKG_LICENSE")
     )
 }
@@ -1363,7 +1363,7 @@ allow_non_rfc5936_cold_start = true
         assert!(text.contains("\nbuild commit: "));
         assert!(text.contains("\nbuild timestamp: "));
         assert!(text.contains("\nrustc: rustc "));
-        assert!(text.contains("\nSRS: BoronDNS Secondary SRS v0.9.1"));
+        assert!(text.contains("\nSRS: BoronDNS Secondary SRS v1.0.0"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ remaining retirement work are tracked in
 
 Owner: this document owns implementation planning for a future cache-local
 authoritative query data plane. Normative DNS behavior remains owned by
-`docs/BoronDNS-Secondary-SRS-v0.9.1.md`; the current deferred-track boundary
+`docs/BoronDNS-Secondary-SRS-v1.0.0.md`; the current deferred-track boundary
 remains owned by `docs/future-optimization-tracks.md`; release evidence remains
 owned by the verification ledger and release evidence documents.
 

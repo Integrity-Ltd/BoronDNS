@@ -4,7 +4,7 @@ Status: Engineering MVP operator guide and formal SRS acceptance input
 
 This guide describes how to deploy and operate BoronDNS as a secondary-only
 authoritative DNS server for Engineering MVP validation and later SRS
-acceptance review. It is derived from SRS v0.9.1, the implementation plan, gap
+acceptance review. It is derived from SRS v1.0.0, the implementation plan, gap
 register, repository README, example configuration, and interoperability
 scripts.
 
@@ -47,15 +47,16 @@ Operational state boundaries:
 - BoronDNS is secondary-only. It does not provide primary service, recursive
   resolution, forwarding, dynamic update, DNSSEC signing, DNSSEC validation, or
   a runtime administration API.
-- Zone data lives in memory only. Every process start is a cold start and must
-  reacquire zones from configured primaries.
+- Query serving uses memory-resident zone images. Validated last-good snapshots
+  persist in `server.zone_cache_directory`; startup is cold only when no
+  eligible cached snapshot exists.
 - Configuration topology is static. Listener roles, static zones, catalog-zone
   definitions, transfer primary lists, policy knobs, and the configured
   secret-store root change only by process restart. `SIGHUP` is ignored.
 - Runtime key material is a narrower exception. When `[secret_store]` is
-  configured, explicit control-plane operations can reload TSIG keys and named
-  XoT profiles from that already configured filesystem root. A failed reload
-  keeps the previous validated snapshot.
+  configured, supported control-plane rotation/republish operations can reload
+  TSIG keys and named XoT profiles from that already configured filesystem
+  root. A failed reload keeps the previous validated snapshot.
 - RFC 9432 catalog members are also runtime data. The configured catalog zone is
   static, but its member-zone set is derived from transferred catalog contents
   and reconciled after successful catalog refreshes.
@@ -191,7 +192,7 @@ sudo install -d -m 0755 /etc/borondns-secondary
 sudo install -m 0640 config/borondns.example.toml /etc/borondns-secondary/config.toml
 ```
 
-Validate the config before starting service. The SRS v0.9.1 CLI mode validates
+Validate the config before starting service. The SRS v1.0.0 CLI mode validates
 the same startup configuration path without binding sockets:
 
 ```sh
@@ -229,7 +230,7 @@ When `--config` is omitted, BoronDNS reads
 `serve --config /path/to/config.toml`, remain supported and take precedence
 over the top-level path.
 
-BoronDNS also supports an SRS v0.9.1-style `BORONDNS_<SECTION>_<KEY>` environment override
+BoronDNS also supports an SRS v1.0.0-style `BORONDNS_<SECTION>_<KEY>` environment override
 subset for scalar process settings. These values take precedence over the file
 and are included in `--dump-config` output:
 
@@ -761,7 +762,7 @@ charges each retained transfer-wire byte at 256x for decoded names and records,
 indexes, builder workspace, the new image, and overlap with the prior
 generation; a rejected candidate leaves the last valid generation serving.
 
-SRS v0.9.1 still requires retained release evidence for build-info label
+SRS v1.0.0 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained
 health response-time evidence, and rate-limit behavior under
 production-representative scrape traffic. Treat those as pending until the gap
@@ -1159,7 +1160,7 @@ mode-and-ACL proof is not namespace authority.
 The canonical structured RFC compliance assertion list for the current
 Engineering MVP posture is maintained in `docs/rfc-compliance-assertions.md`.
 This guide links to that file and summarizes the operator-facing posture for
-SRS v0.9.1 `BDS-VER-014`; it intentionally does not duplicate the table.
+SRS v1.0.0 `BDS-VER-014`; it intentionally does not duplicate the table.
 Release notes must copy or generate the structured list from the canonical
 register, update evidence pointers to the release snapshot, and retain this
 primary-documentation sync pointer.
@@ -1177,7 +1178,7 @@ Current operator-facing posture:
 The gap register is the live source for remaining acceptance gaps. The
 current operator-relevant limitations are:
 
-- Current `main` is aligned to the SRS v0.9.1 requirement set, but formal SRS
+- Current `main` is aligned to the SRS v1.0.0 requirement set, but formal SRS
   acceptance still requires release-specific evidence and sign-off. The current
   evidence state is intentionally centralized in `docs/mvp-gap-register.md`,
   `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`

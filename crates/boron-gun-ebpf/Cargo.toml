@@ -2,7 +2,8 @@
 name = "boron-gun-ebpf"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-version = "0.9.1"
+version = "1.0.0"
+publish = false
 
 [lib]
 path = "src/lib.rs"

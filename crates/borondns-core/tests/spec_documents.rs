@@ -24,10 +24,7 @@ fn expected_spec_documents_are_checked_in() {
         .join("..");
 
     for path in [
-        "docs/BoronDNS-Secondary-SRS-v0.9.1.md",
-        "docs/archive/BoronDNS-Secondary-SRS-v0.1.md",
-        "docs/archive/BoronDNS-Secondary-SBVR-v0.1.md",
-        "docs/archive/BoronDNS-Secondary-SRS-v0.1-Executive-Summary.md",
+        "docs/BoronDNS-Secondary-SRS-v1.0.0.md",
     ] {
         assert!(repo_root.join(path).exists(), "missing {path}");
     }

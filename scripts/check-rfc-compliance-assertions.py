@@ -13,7 +13,7 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTER = REPO_ROOT / "docs" / "rfc-compliance-assertions.md"
-SRS = REPO_ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
+SRS = REPO_ROOT / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md"
 RELEASE_NOTES_TEMPLATE = REPO_ROOT / "docs" / "release-notes-template.md"
 
 EXPECTED_COLUMNS = [
@@ -156,8 +156,8 @@ def main() -> int:
         row = by_rfc[rfc]
         if row["Compliance status"] not in VALID_STATUSES:
             raise SystemExit(f"{rfc} has invalid compliance status")
-        if row["SRS revision"] != "SRS v0.9.1":
-            raise SystemExit(f"{rfc} is not tied to SRS v0.9.1")
+        if row["SRS revision"] != "SRS v1.0.0":
+            raise SystemExit(f"{rfc} is not tied to SRS v1.0.0")
         if not row["Evidence pointer"]:
             raise SystemExit(f"{rfc} ({feature}) lacks an evidence pointer")
         if row["Target resolution milestone"] not in {"Formal SRS MVP", "N/A"}:

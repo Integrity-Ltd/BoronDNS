@@ -1,12 +1,15 @@
 # BoronDNS Interface Compatibility Policy
 
-Status: Engineering MVP policy for `BDS-NFR-MAINT-006` and
-`BDS-IF-CONF-002`, not completed release-diff evidence.
+Status: 1.0 public-beta policy for `BDS-NFR-MAINT-006` and
+`BDS-IF-CONF-002`.
 
 BoronDNS treats externally observable interfaces as stable under semantic
 versioning. The current baseline is recorded in
 `docs/interface-stability-baseline.tsv` and checked by
 `scripts/check-interface-compatibility.py`.
+
+This product-interface policy does not make the internal Rust crates, Rust ABI,
+or private implementation modules stable public interfaces.
 
 ## Stable Surfaces
 

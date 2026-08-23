@@ -614,7 +614,8 @@ Interpretation: this post-v0.2.0-readiness campaign provides retained
 24-hour ASan evidence for the five fuzz targets that existed at campaign start.
 It remains fuzz evidence. The release decision combines it with additional
 independent 24-hour rounds and targeted resource evidence; no separate fixed
-30-day soak is required for the 1.0 public beta.
+No fixed 30-day soak is required for the 1.0 public beta; release evidence uses
+risk-selected bounded campaigns, including independent 24-hour fuzz rounds.
 
 ## Scheduling Guidance
 

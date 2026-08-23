@@ -14,7 +14,7 @@ of the old query-time `ZoneSnapshot` memory layout after `ZoneImage` becomes
 the complete production query data plane.
 
 This is an implementation tracker, not a normative DNS behavior source. DNS
-requirements remain owned by `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
+requirements remain owned by `docs/BoronDNS-Secondary-SRS-v1.0.0.md`.
 
 ## Current Summary
 

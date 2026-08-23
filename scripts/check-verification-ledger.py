@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SRS_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
+SRS_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md"
 LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
 
 ID_PATTERN = (

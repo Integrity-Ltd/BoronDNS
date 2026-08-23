@@ -3,7 +3,7 @@
 Status: implementation-supporting companion to SRS section 4.14.
 
 The normative RR type requirement is `BDS-FR-RR-001` in
-`docs/BoronDNS-Secondary-SRS-v0.9.1.md`. This document records how the current
+`docs/BoronDNS-Secondary-SRS-v1.0.0.md`. This document records how the current
 code owns that catalogue so review-driven MVP trim suggestions do not silently
 remove behavior that is already implemented and tested.
 

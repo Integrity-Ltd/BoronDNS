@@ -1,6 +1,6 @@
 # Release Evidence Guide
 
-Status: release and operations evidence runbook for the 0.9.1 validation and 1.0 public-beta gates.
+Status: release and operations evidence runbook for the 1.0 public-beta gate.
 
 This guide owns the mechanics of `scripts/release-evidence-snapshot.sh` and the
 handoff directories used by later release/operations runs. It is separate from

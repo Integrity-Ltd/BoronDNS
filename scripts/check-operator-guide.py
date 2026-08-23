@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that the Operator Deployment Guide covers required SRS v0.9.1 topics."""
+"""Check that the Operator Deployment Guide covers required SRS v1.0.0 topics."""
 
 from __future__ import annotations
 

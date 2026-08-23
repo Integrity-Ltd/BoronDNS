@@ -6,7 +6,7 @@ release notes still need retained operational evidence before formal SRS
 acceptance can claim that the whole RRL threshold profile has been reviewed for
 the accepted release.
 
-The baseline follows `docs/BoronDNS-Secondary-SRS-v0.9.1.md` section 4.17 and is
+The baseline follows `docs/BoronDNS-Secondary-SRS-v1.0.0.md` section 4.17 and is
 mirrored by `config/borondns.example.toml`.
 
 | Setting | Baseline | SRS requirement | Release-review status |

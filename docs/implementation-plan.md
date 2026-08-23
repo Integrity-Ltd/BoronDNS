@@ -1,7 +1,7 @@
 # BoronDNS Implementation Plan
 
 This plan records implementation direction and points to the milestone
-boundaries for the current BoronDNS SRS v0.9.1. It is intentionally not the
+boundaries for the current BoronDNS SRS v1.0.0. It is intentionally not the
 detailed evidence ledger, not the operator runbook, and not a substitute for the
 normative SRS.
 
@@ -26,26 +26,24 @@ comparison, and signed release artifacts may remain in the repository, but they
 are not release evidence until the generated artifacts are retained and cited by
 the gap register, release notes, or verification ledger.
 
-## Current 0.9.1 to 1.0 Sequence
+## Current 1.0 Sequence
 
-The current source version is 0.9.1, the final public validation candidate
-before version 1. The planned release sequence is deliberately short:
+The `0.9.1` validation release is published and the source is being prepared
+for `1.0.0`. The remaining release sequence is deliberately short:
 
 1. Run several independent 24-hour fuzz rounds on the selected candidate,
    including resource sampling and targeted follow-up for any changed or weak
    input family.
 2. Resolve every release-blocking finding and rerun the affected focused and
    continuous checks.
-3. Publish `0.9.1` as the final public validation build before version 1 once
-   the selected candidate gates are clean.
-4. Confirm the accepted 0.9.1 state with the selected fuzz, interoperability,
+3. Confirm the published 0.9.1 state with the selected fuzz, interoperability,
    packaging, signing, documentation, and release checks.
-5. Publish `1.0.0` as a public beta if no blocker remains and every accepted
+4. Publish `1.0.0` as a public beta if no blocker remains and every accepted
    limitation is stated in the release notes and operator documentation.
 
 The plan does not require a 30-day soak or a sequence of further prereleases.
-Optional longer soaks remain engineering tools. A blocker discovered after
-0.9.1 requires a new release decision; it does not silently weaken the 1.0 gate.
+Optional longer soaks remain engineering tools. A newly discovered blocker
+requires a release decision; it does not silently weaken the 1.0 gate.
 
 The detailed release-candidate boundary is owned by
 `docs/engineering-mvp-scope.md` and checked by the legacy-named
@@ -102,7 +100,7 @@ not the canonical inventory of every evidence script, artifact environment
 variable, release-gate command, test case, or requirement-range traceability
 row. When implementation status changes:
 
-- put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v0.9.1.md`;
+- put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v1.0.0.md`;
 - put implementation structure and unsafe-boundary changes in
   `docs/architecture.md`;
 - put operator commands and deployment examples in

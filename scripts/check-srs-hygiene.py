@@ -9,7 +9,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SRS = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
+SRS = ROOT / "docs" / "BoronDNS-Secondary-SRS-v1.0.0.md"
 REFERENCE_PROFILE = ROOT / "docs" / "reference-verification-profile.md"
 FUTURE_OPTIMIZATION_TRACKS = ROOT / "docs" / "future-optimization-tracks.md"
 RFC_TRACEABILITY_POLICY = ROOT / "docs" / "rfc-traceability-policy.md"
@@ -310,7 +310,7 @@ REQUIRED_TEXT = [
     "BoronDNS does not define a separate per-query CPU-processing timeout parameter.",
     "The formal RFC 9103 XoT profile MUST use TLS 1.3 (RFC 8446) or later.",
     "Any TLS 1.2 support retained for interoperability with legacy or experimental primaries MUST be explicitly documented as a compatibility mode and MUST NOT be presented as RFC 9103 XoT conformance.",
-    "Current Engineering MVP builds use the Rust TLS stack with TLS 1.2 enabled for compatibility testing",
+    "The production XoT client pins TLS 1.3. TLS 1.2 exists only in isolated test-peer support",
     "Compatibility-mode tests, if retained, must be separated from formal RFC 9103 evidence.",
     "This counter intentionally has no `zone` label in the current profile",
     "runtime loading of operator-supplied or configuration-specified eBPF programs is forbidden",
@@ -342,7 +342,7 @@ REQUIRED_TEXT = [
     "alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`.",
     "reviews do not remove a type from the Engineering MVP scope unless the code,",
     "It does not reproduce the §4.14 table",
-    "**Status:** Current checked-in requirements baseline for the 0.9.1 validation release and planned 1.0.0 public beta; not a claim that every BDS-VER-008 release artifact already exists",
+    "**Status:** Requirements baseline for the BoronDNS 1.0.0 public beta. Requirements identified as future full-acceptance targets are not claims of completed 1.0 release evidence.",
     "only the rule that keeps those documents synchronized.",
     "Appendix C.5 does not duplicate the decision table.",
     "The current pending subset is summarized in `docs/mvp-gap-register.md`",

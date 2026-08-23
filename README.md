@@ -38,15 +38,13 @@ are not implied unless that document names them.
 
 ## Project Status
 
-BoronDNS is now tracked as a **release-candidate secondary server**, not as a
-minimal local milestone. It is not yet a final formal SRS acceptance build: the
-remaining closeout work is tracked in the
-[SRS acceptance gap register](docs/mvp-gap-register.md). That register separates
-implemented behavior and retained evidence from the release artifacts,
-operator sign-off, and formal decisions still needed before a `BDS-VER-008`
-acceptance claim.
+BoronDNS 1.0 is the initial public release with a **public-beta support
+posture**. It is an authoritative secondary DNS server, not a claim that every
+aspirational full-SRS acceptance target is complete. Current verification
+status and explicitly retained limitations are tracked in the
+[SRS acceptance gap register](docs/mvp-gap-register.md).
 
-The current release-candidate scope is wider than a minimal static-zone
+The current public-beta scope is wider than a minimal static-zone
 secondary. Retained feature slices stay in scope exactly as bounded in
 [Implemented feature scope](docs/implemented-feature-scope.md):
 IXFR with AXFR fallback, outbound XoT transfers, passive DNSSEC serving, RRL,
@@ -58,16 +56,16 @@ names them.
 
 - New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
 - Detailed operations reference: [Operator deployment guide](docs/operator-deployment-guide.md)
-- Current release scope: [Release-candidate scope](docs/engineering-mvp-scope.md)
+- Current release scope: [Implemented feature scope](docs/implemented-feature-scope.md)
 - Retained implemented feature slices: [Implemented feature scope](docs/implemented-feature-scope.md)
 - Verification status: [Verification ledger](docs/verification-ledger.md)
-- Full requirements: [BoronDNS Secondary SRS v0.9.1](docs/BoronDNS-Secondary-SRS-v0.9.1.md)
+- Full requirements: [BoronDNS Secondary SRS v1.0.0](docs/BoronDNS-Secondary-SRS-v1.0.0.md)
 - External SRS review handling: [SRS review disposition](docs/srs-review-disposition.md)
 
 ## Quick Local Commands
 
 Requires a Rust toolchain; `rust-toolchain.toml` selects the channel automatically
-via rustup (MSRV is `1.95`). See
+via rustup (pinned toolchain `1.96.1`; declared MSRV `1.95`). See
 [DevOps getting started](docs/devops-getting-started.md) for full setup and release
 builds. Each line below is an independent mode, not a sequence:
 
@@ -108,6 +106,8 @@ path/to/config.toml`, remain supported and take precedence.
   very large AXFR, NSEC3, mixed-record, and RRset tests.
 
 The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
+The crates are implementation components of the binary release and are not
+published as stable crates.io libraries; their Rust APIs and ABI are internal.
 
 ## Documentation Map
 
@@ -129,7 +129,6 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [Release notes template](docs/release-notes-template.md)
-- [v0.2.0 release notes draft](docs/release-notes-v0.2.0-draft.md)
 - [Specification document index](docs/README.md)
 
 ## License

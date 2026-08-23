@@ -4,7 +4,7 @@ Status: measured and implemented decision, 2026-07-18.
 
 This note closes the three optimization proposals reviewed in July 2026. It is
 an implementation decision record, not a DNS behavior specification. The
-normative behavior remains in `BoronDNS-Secondary-SRS-v0.9.1.md`, and exact
+normative behavior remains in `BoronDNS-Secondary-SRS-v1.0.0.md`, and exact
 capacity limits remain in `zone-image-capacity-limits.md`.
 
 ## Final Disposition
