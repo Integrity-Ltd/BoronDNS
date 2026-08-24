@@ -111,6 +111,26 @@
     }
 
     #[test]
+    fn notify_is_not_acknowledged_when_refresh_admission_fails() {
+        let packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = match answer_message_with_notify_hooks(
+            &packet,
+            &store,
+            AnswerOptions::default(),
+            |_, _| true,
+            |_, _, _| false,
+        ) {
+            DatagramAction::Respond(response) => response,
+            DatagramAction::Discard => panic!("admission failure must receive a retryable error"),
+        };
+
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+    }
+
+    #[test]
     fn notify_with_nonzero_reserved_request_flags_is_ignored() {
         for invalid_bits in [0x0200u16, 0x0100, 0x0080, 0x0040, 0x0020, 0x0010, 0x0001] {
             let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
@@ -125,7 +145,10 @@
                 &store,
                 AnswerOptions::default(),
                 |_, _| true,
-                |_, _, _| accepted.set(true),
+                |_, _, _| {
+                    accepted.set(true);
+                    true
+                },
             );
 
             assert_eq!(action, DatagramAction::Discard, "invalid bits {invalid_bits:#06x}");
@@ -196,7 +219,10 @@
             &store,
             AnswerOptions::default(),
             |_, _| true,
-            |_, _, serial| observed.set(serial),
+            |_, _, serial| {
+                observed.set(serial);
+                true
+            },
         ) {
             DatagramAction::Respond(response) => response,
             DatagramAction::Discard => panic!("expected NOTIFY response"),
@@ -298,7 +324,10 @@
             &store,
             AnswerOptions::default(),
             |_, _| true,
-            |_, _, serial| observed.set(serial),
+            |_, _, serial| {
+                observed.set(serial);
+                true
+            },
         ) {
             DatagramAction::Respond(response) => response,
             DatagramAction::Discard => panic!("expected NOTIFY response"),

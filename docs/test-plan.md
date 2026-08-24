@@ -158,8 +158,9 @@ per-epoch duplicate PIDs and aggregate mismatches, and retain same-PID reuse
 across later epochs as valid evidence.
 
 The repository also contains a tag-push/workflow-dispatch release workflow. It
-runs `scripts/check.sh` as a blocking Continuous gate, then acts as artifact publication automation
-for a named release by building and smoking the
+does not run `scripts/check.sh`; the release engineer must run and retain that
+gate against the candidate commit before creating the tag. The workflow acts as
+artifact publication automation for a named release by building and smoking the
 `x86_64-unknown-linux-musl` installer archive, raw static `borondns` binary,
 raw static XDP-enabled `boron-gun` binary, and Docker image archive; it is not
 the standing Continuous gate unless the release
@@ -300,7 +301,10 @@ regression must not proceed.
 ## Release Notes Inputs
 
 `docs/release-notes-template.md` is the required release-note structure. The
-release-note gate checks that the release notes include:
+release-note gate checks that the release notes include the following. This is
+a pre-tag/manual evidence gate in the current release process: the tag workflow
+generates shorter asset-publication notes and does not invoke
+`scripts/check-release-notes.sh`.
 
 - per-requirement-category counts for Verified, Deferred, and Failed, including
   the `BDS-VER` verification-requirement category;

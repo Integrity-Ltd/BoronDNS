@@ -24,6 +24,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let accepted = |qname: &DomainName, qclass: u16, serial: Option<u32>| {
         black_box((qname, qclass, serial));
+        true
     };
 
     let _ = answer_message_with_notify_hooks(data, zones, options, authorized, accepted);
@@ -42,6 +43,7 @@ fuzz_target!(|data: &[u8]| {
         },
         |qname, qclass, serial| {
             black_box((qname, qclass, serial));
+            true
         },
     );
     if let DatagramAction::Respond(response) = action {

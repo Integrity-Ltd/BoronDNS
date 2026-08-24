@@ -407,6 +407,8 @@ fn run_udp_notify_reload_case(
         .expect("sign UDP NOTIFY before reload");
     let mut settings = udp_settings_for_test(RuntimeMetrics::new(), RrlConfig::default());
     settings.notify_authority = authority.clone();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel(1);
+    settings.notify_refresh_tx = notify_tx;
     let hook = || {
         write_notify_secret_manifest_with_algorithm(&root, "second.b64", rotated_algorithm);
         secrets.reload().expect("reload UDP NOTIFY secret");
@@ -492,6 +494,7 @@ async fn run_tcp_notify_reload_case(rotated_secret: &str, expect_response: bool)
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel(1);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         handle_tcp_connection_with_query_hook(
@@ -516,7 +519,7 @@ async fn run_tcp_notify_reload_case(rotated_secret: &str, expect_response: bool)
             cookie_prefix_metrics_for_test(),
             authority,
             NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
-            notify_refresh_tx(),
+            notify_tx,
             notify_log_limiter_for_test(),
             RuntimeMetrics::new(),
             "127.0.0.1".parse().unwrap(),

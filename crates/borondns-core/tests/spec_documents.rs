@@ -23,9 +23,6 @@ fn expected_spec_documents_are_checked_in() {
         .join("..")
         .join("..");
 
-    for path in [
-        "docs/BoronDNS-Secondary-SRS-v1.0.0.md",
-    ] {
-        assert!(repo_root.join(path).exists(), "missing {path}");
-    }
+    let path = "docs/BoronDNS-Secondary-SRS-v1.0.0.md";
+    assert!(repo_root.join(path).exists(), "missing {path}");
 }

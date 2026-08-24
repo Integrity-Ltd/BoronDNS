@@ -1033,11 +1033,11 @@ fn observability_preflight(
     headers: &HeaderMap,
     state: &HealthEndpointState,
 ) -> Option<Response> {
-    if let Err(error) = state.observability_auth.authorize(headers) {
-        return Some(observability_auth_error_response(error));
-    }
     if let Err(retry_after_seconds) = state.observability_rate_limiter.check(source) {
         return Some(rate_limited_response(retry_after_seconds));
+    }
+    if let Err(error) = state.observability_auth.authorize(headers) {
+        return Some(observability_auth_error_response(error));
     }
     None
 }
@@ -1915,11 +1915,21 @@ fn append_response_cache_candidate_metrics(body: &mut String, metrics: &RuntimeM
 }
 
 fn latency_bucket_label(bucket: f64) -> String {
-    let formatted = format!("{bucket:.5}");
-    formatted
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_owned()
+    bucket.to_string()
+}
+
+#[cfg(test)]
+mod latency_bucket_label_tests {
+    use super::latency_bucket_label;
+
+    #[test]
+    fn sub_microsecond_histogram_bounds_keep_distinct_prometheus_labels() {
+        assert_ne!(
+            latency_bucket_label(0.000001),
+            latency_bucket_label(0.000002)
+        );
+        assert_ne!(latency_bucket_label(0.000009), "0");
+    }
 }
 
 fn append_configuration_warning_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {

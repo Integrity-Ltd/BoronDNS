@@ -1553,8 +1553,18 @@ required_fragments = [
         server_text,
     ),
     (
-        "runtime publishes shared transfer snapshot and consumes cached metadata",
-        "zones.insert_snapshot_arc_for_transfer(snapshot.clone())",
+        "runtime prepares transfer snapshot off the async worker and outside the publication critical section",
+        "prepare_zone_publication(zones, snapshot.clone()).await",
+        server_text,
+    ),
+    (
+        "zone-image preparation uses the blocking worker pool",
+        "tokio::task::spawn_blocking(operation)",
+        server_text,
+    ),
+    (
+        "runtime atomically commits durable state and publishes the prepared snapshot",
+        ".publish_prepared_snapshot_for_transfer(",
         server_text,
     ),
 ]
@@ -5108,8 +5118,10 @@ if "zones.insert_snapshot(snapshot.clone())" in refresh_text:
     refresh_clone_failures.append("AXFR updated path clones full transferred snapshot before publication")
 if ".if_current_plan(plan, ||" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not guard transfer publication on current transfer-plan ownership")
-if "zones.insert_snapshot_arc_for_transfer(snapshot.clone())" not in refresh_text:
-    refresh_clone_failures.append("refresh updated path does not consume cached metadata returned by shared Arc transfer publication")
+if "prepare_zone_publication(zones, snapshot.clone()).await" not in refresh_text:
+    refresh_clone_failures.append("refresh updated path does not prepare the shared snapshot off the async worker before entering the publication critical section")
+if ".publish_prepared_snapshot_for_transfer(" not in refresh_text:
+    refresh_clone_failures.append("refresh updated path does not consume cached metadata returned by transactional prepared publication")
 if "let serial = snapshot.serial;" in refresh_text:
     refresh_clone_failures.append("refresh updated path still reads completion serial from the old snapshot layout")
 if "let serial = metadata.serial;" not in refresh_text:

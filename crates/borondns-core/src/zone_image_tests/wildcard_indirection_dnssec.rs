@@ -74,6 +74,59 @@
     }
 
     #[test]
+    fn overlay_dependency_set_includes_wildcard_and_positive_rrsig_answer_items() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let wildcard = DomainName::from_absolute_str("*.example.test.").unwrap();
+        let qname = DomainName::from_absolute_str("host.example.test.").unwrap();
+        let image = ZoneImage::compile(&ZoneSnapshot::active(
+            origin.clone(),
+            Some(45),
+            vec![
+                Rrset::new(
+                    origin,
+                    RecordType::Soa as u16,
+                    1,
+                    600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    wildcard.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 45]],
+                ),
+                Rrset::new(
+                    wildcard.clone(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+            ],
+        ))
+        .expect("signed wildcard image compiles");
+        let wildcard_id = image
+            .find_rrset(&wildcard, RecordType::A as u16, 1)
+            .expect("wildcard A exists");
+        let rrsig_id = image
+            .find_rrset(&wildcard, RecordType::Rrsig as u16, 1)
+            .expect("wildcard RRSIG exists");
+        let plan = image.lookup_response_plan(
+            &qname,
+            RecordType::A as u16,
+            1,
+            DEFAULT_MAX_CNAME_CHAIN,
+            AnyResponseMode::Minimal,
+        );
+        let plan = image.augment_lookup_plan_with_dnssec(plan, &qname, 1, 100);
+        let referenced = plan.referenced_rrsets().collect::<Vec<_>>();
+
+        assert!(referenced.contains(&wildcard_id));
+        assert!(referenced.contains(&rrsig_id));
+    }
+
+    #[test]
     fn wildcard_non_target_rrsets_skip_additional_planning() {
         let snapshot = semantic_snapshot();
         let image = ZoneImage::compile(&snapshot).expect("zone image compiles");

@@ -2928,6 +2928,63 @@ allow_non_rfc5936_cold_start = true
 }
 
 #[tokio::test]
+async fn udp_invalid_tsig_errors_are_subject_to_rrl() {
+    let zones = active_example_zone();
+    let metrics = RuntimeMetrics::new();
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+allow_non_rfc5936_cold_start = true
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+                allow_non_rfc9210_single_transport = true
+
+                [[tsig_keys]]
+                name = "query-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "query-key."
+            "#,
+    )
+    .unwrap();
+    let key = TsigKey::from_base64("query-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+    let mut invalid = key
+        .sign_request(
+            &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+            current_unix_time(),
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap()
+        .message;
+    invalid[31] ^= 1;
+    let mut settings = udp_settings_for_test(
+        metrics.clone(),
+        RrlConfig {
+            positive_per_second: 0,
+            error_per_second: 1,
+            slip: 0,
+            ..RrlConfig::default()
+        },
+    );
+    settings.notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let peer = "192.0.2.1:53000".parse().unwrap();
+
+    let first = handle_udp_datagram_with_prepared_hook(&invalid, peer, &zones, &settings, &|| {})
+        .expect("initial burst response");
+    assert_eq!(response_category(&first.response), Some(RrlCategory::Error));
+    assert!(
+        handle_udp_datagram_with_prepared_hook(&invalid, peer, &zones, &settings, &|| {}).is_none()
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rrl_subject, 2);
+    assert_eq!(snapshot.rrl_dropped, 1);
+}
+
+#[tokio::test]
 async fn udp_tsig_does_not_apply_configured_padding_on_plaintext_transport() {
     let zones = active_example_zone();
     let metrics = RuntimeMetrics::new();

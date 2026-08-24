@@ -616,7 +616,17 @@ impl FileSecretStore {
         // Own the bytes under Zeroizing before the first read so I/O errors,
         // invalid UTF-8, size rejection, and TOML parse failures all scrub the
         // allocation on exit.
-        let mut manifest_bytes = Zeroizing::new(Vec::new());
+        let manifest_capacity = bounded_secret_read_capacity(
+            manifest_file
+                .metadata()
+                .map_err(|source| SecretStoreError::ReadManifest {
+                    path: manifest_path.display().to_string(),
+                    source,
+                })?
+                .len(),
+            MAX_SECRET_STORE_MANIFEST_BYTES,
+        );
+        let mut manifest_bytes = Zeroizing::new(Vec::with_capacity(manifest_capacity));
         manifest_file
             .by_ref()
             .take((MAX_SECRET_STORE_MANIFEST_BYTES + 1) as u64)
@@ -725,6 +735,12 @@ impl FileSecretStore {
         }
         Ok(snapshot_budget.consumed)
     }
+}
+
+fn bounded_secret_read_capacity(file_bytes: u64, maximum_bytes: usize) -> usize {
+    usize::try_from(file_bytes)
+        .unwrap_or(maximum_bytes.saturating_add(1))
+        .min(maximum_bytes.saturating_add(1))
 }
 
 impl SecretStore for FileSecretStore {
@@ -1223,8 +1239,17 @@ fn read_store_file_bounded(
                 source,
             })?;
     validate_store_file(&file, &path, sensitivity)?;
-    let mut bytes = Zeroizing::new(Vec::new());
     let read_limit = MAX_SECRET_STORE_MATERIAL_BYTES.min(remaining_bytes);
+    let capacity = bounded_secret_read_capacity(
+        file.metadata()
+            .map_err(|source| SecretStoreError::ReadSecretFile {
+                path: path.clone(),
+                source,
+            })?
+            .len(),
+        read_limit,
+    );
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
     file.by_ref()
         .take(read_limit.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
@@ -1268,7 +1293,9 @@ fn read_store_file_with_material_budgets(
     snapshot_budget.ensure_fits(&path, metadata_len)?;
     let remaining = profile_budget.remaining().min(snapshot_budget.remaining());
     let read_limit = MAX_SECRET_STORE_MATERIAL_BYTES.min(remaining);
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(
+        metadata_len.min(read_limit.saturating_add(1)),
+    ));
     file.by_ref()
         .take(read_limit.saturating_add(1) as u64)
         .read_to_end(&mut bytes)

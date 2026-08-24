@@ -198,6 +198,7 @@ struct DenialIndexes {
     nsec: PersistentOrderIndex<NsecOrderKey>,
     nsec3: PersistentOrderIndex<Nsec3OrderKey>,
     nsec3_param_counts: Arc<HashMap<(u16, Nsec3Params), u32>>,
+    broken: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1209,6 +1210,23 @@ impl ZoneSnapshot {
         let nxdomain_candidate =
             lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
         let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &lookup);
+        if self.denial_indexes.broken
+            && (nodata_candidate || nxdomain_candidate || wildcard_candidate)
+        {
+            return (
+                LookupResult {
+                    rcode: Rcode::ServFail,
+                    authoritative: false,
+                    answers: Vec::new(),
+                    authorities: Vec::new(),
+                    additionals: Vec::new(),
+                    termination: lookup.termination,
+                    nsec3_iterations_exceeded: false,
+                },
+                false,
+                false,
+            );
+        }
         let authorities =
             self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_state);
         let authorities = self.add_nodata_nsec_augmentations(
@@ -2571,6 +2589,7 @@ impl DenialIndexes {
         for (key, rrset) in rrsets.iter() {
             indexes.insert_rrset(key, rrset, origin);
         }
+        indexes.broken = dnssec_denial_chain_broken(rrsets, origin);
         indexes
     }
 
@@ -2584,15 +2603,17 @@ impl DenialIndexes {
             return Self::build(current, origin);
         }
         let mut indexes = self.clone();
+        let mut denial_changed = false;
         for (old_shard, current_shard) in previous.shards.iter().zip(&current.shards) {
             if Arc::ptr_eq(old_shard, current_shard) {
                 continue;
             }
             for (key, old_rrset) in old_shard.iter() {
-                if !is_denial_rr_type(old_rrset.rr_type) {
+                if !is_denial_validation_type(old_rrset.rr_type) {
                     continue;
                 }
                 if current_shard.get(key) != Some(old_rrset) {
+                    denial_changed = true;
                     indexes.remove_rrset(key, old_rrset, origin);
                     if let Some(new_rrset) = current_shard.get(key) {
                         indexes.insert_rrset(key, new_rrset, origin);
@@ -2600,10 +2621,14 @@ impl DenialIndexes {
                 }
             }
             for (key, rrset) in current_shard.iter() {
-                if is_denial_rr_type(rrset.rr_type) && !old_shard.contains_key(key) {
+                if is_denial_validation_type(rrset.rr_type) && !old_shard.contains_key(key) {
+                    denial_changed = true;
                     indexes.insert_rrset(key, rrset, origin);
                 }
             }
+        }
+        if denial_changed {
+            indexes.broken = dnssec_denial_chain_broken(current, origin);
         }
         indexes
     }
@@ -2712,8 +2737,83 @@ impl DenialIndexes {
     }
 }
 
+fn dnssec_denial_chain_broken(rrsets: &ShardedRrsets, origin: &DomainName) -> bool {
+    let mut nsec = BTreeMap::<u16, Vec<(Vec<u8>, Vec<Vec<u8>>)>>::new();
+    let mut nsec3 = BTreeMap::<(u16, Nsec3Params), Vec<(String, Vec<String>)>>::new();
+    let mut nsec3_params = Vec::<(u16, Nsec3Params)>::new();
+
+    for rrset in rrsets.values() {
+        if rrset.rr_type == RecordType::Nsec as u16 {
+            let next = rrset
+                .rdatas
+                .iter()
+                .filter_map(|rdata| DomainName::parse(rdata, 0).ok())
+                .map(|(name, _)| canonical_order_key(&name))
+                .collect::<Vec<_>>();
+            nsec.entry(rrset.class)
+                .or_default()
+                .push((canonical_order_key(&rrset.owner), next));
+        } else if rrset.rr_type == RecordType::Nsec3 as u16 {
+            let Some(owner_hash) = nsec3_owner_hash_label(&rrset.owner, origin) else {
+                return true;
+            };
+            for rdata in &rrset.rdatas {
+                let Some(params) = nsec3_params_from_rdata(rdata) else {
+                    return true;
+                };
+                let Some(next_hash) = nsec3_next_hash_label(rdata) else {
+                    return true;
+                };
+                nsec3
+                    .entry((rrset.class, params))
+                    .or_default()
+                    .push((owner_hash.clone(), vec![next_hash]));
+            }
+        } else if rrset.rr_type == RecordType::Nsec3Param as u16 {
+            for rdata in &rrset.rdatas {
+                let Some(params) = nsec3param_params_from_rdata(rdata) else {
+                    return true;
+                };
+                nsec3_params.push((rrset.class, params));
+            }
+        }
+    }
+
+    for entries in nsec.values_mut() {
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        for index in 0..entries.len() {
+            let next_owner = &entries[(index + 1) % entries.len()].0;
+            if !entries[index].1.iter().any(|next| next == next_owner) {
+                return true;
+            }
+        }
+    }
+
+    for entries in nsec3.values_mut() {
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        for index in 0..entries.len() {
+            let next_owner = &entries[(index + 1) % entries.len()].0;
+            if !entries[index].1.iter().any(|next| next == next_owner) {
+                return true;
+            }
+        }
+    }
+
+    if nsec3_params.is_empty() {
+        false
+    } else {
+        nsec3_params
+            .iter()
+            .any(|params| !nsec3.contains_key(params))
+    }
+}
+
 fn is_denial_rr_type(rr_type: u16) -> bool {
     rr_type == RecordType::Nsec as u16 || rr_type == RecordType::Nsec3 as u16
+}
+
+fn is_denial_validation_type(rr_type: u16) -> bool {
+    is_denial_rr_type(rr_type) || rr_type == RecordType::Nsec3Param as u16
 }
 
 fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
@@ -3142,6 +3242,15 @@ struct ZoneStoreEntry {
     incarnation: u64,
 }
 
+/// A fully compiled transfer candidate tied to the exact zone entry it would
+/// replace. Publication can therefore reject a stale candidate before an
+/// associated durable-cache commit action runs.
+pub struct PreparedZonePublication {
+    key: String,
+    expected: Option<Arc<ZoneStoreEntry>>,
+    entry: Arc<ZoneStoreEntry>,
+}
+
 impl Default for ZoneStore {
     fn default() -> Self {
         Self {
@@ -3440,6 +3549,65 @@ impl ZoneStore {
     ) -> Result<ZoneMetadata, ZoneImageBuildError> {
         self.try_replace_snapshot(snapshot, false)
             .map(|entry| entry.control_metadata())
+    }
+
+    /// Compile a transfer snapshot without holding the publication lock.
+    pub fn prepare_snapshot_arc_for_transfer(
+        &self,
+        snapshot: Arc<ZoneSnapshot>,
+    ) -> Result<PreparedZonePublication, ZoneImageBuildError> {
+        let key = snapshot.origin.canonical_key();
+        let expected = self.zones.load().get(&key).cloned();
+        let hidden = expected.as_ref().is_some_and(|entry| entry.hidden);
+        let incarnation = expected
+            .as_ref()
+            .map(|entry| entry.incarnation)
+            .unwrap_or_else(|| self.allocate_incarnation());
+        let entry = Arc::new(ZoneStoreEntry::try_new_replacing(
+            key.clone(),
+            snapshot,
+            hidden,
+            incarnation,
+            expected.as_deref(),
+            self.publication_policy,
+        )?);
+        Ok(PreparedZonePublication {
+            key,
+            expected,
+            entry,
+        })
+    }
+
+    /// If the candidate still replaces the entry observed during preparation,
+    /// run the caller's durable commit and publish without another fallible
+    /// zone-image build. `None` means the candidate became obsolete and the
+    /// commit action was not called.
+    pub fn publish_prepared_snapshot_for_transfer<E>(
+        &self,
+        prepared: PreparedZonePublication,
+        commit: impl FnOnce() -> Result<(), E>,
+    ) -> Option<Result<ZoneMetadata, E>> {
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        let still_current = match (&prepared.expected, current.get(&prepared.key)) {
+            (Some(expected), Some(actual)) => Arc::ptr_eq(expected, actual),
+            (None, None) => true,
+            _ => false,
+        };
+        if !still_current {
+            return None;
+        }
+        if let Err(error) = commit() {
+            return Some(Err(error));
+        }
+        let metadata = prepared.entry.control_metadata();
+        let mut next = self.clone_directory_for_publication(current.as_ref());
+        next.insert(prepared.key, prepared.entry);
+        self.zones.store(Arc::new(next));
+        Some(Ok(metadata))
     }
 
     /// Publish a fully revalidated persisted snapshot during startup while
@@ -6195,6 +6363,47 @@ mod tests {
 
         assert_eq!(lowercase_key, mixed_case_key);
         assert_eq!(lowercase_prefixes, mixed_case_prefixes);
+    }
+
+    #[test]
+    fn prepared_transfer_publication_rejects_replaced_zone_before_commit_action() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = |serial| {
+            ZoneSnapshot::active(
+                origin.clone(),
+                Some(serial),
+                vec![Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                )],
+            )
+        };
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot(1));
+        let prepared = store
+            .prepare_snapshot_arc_for_transfer(Arc::new(snapshot(2)))
+            .unwrap();
+        store.insert_snapshot(snapshot(3));
+
+        let mut commit_called = false;
+        let published = store.publish_prepared_snapshot_for_transfer(prepared, || {
+            commit_called = true;
+            Ok::<_, ()>(())
+        });
+
+        assert!(published.is_none());
+        assert!(!commit_called);
+        assert_eq!(
+            store
+                .exact_snapshot_for_transfer(&origin)
+                .unwrap()
+                .metadata()
+                .serial,
+            Some(3)
+        );
     }
 
     fn soa_rdata() -> Vec<u8> {

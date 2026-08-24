@@ -311,7 +311,7 @@ fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
 
 fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
     let mut config =
-        ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
+        ServerConfig::parse_path(path).with_context(|| format!("loading {}", path.display()))?;
     let override_report =
         apply_environment_overrides(&mut config).context("applying environment overrides")?;
     if let Err(error) = config.validate() {

@@ -1521,7 +1521,7 @@ raise SystemExit(64)
             # full shell gate has just saturated a CI runner with shellcheck.
             # This is only the fixture-start observation window; production
             # command and cleanup deadlines remain unchanged and bounded.
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while not (state / "hung").exists() and process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.02)
             if not (state / "hung").exists():

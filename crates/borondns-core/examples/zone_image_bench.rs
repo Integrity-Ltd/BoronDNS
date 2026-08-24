@@ -2628,7 +2628,7 @@ fn zone_image_packet_response_with_options(
         store,
         options,
         |_, _| true,
-        |_, _, _| {},
+        |_, _, _| true,
         |_| {},
         provider,
     ) {

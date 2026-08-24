@@ -56,6 +56,46 @@ allow_non_rfc5936_cold_start = true
 }
 
 #[test]
+fn validate_config_rejects_missing_observability_token_file_before_serve() {
+    let missing = unique_temp_path("missing-observability-token", "secret");
+    let config = write_config(
+        "validate-observability-token",
+        &format!(
+            r#"
+            [server]
+allow_non_rfc5936_cold_start = true
+            allow_non_rfc9210_single_transport = true
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+
+            [observability]
+            enabled = true
+            bearer_token_file = "{}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            "#,
+            missing.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run borondns --validate-config");
+
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("observability bearer token"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn validate_config_counts_dns_interface_listeners() {
     let config = write_config(
         "dns-interface-count",
@@ -1130,6 +1170,36 @@ fn checked_in_example_config_validates_and_preserves_three_interface_shape() {
         "checked-in example config should pass check-config, stderr={}",
         String::from_utf8_lossy(&check.stderr)
     );
+}
+
+#[test]
+fn zone_cache_environment_override_is_applied_before_validation() {
+    let config = write_config(
+        "zone-cache-env-override",
+        r#"
+[server]
+listen_udp = ["127.0.0.1:5300"]
+
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+"#,
+    );
+    let cache = config.with_extension("zone-cache");
+    let validate = Command::new(env!("CARGO_BIN_EXE_borondns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .env("BORONDNS_SERVER_ZONE_CACHE_DIRECTORY", &cache)
+        .output()
+        .expect("validate configuration rescued by zone-cache environment override");
+
+    assert!(
+        validate.status.success(),
+        "environment override must be applied before validation, stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let _ = fs::remove_file(config);
 }
 
 #[test]

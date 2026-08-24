@@ -981,6 +981,71 @@ fn incomplete_nsec_chain_fails_closed_for_dnssec_denial() {
     assert!(response_authority_types(&response).is_empty());
 }
 
+#[test]
+fn ixfr_overlay_with_incomplete_nsec_chain_fails_closed() {
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let anchor = DomainName::from_absolute_str("a.example.test.").unwrap();
+    let base = ZoneSnapshot::active(
+        apex.clone(),
+        Some(1),
+        vec![
+            Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("a.example.test.")],
+            ),
+            Rrset::new(
+                anchor.clone(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("example.test.")],
+            ),
+        ],
+    );
+    let store = ZoneStore::with_publication_policy(crate::zone::ZonePublicationPolicy {
+        strategy: crate::zone::ZonePublicationStrategy::Sharded,
+        sharded_rrset_threshold: 1,
+        ..crate::zone::ZonePublicationPolicy::default()
+    });
+    store.insert_snapshot(base.clone());
+    store.insert_snapshot(base.with_cow_rrset_replacements(
+        2,
+        vec![(
+            anchor.canonical_key(),
+            RecordType::Nsec as u16,
+            1,
+            Some(Rrset::new(
+                anchor,
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("missing-link.example.test.")],
+            )),
+        )],
+    ));
+    let mut packet = query(
+        b"\x07missing\x07example\x04test\x00",
+        RecordType::A as u16,
+        1,
+    );
+    append_opt(&mut packet, 4096, 0x8000, &[]);
+
+    let response = store_response(&packet, &store);
+
+    assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+    assert!(response_authority_types(&response).is_empty());
+}
+
 fn transition_denial_response(include_nsec3param: bool) -> Vec<u8> {
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let anchor = DomainName::from_absolute_str("anchor.example.test.").unwrap();
@@ -1179,7 +1244,7 @@ fn nsec3_iterations_over_cap_response(
             ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
         },
         |_, _| true,
-        |_, _, _| {},
+        |_, _, _| true,
         |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
         &default_zone_image_provider,
     );
@@ -1227,7 +1292,7 @@ fn zone_image_serving_handles_dnssec_nsec3_ede_cap() {
         &store,
         options,
         |_, _| true,
-        |_, _, _| {},
+        |_, _, _| true,
         |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
         &default_zone_image_provider,
     );

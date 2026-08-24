@@ -173,8 +173,10 @@ and slowly diverging.
 
 ## Release Templates
 
-- `release-notes-template.md`: release-note structure and acceptance checklist
-  shape.
+- `release-notes-template.md`: candidate verification-note structure and
+  acceptance checklist shape. These checked notes are a pre-tag evidence
+  artifact; the current tag workflow emits separate concise asset-publication
+  notes.
 
 The planning and evidence documents are companion working artifacts. They remain
 subordinate to the current SRS v1.0.0 requirement set when scope or behavioral

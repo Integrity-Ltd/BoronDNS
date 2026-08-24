@@ -639,7 +639,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=
+StateDirectory=borondns
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/borondns
 KillSignal=SIGTERM
 TimeoutStopSec=35s
 
@@ -658,9 +660,12 @@ Notes:
   non-cooperative task cannot extend the configured process shutdown window.
 - The process handles SIGTERM and SIGINT for graceful shutdown, ignores SIGHUP,
   and sets SIGPIPE to ignored at startup. Do not rely on SIGHUP for reload.
-- Because BoronDNS writes no operational state, read-only root filesystems and
-  strict service sandboxes are expected deployment shapes. Ensure configured
-  config, TSIG, and TLS files remain readable by the service user. The
+- BoronDNS writes mandatory last-good zone snapshots and small freshness
+  sidecars beneath `[server].zone_cache_directory`; keep that directory on
+  durable storage writable by the service user. The example above matches the
+  example configuration's `/var/lib/borondns/zones` path while retaining a
+  read-only root filesystem. Ensure configured config, TSIG, and TLS files
+  remain readable by the service user. The
   `scripts/audit-readonly-runtime.sh` evidence harness runs the service with a
   non-writable `TMPDIR`, confirms it does not spawn child processes, records
   thread count, and can retain optional syscall tracing artifacts when `strace`

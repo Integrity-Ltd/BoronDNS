@@ -993,7 +993,9 @@ pub fn answer_message_with_notify_authority(
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
 ) -> DatagramAction {
-    answer_message_with_notify_hooks(packet, zone_store, options, notify_authorized, |_, _, _| {})
+    answer_message_with_notify_hooks(packet, zone_store, options, notify_authorized, |_, _, _| {
+        true
+    })
 }
 
 pub fn answer_message_with_notify_hooks(
@@ -1001,7 +1003,7 @@ pub fn answer_message_with_notify_hooks(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>) -> bool,
 ) -> DatagramAction {
     answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
@@ -1020,7 +1022,7 @@ pub fn answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>) -> bool,
     lookup_observed: impl Fn(LookupMetrics),
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
@@ -1044,7 +1046,7 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>) -> bool,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
@@ -1700,18 +1702,35 @@ fn try_answer_across_published_zone_images(
     initial_image: &ZoneImage,
     initial_plan: ZoneImageLookupPlan,
 ) -> Option<ZoneImageAnswerAttempt> {
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "boxing the zone-image plan would add a heap allocation to cross-zone query serving"
+    )]
+    enum CrossZoneStage {
+        Image(PublishedZone, ZoneImageLookupPlan),
+        Snapshot(LookupResult),
+    }
+
     let (first_target, first_remaining) = initial_plan.indirection_continuation()?;
     let mut target = first_target.clone();
     let mut remaining = first_remaining;
     let mut current_origin_key = initial_published_zone.origin_key().to_owned();
     let mut visited_names = HashSet::from([question.qname.canonical_key()]);
-    let mut child_stages = Vec::<(PublishedZone, ZoneImageLookupPlan)>::new();
+    let mut child_stages = Vec::<CrossZoneStage>::new();
     let dnssec_requested = metadata.dnssec_requested();
 
     loop {
         if !visited_names.insert(target.canonical_key()) {
-            if let Some((_, plan)) = child_stages.last_mut() {
-                plan.set_servfail(LookupTermination::CnameLoop);
+            if let Some(stage) = child_stages.last_mut() {
+                match stage {
+                    CrossZoneStage::Image(_, plan) => {
+                        plan.set_servfail(LookupTermination::CnameLoop);
+                    }
+                    CrossZoneStage::Snapshot(lookup) => {
+                        lookup.rcode = Rcode::ServFail;
+                        lookup.termination = Some(LookupTermination::CnameLoop);
+                    }
+                }
             } else {
                 return Some(ZoneImageAnswerAttempt::Failure(
                     ZoneImageServeFailureReason::ResponseBuildFailed,
@@ -1727,6 +1746,46 @@ fn try_answer_across_published_zone_images(
             || published_zone.origin_key() == current_origin_key
         {
             break;
+        }
+
+        if published_zone.has_incremental_overlay() {
+            let mut lookup = published_zone.active_snapshot_ref().lookup_with_options(
+                &target,
+                question.qtype,
+                question.qclass,
+                remaining,
+                options.any_response,
+            );
+            if dnssec_requested {
+                (lookup, _, _) = published_zone
+                    .active_snapshot_ref()
+                    .augment_lookup_result_with_dnssec(
+                        lookup,
+                        &target,
+                        question.qtype,
+                        question.qclass,
+                        options.nsec3_max_iterations,
+                    );
+            }
+            let continuation = lookup.answers.last().and_then(|record| {
+                (record.rr_type == RecordType::Cname as u16)
+                    .then(|| DomainName::parse(&record.rdata, 0).ok())
+                    .flatten()
+                    .filter(|(_, consumed)| *consumed == record.rdata.len())
+                    .map(|(name, _)| name)
+                    .filter(|next| {
+                        !next.is_equal_or_subdomain_of(published_zone.origin()) && remaining > 1
+                    })
+                    .map(|next| (next, remaining - 1))
+            });
+            current_origin_key = published_zone.origin_key().to_owned();
+            child_stages.push(CrossZoneStage::Snapshot(lookup));
+            let Some((next_target, next_remaining)) = continuation else {
+                break;
+            };
+            target = next_target;
+            remaining = next_remaining;
+            continue;
         }
 
         let image = zone_image_provider(&published_zone);
@@ -1750,7 +1809,7 @@ fn try_answer_across_published_zone_images(
             .indirection_continuation()
             .map(|(next_target, next_remaining)| (next_target.clone(), next_remaining));
         current_origin_key = published_zone.origin_key().to_owned();
-        child_stages.push((published_zone, plan));
+        child_stages.push(CrossZoneStage::Image(published_zone, plan));
         let Some((next_target, next_remaining)) = continuation else {
             break;
         };
@@ -1773,19 +1832,31 @@ fn try_answer_across_published_zone_images(
         ));
     }
 
-    for (index, (published_zone, plan)) in child_stages.iter().enumerate() {
-        let image = zone_image_provider(published_zone);
+    for (index, stage) in child_stages.iter().enumerate() {
         let is_final = index + 1 == child_stages.len();
-        let converted = if is_final {
-            append_zone_image_plan_sections(
-                image,
-                plan,
-                &mut answers,
-                &mut authorities,
-                &mut additionals,
-            )
-        } else {
-            append_zone_image_plan_answers(image, plan, &mut answers)
+        let converted = match stage {
+            CrossZoneStage::Image(published_zone, plan) => {
+                let image = zone_image_provider(published_zone);
+                if is_final {
+                    append_zone_image_plan_sections(
+                        image,
+                        plan,
+                        &mut answers,
+                        &mut authorities,
+                        &mut additionals,
+                    )
+                } else {
+                    append_zone_image_plan_answers(image, plan, &mut answers)
+                }
+            }
+            CrossZoneStage::Snapshot(lookup) => {
+                answers.extend(lookup.answers.iter().cloned());
+                if is_final {
+                    authorities.extend(lookup.authorities.iter().cloned());
+                    additionals.extend(lookup.additionals.iter().cloned());
+                }
+                true
+            }
         };
         if !converted {
             return Some(ZoneImageAnswerAttempt::Failure(
@@ -1794,11 +1865,12 @@ fn try_answer_across_published_zone_images(
         }
     }
 
-    let (_, final_plan) = child_stages.last().expect("non-empty child stages");
+    let final_stage = child_stages.last().expect("non-empty child stages");
     if initial_plan.nsec3_iterations_exceeded()
-        || child_stages
-            .iter()
-            .any(|(_, plan)| plan.nsec3_iterations_exceeded())
+        || child_stages.iter().any(|stage| match stage {
+            CrossZoneStage::Image(_, plan) => plan.nsec3_iterations_exceeded(),
+            CrossZoneStage::Snapshot(lookup) => lookup.nsec3_iterations_exceeded,
+        })
     {
         metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
     }
@@ -1816,7 +1888,10 @@ fn try_answer_across_published_zone_images(
 
     let response = build_response(
         header,
-        final_plan.rcode(),
+        match final_stage {
+            CrossZoneStage::Image(_, plan) => plan.rcode(),
+            CrossZoneStage::Snapshot(lookup) => lookup.rcode,
+        },
         initial_plan.authoritative(),
         Some(question),
         &answers,
@@ -1825,7 +1900,10 @@ fn try_answer_across_published_zone_images(
         metadata,
         options,
     );
-    query_observer.observe_zone_image_plan(final_plan, false);
+    match final_stage {
+        CrossZoneStage::Image(_, plan) => query_observer.observe_zone_image_plan(plan, false),
+        CrossZoneStage::Snapshot(lookup) => query_observer.observe_snapshot_lookup(lookup),
+    }
     Some(ZoneImageAnswerAttempt::Respond(response))
 }
 
@@ -2094,7 +2172,7 @@ fn answer_notify_message(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: &impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: &impl Fn(&DomainName, u16, Option<u32>),
+    notify_accepted: &impl Fn(&DomainName, u16, Option<u32>) -> bool,
 ) -> DatagramAction {
     const NOTIFY_ALLOWED_REQUEST_FLAGS: u16 = 0x7800 | 0x0400;
     if header.flags & !NOTIFY_ALLOWED_REQUEST_FLAGS != 0 {
@@ -2226,7 +2304,19 @@ fn answer_notify_message(
         return DatagramAction::Discard;
     }
 
-    notify_accepted(&question.qname, question.qclass, notify_soa_serial);
+    if !notify_accepted(&question.qname, question.qclass, notify_soa_serial) {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::ServFail,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
 
     DatagramAction::Respond(build_response(
         header,

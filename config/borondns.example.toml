@@ -78,6 +78,10 @@ latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01
 # "reduced" keeps coarse hot-path counters while skipping mutex-backed detail.
 # "off" additionally suppresses the coarse hot-path counters; saturation/benchmark only.
 hot_path_detail = "full"
+# Maximum source prefixes retained by DNS Cookie detail metrics. This bound is
+# independent from rrl.max_keys so RRL tuning cannot inflate scrape cardinality.
+# Range: 1..65536. Default: 4096.
+dns_cookie_prefix_max_keys = 4096
 # Disabled by default. Enable only for benchmark captures that need pipeline
 # stage timings or response-cache candidacy counters.
 pipeline_timing_enabled = false
@@ -125,8 +129,8 @@ nsec3_max_iterations = 100
 policy = "lenient"
 timestamp_past_tolerance_seconds = 3600
 timestamp_future_tolerance_seconds = 300
-# 0 keeps the secret for the process lifetime; non-zero enables in-process
-# periodic regeneration without persisting secret material. For anycast or
+# The interval enables in-process periodic regeneration without persisting
+# secret material and must be between 1 second and 36 days. For anycast or
 # load-balanced deployments, configure the same 32-hex-character server_secret
 # on every instance. During staged rollover, deploy the new value as
 # server_secret and the old value as previous_server_secret.
@@ -189,9 +193,9 @@ udp_runtime = "tokio"
 # Dedicated UDP idle behavior. "park" is the conservative default, while
 # "spin" keeps polling continuously for saturation benchmarks.
 udp_idle_strategy = "park"
-# UDP I/O backend. "standard" is the portable default; "af_xdp" requires the
+# UDP I/O backend. "std" is the portable default; "af_xdp" requires the
 # Linux-only [xdp] settings below.
-udp_backend = "standard"
+udp_backend = "std"
 # Optional standard-socket buffer and Linux pacing requests. Leave unset to use
 # operating-system defaults.
 #udp_socket_receive_buffer_bytes = 16777216

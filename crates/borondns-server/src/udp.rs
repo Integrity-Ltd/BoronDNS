@@ -30,6 +30,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(feature = "af-xdp")]
 use crate::af_xdp;
+use crate::rate_limit::rrl_truncated_response;
 use crate::{
     CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore, NotifyAuthority,
     NotifyLogLimiter, NotifyRefreshTracker, QueryLatencyCategory, QueryPipelineStage,
@@ -1484,18 +1485,6 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     let tsig_udp_ceiling = request_udp_payload_ceiling(&prepared.packet, settings.max_udp_payload)
         .unwrap_or_else(|| usize::from(settings.max_udp_payload.min(512)));
     let parse_duration = parse_started.map(|started| started.elapsed());
-    if let Some(response) = prepared.immediate_response {
-        return Some(UdpOutbound {
-            response,
-            target: UdpPacketTarget::Socket(peer),
-            query_metrics: None,
-            #[cfg(feature = "af-xdp")]
-            benchmark_fixed_response: false,
-        });
-    }
-    if let Some(prepared_hook) = prepared_hook {
-        prepared_hook();
-    }
     let parsed_header = Header::parse(&prepared.packet).ok();
     let parsed_question = parsed_header
         .as_ref()
@@ -1536,6 +1525,32 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         settings.cookie_prefix_metrics,
         &settings.metrics,
     );
+    if let Some(mut response) = prepared.immediate_response {
+        if response.len() > tsig_udp_ceiling {
+            response = rrl_truncated_response(&response);
+        }
+        let response = match settings.rrl.apply(peer_ip, response) {
+            RrlDecision::Send(response) => response,
+            RrlDecision::Drop => return None,
+        };
+        record_query_response_metric(&query_metrics, &response, &settings.metrics);
+        record_response_cache_metric(
+            &query_metrics,
+            &response,
+            &settings.metrics,
+            query_cache_ineligible,
+        );
+        return Some(UdpOutbound {
+            response,
+            target: UdpPacketTarget::Socket(peer),
+            query_metrics: query_metrics.is_query.then_some(query_metrics),
+            #[cfg(feature = "af-xdp")]
+            benchmark_fixed_response: false,
+        });
+    }
+    if let Some(prepared_hook) = prepared_hook {
+        prepared_hook();
+    }
     let chaos = ChaosOptions {
         version: &settings.chaos_version,
         hostname: &settings.chaos_hostname,

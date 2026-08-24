@@ -216,6 +216,9 @@ pub enum IxfrError {
     #[error("IXFR response difference sequence does not chain SOA serials correctly")]
     BrokenSoaChain,
 
+    #[error("IXFR response serial does not advance under RFC 1982 arithmetic")]
+    SerialNotForward,
+
     #[error("IXFR response tried to delete a record that is not present")]
     DeleteAbsentRecord,
 
@@ -946,6 +949,10 @@ fn parse_ixfr_incremental_delta_parts(
     validate_current_soa(outer_soa, zone_apex, qclass).map_err(|_| IxfrError::MissingInitialSoa)?;
     let old_serial = soa_serial(&current_soa.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
     let new_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+    let serial_distance = new_serial.wrapping_sub(old_serial);
+    if serial_distance == 0 || serial_distance >= (1u32 << 31) {
+        return Err(IxfrError::SerialNotForward);
+    }
     let mut expected_old_soa = current_soa.clone();
     let mut sequences = Vec::new();
     let mut affected_rrsets = BTreeSet::new();
@@ -3673,6 +3680,56 @@ mod tests {
                 ("example.test.".to_owned(), RecordType::Soa as u16, 1),
             ]
         );
+    }
+
+    #[test]
+    fn ixfr_rejects_serial_that_is_not_forward_under_rfc1982() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let old_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(10),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(9),
+        );
+
+        let error = parse_ixfr_incremental_delta(
+            &apex,
+            1,
+            &old_soa,
+            &[new_soa.clone(), old_soa.clone(), new_soa.clone(), new_soa],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, IxfrError::SerialNotForward);
+    }
+
+    #[test]
+    fn ixfr_accepts_rfc1982_serial_wraparound() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let old_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(u32::MAX),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(0),
+        );
+
+        let delta = parse_ixfr_incremental_delta(
+            &apex,
+            1,
+            &old_soa,
+            &[new_soa.clone(), old_soa.clone(), new_soa.clone(), new_soa],
+        )
+        .unwrap();
+
+        assert_eq!(delta.new_serial(), 0);
     }
 
     #[test]

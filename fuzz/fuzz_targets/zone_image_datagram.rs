@@ -41,6 +41,7 @@ fn exercise_packet(packet: &[u8], options: AnswerOptions<'_>) -> DatagramAction 
         },
         |qname, qclass, serial| {
             black_box((qname, qclass, serial));
+            true
         },
         |metrics| {
             black_box(metrics);

@@ -6090,19 +6090,34 @@ if not decimal.Decimal("0") < bounded <= decimal.Decimal("1"):
     raise SystemExit("cycle sleep was not bounded by the remaining campaign deadline")
 PY
 provenance_guard_evidence="$workdir/provenance-guard"
+provenance_guard_log="$workdir/provenance-guard.log"
+provenance_guard_repo="$workdir/provenance-guard-repo"
+mkdir -m 0700 "$provenance_guard_repo"
+printf 'clean\n' >"$provenance_guard_repo/tracked"
+git -C "$provenance_guard_repo" init -q
+git -C "$provenance_guard_repo" add tracked
+git -C "$provenance_guard_repo" -c user.name=Test -c user.email=test@example.invalid \
+    commit -qm fixture
+printf 'dirty\n' >"$provenance_guard_repo/tracked"
 if (
     # shellcheck disable=SC2030
-    expected_commit="$(git -C "$repo_root" rev-parse HEAD)"
+    repo_root="$provenance_guard_repo"
+    expected_commit="$(git -C "$provenance_guard_repo" rev-parse HEAD)"
     evidence_dir="$provenance_guard_evidence"
     scenario_names=(must_not_run)
     scenario_scripts=(scripts/does-not-exist.sh)
     scenario_env_vars=(MUST_NOT_RUN_ARTIFACTS)
     run_scenario 1 0 1
-); then
+) 2>"$provenance_guard_log"; then
     printf 'scenario execution accepted a dirty expected-commit checkout\n' >&2
     exit 1
 fi
-[[ ! -e "$provenance_guard_evidence" ]]
+if ! grep -Fq "soak repository became dirty before evidence execution: $provenance_guard_repo" \
+    "$provenance_guard_log"; then
+    printf 'dirty provenance fixture failed for an unexpected reason:\n' >&2
+    cat "$provenance_guard_log" >&2
+    exit 1
+fi
 execution_deadline_now="$(monotonic_nanoseconds)"
 execution_deadline_nanoseconds=$((execution_deadline_now + 4000000000))
 execution_timeout="$(scenario_timeout_within_campaign 300 \
@@ -6116,8 +6131,12 @@ set -e
 ended_nanoseconds="$(monotonic_nanoseconds)"
 elapsed=$((ended_nanoseconds - started))
 [[ "$timeout_status" -ne 0 ]]
-((elapsed <= 4000000000))
-((ended_nanoseconds < execution_deadline_nanoseconds))
+# Process termination is bounded by the absolute deadline. Allow only a small
+# scheduler/observation margin for the parent shell to regain control and read
+# CLOCK_BOOTTIME after timeout has reaped the process group.
+execution_observation_tolerance_nanoseconds=250000000
+((elapsed <= 4000000000 + execution_observation_tolerance_nanoseconds))
+((ended_nanoseconds <= execution_deadline_nanoseconds + execution_observation_tolerance_nanoseconds))
 read -r fixture_pid fixture_child <"$workdir/timeout-artifact/pids"
 for pid in "$fixture_pid" "$fixture_child"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -9981,7 +10000,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'case "${1:-}" in' \
     'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.1\"}]}" ;;' \
     'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == boron-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
-    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"boron-gun\"}}}" >"$fixture_root/crates/boron-gun/boron-gun_bin.cdx.json" ;;' \
+    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"boron-gun\"}}}" >"$fixture_root/crates/boron-gun/boron-gun_bin.cdx.json"; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"boron-gen\"}}}" >"$fixture_root/crates/boron-gen/boron-gen_bin.cdx.json" ;;' \
     '*) exit 95 ;;' \
     'esac' >"$package_fake_bin/cargo"
 # shellcheck disable=SC2016
@@ -10726,7 +10745,8 @@ package_clean_target="$workdir/package-clean-target"
 package_clean_docker_input="$workdir/package-clean-docker-input"
 package_clean_cargo_log="$workdir/package-clean-cargo.log"
 mkdir -p "$package_dirty_repo/scripts" "$package_dirty_repo/config" \
-    "$package_dirty_repo/crates/borondns-cli" "$package_dirty_repo/crates/boron-gun" "$package_clean_dist" \
+    "$package_dirty_repo/crates/borondns-cli" "$package_dirty_repo/crates/boron-gun" \
+    "$package_dirty_repo/crates/boron-gen" "$package_clean_dist" \
     "$package_clean_target" "$package_clean_docker_input"
 cp "$repo_root/scripts/package-common.sh" "$repo_root/scripts/package-installer.sh" \
     "$repo_root/scripts/package-docker-image.sh" "$repo_root/scripts/package-sbom.sh" \
@@ -10740,7 +10760,7 @@ git -C "$package_dirty_repo" init -q
 git -C "$package_dirty_repo" add .
 git -C "$package_dirty_repo" -c user.name=Test -c user.email=test@example.invalid commit -qm fixture
 
-# cargo-cyclonedx writes two fixed workspace placeholders. TERM/HUP at either
+# cargo-cyclonedx writes three fixed workspace placeholders. TERM/HUP at each
 # create/map/ownership boundary must remove every inode the current SBOM run
 # claimed, without touching any pre-existing path.
 # shellcheck disable=SC2329 # Exported fault-injection hook used by child Bash.
@@ -10749,13 +10769,14 @@ package_owned_file_transition_hook() {
     case "${PACKAGE_SBOM_PLACEHOLDER_SIGNAL:?}" in
     first) [[ "$2" == */crates/borondns-cli/borondns_bin.cdx.json ]] || return 0 ;;
     second) [[ "$2" == */crates/boron-gun/boron-gun_bin.cdx.json ]] || return 0 ;;
+    third) [[ "$2" == */crates/boron-gen/boron-gen_bin.cdx.json ]] || return 0 ;;
     *) return 90 ;;
     esac
     kill -TERM "$BASHPID"
     kill -HUP "$BASHPID"
 }
 export -f package_owned_file_transition_hook
-for package_sbom_placeholder_signal in first second; do
+for package_sbom_placeholder_signal in first second third; do
     package_sbom_signal_dist="$workdir/package-sbom-placeholder-$package_sbom_placeholder_signal"
     package_sbom_signal_repo="$workdir/package-sbom-placeholder-repo-$package_sbom_placeholder_signal"
     cp -a "$package_dirty_repo" "$package_sbom_signal_repo"
@@ -10773,13 +10794,14 @@ for package_sbom_placeholder_signal in first second; do
     [[ "$package_sbom_signal_status" == 143 ]]
     [[ ! -e "$package_sbom_signal_repo/crates/borondns-cli/borondns_bin.cdx.json" ]]
     [[ ! -e "$package_sbom_signal_repo/crates/boron-gun/boron-gun_bin.cdx.json" ]]
+    [[ ! -e "$package_sbom_signal_repo/crates/boron-gen/boron-gen_bin.cdx.json" ]]
     mapfile -t package_sbom_signal_quarantines < <(find "$package_sbom_signal_repo/.git" \
         -type f -name '*_bin.cdx.json.borondns-remove.*' -print)
-    if [[ "$package_sbom_placeholder_signal" == first ]]; then
-        ((${#package_sbom_signal_quarantines[@]} == 1))
-    else
-        ((${#package_sbom_signal_quarantines[@]} == 2))
-    fi
+    case "$package_sbom_placeholder_signal" in
+    first) ((${#package_sbom_signal_quarantines[@]} == 1)) ;;
+    second) ((${#package_sbom_signal_quarantines[@]} == 2)) ;;
+    third) ((${#package_sbom_signal_quarantines[@]} == 3)) ;;
+    esac
     [[ -z "$(find "$package_sbom_signal_dist" -mindepth 1 -maxdepth 1 \
         -name '*.sbom-package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 done
@@ -11136,6 +11158,7 @@ fi
 # owned generator invocation must be removed on failure.
 package_generated_borondns="$package_dirty_repo/crates/borondns-cli/borondns_bin.cdx.json"
 package_generated_boron_gun="$package_dirty_repo/crates/boron-gun/boron-gun_bin.cdx.json"
+package_generated_boron_gen="$package_dirty_repo/crates/boron-gen/boron-gen_bin.cdx.json"
 printf 'operator CycloneDX sentinel\n' >"$package_generated_borondns"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_DIST_DIR="$workdir/package-preexisting-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
@@ -11152,7 +11175,7 @@ grep -Fqx 'operator CycloneDX sentinel' "$package_generated_borondns"
 rm "$package_generated_borondns"
 
 # Generated cargo-cyclonedx paths remain hostile pathname boundaries after the
-# tool returns. Cleanup must remove only the two captured output inodes, never a
+# tool returns. Cleanup must remove only the three captured output inodes, never a
 # same-UID replacement planted after capture.
 package_sbom_swap_env="$workdir/package-sbom-swap-env.sh"
 cat >"$package_sbom_swap_env" <<'EOF'
@@ -11175,7 +11198,7 @@ fi
 grep -Fqx 'generated SBOM replacement victim' "$package_generated_borondns"
 test -f "$package_generated_borondns.original"
 rm -f -- "$package_generated_borondns" "$package_generated_borondns.original" \
-    "$package_generated_boron_gun"
+    "$package_generated_boron_gun" "$package_generated_boron_gen"
 
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     BORONDNS_DIST_DIR="$workdir/package-failed-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
@@ -11185,14 +11208,15 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     printf 'SBOM builder accepted a partial cargo-cyclonedx generation\n' >&2
     exit 1
 fi
-[[ ! -e "$package_generated_borondns" && ! -e "$package_generated_boron_gun" ]]
+[[ ! -e "$package_generated_borondns" && ! -e "$package_generated_boron_gun" &&
+    ! -e "$package_generated_boron_gen" ]]
 package_dirty_git_root="$(git -C "$package_dirty_repo" rev-parse --absolute-git-dir)"
 mapfile -t package_failed_sbom_retained_lines < <(
     grep -F 'logical removal retained an identity-bound quarantine for privileged/manual reconciliation: path=' \
         "$workdir/package-failed-sbom.log" |
         grep -F "path=$package_dirty_git_root/."
 )
-((${#package_failed_sbom_retained_lines[@]} == 2))
+((${#package_failed_sbom_retained_lines[@]} == 3))
 for package_failed_sbom_retained_line in "${package_failed_sbom_retained_lines[@]}"; do
     package_failed_sbom_retained_path="${package_failed_sbom_retained_line#*path=}"
     package_failed_sbom_retained_path="${package_failed_sbom_retained_path%% identity=*}"

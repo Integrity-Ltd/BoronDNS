@@ -14,7 +14,7 @@ use std::{
 use borondns_core::{
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, DatagramAction, DnsCookieRequestStatus,
-        DomainName, ExtendedDnsErrorsMode, Header, Question, Transport, ZoneImageProvider,
+        DomainName, ExtendedDnsErrorsMode, Header, Question, Rcode, Transport, ZoneImageProvider,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
         chaos_query_observation_from_parsed, default_zone_image_provider,
         dns_cookie_request_status,
@@ -24,7 +24,7 @@ use borondns_core::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch},
     task::JoinSet,
 };
 use tracing::{debug, info, warn};
@@ -71,6 +71,8 @@ where
     tokio::pin!(graceful_stop);
 
     loop {
+        let capacity_available = settings.capacity_available.notified();
+        tokio::pin!(capacity_available);
         // Completed JoinSet entries retain their task allocation until joined.
         // Drain every completion already ready before polling accept so a
         // continuously readable listener cannot grow an unbounded completed
@@ -89,6 +91,8 @@ where
             tokio::select! {
                 biased;
                 () = &mut graceful_stop => break,
+                () = &mut capacity_available => {}
+                () = tokio::time::sleep(Duration::from_millis(10)) => {}
                 completed = connections.join_next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = completed {
                         warn!(%local_addr, %error, "TCP connection task failed");
@@ -130,6 +134,7 @@ where
             peer.ip(),
             settings.max_connections,
             settings.max_connections_per_source,
+            settings.capacity_available.clone(),
         ) {
             Ok(permit) => permit,
             Err(TcpConnectionLimitExceeded::Global) => {
@@ -286,12 +291,14 @@ pub(crate) struct TcpServerSettings {
     pub(crate) metrics: RuntimeMetrics,
     pub(crate) active_connections: Arc<AtomicUsize>,
     pub(crate) active_connections_by_source: TcpSourceConnectionCounts,
+    pub(crate) capacity_available: Arc<Notify>,
 }
 
 struct TcpConnectionPermit {
     active: Arc<AtomicUsize>,
     source_counts: Option<TcpSourceConnectionCounts>,
     peer_ip: IpAddr,
+    capacity_available: Arc<Notify>,
 }
 
 pub(crate) type TcpSourceConnectionCounts = Arc<Mutex<HashMap<IpAddr, usize>>>;
@@ -307,6 +314,7 @@ pub(crate) type TcpQueryHook =
 impl Drop for TcpConnectionPermit {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::Release);
+        self.capacity_available.notify_one();
         let Some(source_counts) = &self.source_counts else {
             return;
         };
@@ -329,6 +337,7 @@ fn try_acquire_tcp_connection_slot(
     peer_ip: IpAddr,
     limit: usize,
     source_limit: Option<usize>,
+    capacity_available: Arc<Notify>,
 ) -> Result<TcpConnectionPermit, TcpConnectionLimitExceeded> {
     active
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
@@ -343,6 +352,7 @@ fn try_acquire_tcp_connection_slot(
         let source_active = counts.get(&peer_ip).copied().unwrap_or(0);
         if source_active >= source_limit {
             active.fetch_sub(1, Ordering::Release);
+            capacity_available.notify_one();
             return Err(TcpConnectionLimitExceeded::Source {
                 active: source_active,
                 limit: source_limit,
@@ -353,12 +363,14 @@ fn try_acquire_tcp_connection_slot(
             active,
             source_counts: Some(source_counts.clone()),
             peer_ip,
+            capacity_available,
         })
     } else {
         Ok(TcpConnectionPermit {
             active,
             source_counts: None,
             peer_ip,
+            capacity_available,
         })
     }
 }
@@ -829,6 +841,9 @@ async fn handle_tcp_packet(
         if let (Some(hook), Some(query_id)) = (&query_hook, query_id) {
             hook(query_id).await;
         }
+        let Some(response) = frameable_tcp_response(&prepared.packet, response) else {
+            return;
+        };
         let _ = response_tx
             .send(TcpResponse {
                 response,
@@ -940,6 +955,9 @@ async fn handle_tcp_packet(
             );
         }
         DatagramAction::Respond(response) => {
+            let Some(response) = frameable_tcp_response(&prepared.packet, response) else {
+                return;
+            };
             record_chaos_query_if_observed(
                 chaos_observation.as_ref(),
                 &response,
@@ -955,7 +973,8 @@ async fn handle_tcp_packet(
                 cookie_prefix_metrics,
             );
             record_query_response_metric(&query_metrics, &response, &metrics);
-            let response = match sign_tsig_response(response, prepared.response_tsig) {
+            let response_tsig = prepared.response_tsig;
+            let mut response = match sign_tsig_response(response, response_tsig.clone()) {
                 Ok(response) => response,
                 Err(error) => {
                     warn!(
@@ -967,6 +986,24 @@ async fn handle_tcp_packet(
                     return;
                 }
             };
+            if response.len() > usize::from(u16::MAX) {
+                let Some(fallback) = tcp_servfail_response(&prepared.packet) else {
+                    return;
+                };
+                response = match sign_tsig_response(fallback, response_tsig) {
+                    Ok(response) if response.len() <= usize::from(u16::MAX) => response,
+                    Ok(_) => return,
+                    Err(error) => {
+                        warn!(
+                            %peer_ip,
+                            transport = "tcp",
+                            %error,
+                            "failed to sign oversized-response SERVFAIL"
+                        );
+                        return;
+                    }
+                };
+            }
             record_response_cache_metric(
                 &query_metrics,
                 &response,
@@ -1052,6 +1089,19 @@ fn frame_dns_tcp_message(message: &[u8]) -> Result<Vec<u8>, RuntimeError> {
     framed.extend_from_slice(&len.to_be_bytes());
     framed.extend_from_slice(message);
     Ok(framed)
+}
+
+fn tcp_servfail_response(request: &[u8]) -> Option<Vec<u8>> {
+    let header = Header::parse(request).ok()?;
+    crate::basic_error_response(request, &header, Rcode::ServFail)
+}
+
+fn frameable_tcp_response(request: &[u8], response: Vec<u8>) -> Option<Vec<u8>> {
+    if response.len() <= usize::from(u16::MAX) {
+        Some(response)
+    } else {
+        tcp_servfail_response(request)
+    }
 }
 
 #[cfg(test)]
@@ -1266,6 +1316,7 @@ mod tests {
             metrics: RuntimeMetrics::new(),
             active_connections,
             active_connections_by_source: Arc::new(Mutex::new(HashMap::new())),
+            capacity_available: Arc::new(Notify::new()),
         }
     }
 
@@ -1283,6 +1334,20 @@ mod tests {
 
         assert_eq!(&framed[..2], &4u16.to_be_bytes());
         assert_eq!(&framed[2..], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn oversized_tcp_answer_is_replaced_with_servfail() {
+        let query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x04test\x00\x00\x01\x00\x01";
+        let response = vec![0u8; usize::from(u16::MAX) + 1];
+
+        let replacement = frameable_tcp_response(query, response).expect("SERVFAIL response");
+        let header = Header::parse(&replacement).unwrap();
+
+        assert!(replacement.len() <= usize::from(u16::MAX));
+        assert_eq!(header.id, 0x1234);
+        assert_eq!(header.flags & 0x000f, Rcode::ServFail as u16);
+        assert_eq!(header.qdcount, 1);
     }
 
     #[tokio::test]

@@ -50,6 +50,7 @@ allow_non_rfc5936_cold_start = true
     assert_eq!(config.metrics.hot_path_detail, MetricsHotPathDetail::Full);
     assert!(!config.metrics.pipeline_timing_enabled);
     assert!(!config.metrics.zone_shape_enabled);
+    assert_eq!(config.metrics.dns_cookie_prefix_max_keys, 4096);
     assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
     assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
     assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
@@ -136,6 +137,57 @@ allow_non_rfc5936_cold_start = true
             53
         )))]
     );
+}
+
+#[test]
+fn dns_cookie_metric_cardinality_is_independent_from_rrl_capacity() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+[server]
+allow_non_rfc5936_cold_start = true
+listen_udp = ["127.0.0.1:5300"]
+
+[rrl]
+max_keys = 10000000
+
+[metrics]
+dns_cookie_prefix_max_keys = 2048
+
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+"#,
+    )
+    .expect("independent metric cardinality config");
+
+    assert_eq!(config.rrl.max_keys, 10_000_000);
+    assert_eq!(config.metrics.dns_cookie_prefix_max_keys, 2048);
+}
+
+#[test]
+fn rejects_unbounded_dns_cookie_metric_cardinality() {
+    for value in [0, 65_537] {
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+[server]
+allow_non_rfc5936_cold_start = true
+listen_udp = ["127.0.0.1:5300"]
+
+[metrics]
+dns_cookie_prefix_max_keys = {value}
+
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+"#
+        ))
+        .expect_err("cookie-prefix metric limit must stay bounded");
+        assert!(
+            error
+                .to_string()
+                .contains("metrics.dns_cookie_prefix_max_keys")
+        );
+    }
 }
 
 #[test]
@@ -1014,6 +1066,34 @@ allow_non_rfc5936_cold_start = true
 }
 
 #[test]
+fn warns_when_management_http_is_bound_beyond_loopback() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+[server]
+allow_non_rfc5936_cold_start = true
+listen_udp = ["127.0.0.1:5300"]
+
+[interfaces]
+mgmt = ["0.0.0.0:8080"]
+
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+"#,
+    )
+    .expect("public management bind remains an explicit operator choice");
+
+    let warning = config
+        .configuration_warnings()
+        .into_iter()
+        .find(|warning| warning.code == "management_listener_non_loopback")
+        .expect("public management bind warning");
+    assert_eq!(warning.parameter, "interfaces.mgmt");
+    assert!(warning.message.contains("/metrics"));
+    assert!(warning.message.contains("plain HTTP"));
+}
+
+#[test]
 fn rejects_invalid_srs_interface_roles() {
     for (label, config, expected) in [
         (
@@ -1345,6 +1425,7 @@ allow_non_rfc5936_cold_start = true
                 policy = "disabled"
 
                 [rrl]
+                enabled = false
                 allowlist = ["0.0.0.0/0", "::/0"]
 
                 [limits]
@@ -1374,6 +1455,7 @@ allow_non_rfc5936_cold_start = true
         .collect::<Vec<_>>();
 
     assert!(codes.contains(&"dns_cookies_disabled"));
+    assert!(codes.contains(&"rrl_disabled"));
     assert_eq!(
         codes
             .iter()

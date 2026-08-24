@@ -30,6 +30,90 @@ fn answers_positive_rrset_from_active_zone() {
 }
 
 #[test]
+fn cross_zone_cname_uses_current_target_overlay() {
+    let source_origin = DomainName::from_absolute_str("source.test.").unwrap();
+    let alias = DomainName::from_absolute_str("alias.source.test.").unwrap();
+    let target_origin = DomainName::from_absolute_str("target.test.").unwrap();
+    let target = DomainName::from_absolute_str("www.target.test.").unwrap();
+    let target_base = ZoneSnapshot::active(
+        target_origin.clone(),
+        Some(1),
+        vec![
+            Rrset::new(
+                target_origin,
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                target.clone(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![vec![192, 0, 2, 1]],
+            ),
+        ],
+    );
+    let store = ZoneStore::with_publication_policy(crate::zone::ZonePublicationPolicy {
+        strategy: crate::zone::ZonePublicationStrategy::Sharded,
+        sharded_rrset_threshold: 1,
+        ..crate::zone::ZonePublicationPolicy::default()
+    });
+    store.insert_snapshot(ZoneSnapshot::active(
+        source_origin.clone(),
+        Some(1),
+        vec![
+            Rrset::new(
+                source_origin,
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                alias,
+                RecordType::Cname as u16,
+                1,
+                300,
+                vec![target.to_wire()],
+            ),
+        ],
+    ));
+    store.insert_snapshot(target_base.clone());
+    store.insert_snapshot(target_base.with_cow_rrset_replacements(
+        2,
+        vec![(
+            target.canonical_key(),
+            RecordType::A as u16,
+            1,
+            Some(Rrset::new(
+                target,
+                RecordType::A as u16,
+                1,
+                300,
+                vec![vec![198, 51, 100, 2]],
+            )),
+        )],
+    ));
+
+    let response = store_response(
+        &query(
+            b"\x05alias\x06source\x04test\x00",
+            RecordType::A as u16,
+            1,
+        ),
+        &store,
+    );
+
+    assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+    assert_eq!(
+        response_answer_rdatas(&response, RecordType::A as u16),
+        vec![vec![198, 51, 100, 2]]
+    );
+}
+
+#[test]
 fn incremental_overlay_matches_fresh_compact_publication_for_dirty_and_clean_names() {
     let origin = DomainName::from_absolute_str("example.test.").unwrap();
     let unchanged = DomainName::from_absolute_str("unchanged.example.test.").unwrap();
@@ -372,7 +456,7 @@ fn signed_overlay_reuses_clean_compact_plan_and_falls_back_for_dirty_dependencie
                 &overlay_store,
                 AnswerOptions::default(),
                 |_, _| true,
-                |_, _, _| {},
+                |_, _, _| true,
                 |metrics| observed.set(Some(metrics)),
                 &default_zone_image_provider,
             ) {
@@ -609,7 +693,7 @@ fn zone_image_reuses_rejected_direct_plan_for_generic_response() {
         &store,
         options,
         |_, _| true,
-        |_, _, _| {},
+        |_, _, _| true,
         |lookup| observed.set(Some(lookup)),
         &default_zone_image_provider,
     ) {
@@ -1243,7 +1327,7 @@ fn zone_image_serving_handles_dnssec_do_queries() {
             &store,
             AnswerOptions::default(),
             |_, _| true,
-            |_, _, _| {},
+            |_, _, _| true,
             |metrics| observed.set(Some(metrics)),
             &default_zone_image_provider,
         ) {
@@ -1634,7 +1718,7 @@ fn zone_image_serving_uses_provider_for_full_any_query() {
             &store,
             options,
             |_, _| true,
-            |_, _, _| {},
+            |_, _, _| true,
             |metrics| observed.set(Some(metrics)),
             &default_zone_image_provider,
         ) {
@@ -1687,7 +1771,7 @@ fn zone_image_serving_uses_provider_for_non_any_query_in_full_any_mode() {
             &store,
             options,
             |_, _| true,
-            |_, _, _| {},
+            |_, _, _| true,
             |metrics| observed.set(Some(metrics)),
             &default_zone_image_provider,
         ) {
@@ -1729,7 +1813,7 @@ fn zone_image_serving_truncates_without_snapshot_fallback_when_udp_ceiling_requi
             &store,
             options,
             |_, _| true,
-            |_, _, _| {},
+            |_, _, _| true,
             |metrics| observed.set(Some(metrics)),
             &default_zone_image_provider,
         ) {

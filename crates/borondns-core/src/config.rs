@@ -65,6 +65,7 @@ pub const MAX_XOT_TLS_MATERIAL_BYTES_PER_SNAPSHOT: usize = 64 * 1024 * 1024;
 /// Prometheus histograms normally use fewer than twenty; 64 retains ample
 /// tuning freedom while bounding per-category counter arrays and scrape work.
 pub const MAX_LATENCY_HISTOGRAM_BUCKETS: usize = 64;
+pub const MAX_DNS_COOKIE_PREFIX_METRIC_KEYS: usize = 65_536;
 /// Default number of health/observability HTTP connections accepted across
 /// all management listeners. Admission happens before `accept`, so this is
 /// also the exact maximum number of accepted health connection descriptors.
@@ -226,14 +227,29 @@ pub struct ConfigWarning {
 
 impl ServerConfig {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let config = Self::parse_path(path)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Parses configuration without validating cross-field requirements.
+    ///
+    /// Startup callers that support environment overrides must apply them and
+    /// then call [`Self::validate`] exactly once on the effective result.
+    pub fn parse_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let text = read_config_file(path, || {})?;
-        Self::from_toml_str(text.as_str())
+        Self::parse_toml_str(text.as_str())
     }
 
     pub fn from_toml_str(text: &str) -> Result<Self, ConfigError> {
-        let config = toml::from_str::<Self>(text).map_err(ConfigParseError::from)?;
+        let config = Self::parse_toml_str(text)?;
         config.validate()?;
+        Ok(config)
+    }
+
+    pub fn parse_toml_str(text: &str) -> Result<Self, ConfigError> {
+        let config = toml::from_str::<Self>(text).map_err(ConfigParseError::from)?;
         Ok(config)
     }
 
@@ -703,11 +719,38 @@ impl ServerConfig {
     pub fn configuration_warnings(&self) -> Vec<ConfigWarning> {
         let mut warnings = Vec::new();
 
+        if self
+            .health_listeners()
+            .iter()
+            .any(|listener| !listener.ip().is_loopback())
+        {
+            let parameter = if self.health.bind_address.is_some() {
+                "health.bind_address"
+            } else if self.server.health.is_some() {
+                "server.health"
+            } else {
+                "interfaces.mgmt"
+            };
+            warnings.push(ConfigWarning {
+                code: "management_listener_non_loopback",
+                parameter: parameter.to_owned(),
+                message: "management endpoints use plain HTTP and /metrics exposes zone-labelled operational data; bind beyond loopback only behind an authenticated, encrypted, access-controlled network boundary".to_owned(),
+            });
+        }
+
         if self.cookie.policy == CookiePolicyConfig::Disabled {
             warnings.push(ConfigWarning {
                 code: "dns_cookies_disabled",
                 parameter: "cookie.policy".to_owned(),
                 message: "DNS Cookies are disabled; this is an operationally significant security regression".to_owned(),
+            });
+        }
+
+        if !self.rrl.enabled {
+            warnings.push(ConfigWarning {
+                code: "rrl_disabled",
+                parameter: "rrl.enabled".to_owned(),
+                message: "response-rate limiting is disabled; spoofed-source amplification and query floods will not be throttled by BoronDNS".to_owned(),
             });
         }
 
@@ -1341,6 +1384,8 @@ pub struct MetricsConfig {
     pub pipeline_timing_enabled: bool,
     #[serde(default)]
     pub zone_shape_enabled: bool,
+    #[serde(default = "default_dns_cookie_prefix_max_keys")]
+    pub dns_cookie_prefix_max_keys: usize,
 }
 
 impl Default for MetricsConfig {
@@ -1350,12 +1395,20 @@ impl Default for MetricsConfig {
             hot_path_detail: MetricsHotPathDetail::default(),
             pipeline_timing_enabled: false,
             zone_shape_enabled: false,
+            dns_cookie_prefix_max_keys: default_dns_cookie_prefix_max_keys(),
         }
     }
 }
 
 impl MetricsConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.dns_cookie_prefix_max_keys == 0
+            || self.dns_cookie_prefix_max_keys > MAX_DNS_COOKIE_PREFIX_METRIC_KEYS
+        {
+            return Err(ConfigError::Invalid(format!(
+                "metrics.dns_cookie_prefix_max_keys must be between 1 and {MAX_DNS_COOKIE_PREFIX_METRIC_KEYS}"
+            )));
+        }
         if self.latency_histogram_buckets.is_empty() {
             return Err(ConfigError::Invalid(
                 "metrics.latency_histogram_buckets must contain at least one bucket".to_owned(),
@@ -4004,6 +4057,10 @@ fn default_metrics_rate_limit_per_minute() -> u32 {
 
 fn default_metrics_rate_limit_idle_seconds() -> u64 {
     300
+}
+
+fn default_dns_cookie_prefix_max_keys() -> usize {
+    4_096
 }
 
 fn default_observability_path_prefix() -> String {

@@ -7,6 +7,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use borondns_core::{
@@ -92,8 +93,8 @@ use super::{
     required_file_descriptor_limit, resolve_plan_tsig_key, resolve_transfer_credentials_with_hook,
     resolve_transfer_primary, response_category, response_opt_record, response_question_end,
     response_rcode, retire_refresh_transfer_task, rotate_transfer_targets, rrl_truncated_response,
-    run_initial_zone_loads, run_lifecycle_fuzz_sequence, runtime_config_warnings_at,
-    runtime_config_warnings_with_secrets_at, runtime_deadline,
+    run_initial_zone_loads, run_lifecycle_fuzz_sequence, run_zone_image_preparation,
+    runtime_config_warnings_at, runtime_config_warnings_with_secrets_at, runtime_deadline,
     runtime_deadline_with_effective_duration, send_std_udp_batch, serial_after,
     serve_bound_udp_until, serve_health, serve_health_with_connection_timeouts,
     serve_health_with_request_read_timeout, serve_refresh_requests, serve_runtime_registry_cleanup,
@@ -103,6 +104,28 @@ use super::{
     validate_file_descriptor_limit_value, validate_runtime_config, validated_refresh_plan,
     write_tcp_message,
 };
+
+#[tokio::test(flavor = "current_thread")]
+async fn zone_image_preparation_does_not_block_the_async_worker() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let preparation = tokio::spawn(run_zone_image_preparation(move || {
+        let _ = started_tx.send(());
+        std::thread::sleep(Duration::from_millis(100));
+        Ok::<_, String>(())
+    }));
+
+    started_rx.await.expect("preparation worker starts");
+    let observed = Instant::now();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    assert!(
+        observed.elapsed() < Duration::from_millis(50),
+        "zone-image preparation blocked the current-thread Tokio worker"
+    );
+    preparation
+        .await
+        .expect("preparation task joins")
+        .expect("preparation succeeds");
+}
 
 include!("tests/catalog_and_plan.rs");
 include!("tests/health_observability_runtime.rs");

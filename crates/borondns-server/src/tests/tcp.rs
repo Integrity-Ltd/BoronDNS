@@ -677,6 +677,7 @@ async fn tcp_listener_leaves_over_global_limit_connections_in_kernel_backlog() {
             metrics: RuntimeMetrics::new(),
             active_connections: active.clone(),
             active_connections_by_source: source_counts.clone(),
+            capacity_available: Arc::new(tokio::sync::Notify::new()),
         },
     ));
 
@@ -718,6 +719,84 @@ async fn tcp_listener_leaves_over_global_limit_connections_in_kernel_backlog() {
 }
 
 #[tokio::test]
+async fn sibling_tcp_listener_resumes_when_shared_capacity_returns() {
+    let zones = ZoneStore::new();
+    let first_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let first_addr = first_listener.local_addr().unwrap();
+    let second_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_addr = second_listener.local_addr().unwrap();
+    let active = Arc::new(AtomicUsize::new(0));
+    let source_counts = Arc::new(Mutex::new(HashMap::new()));
+    let settings = TcpServerSettings {
+        max_udp_payload: 1232,
+        max_cname_chain: 8,
+        nsec3_max_iterations: 100,
+        idle_timeout: std::time::Duration::from_secs(30),
+        read_timeout: std::time::Duration::from_secs(30),
+        write_timeout: std::time::Duration::from_secs(30),
+        max_connections: 1,
+        max_connections_per_source: None,
+        max_inflight_queries_per_connection: 64,
+        inflight_limit_timeout: std::time::Duration::from_secs(30),
+        edns_padding_block_size: 0,
+        extended_dns_errors: ExtendedDnsErrorsMode::Off,
+        any_response: AnyResponseMode::Minimal,
+        nsid: Vec::new(),
+        chaos_version: String::new(),
+        chaos_hostname: String::new(),
+        dns_cookie_secrets: dns_cookie_secret_store_for_test(),
+        dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+        cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
+        notify_authority: NotifyAuthority::default(),
+        notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+        notify_refresh_tx: notify_refresh_tx(),
+        notify_log_limiter: notify_log_limiter_for_test(),
+        metrics: RuntimeMetrics::new(),
+        active_connections: active.clone(),
+        active_connections_by_source: source_counts,
+        capacity_available: Arc::new(tokio::sync::Notify::new()),
+    };
+    let first_server = tokio::spawn(serve_tcp(
+        first_listener,
+        zones.clone(),
+        settings.clone(),
+    ));
+    let mut first = TcpStream::connect(first_addr).await.unwrap();
+    for _ in 0..100 {
+        if active.load(Ordering::Acquire) == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(active.load(Ordering::Acquire), 1);
+    let second_server = tokio::spawn(serve_tcp(second_listener, zones, settings));
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    let mut second = TcpStream::connect(second_addr).await.unwrap();
+    first.shutdown().await.unwrap();
+    drop(first);
+    for _ in 0..100 {
+        if active.load(Ordering::Acquire) == 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(active.load(Ordering::Acquire), 0);
+    second.write_all(&[0, 0]).await.unwrap();
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(1), second.read(&mut byte))
+        .await
+        .expect("sibling listener must wake after shared capacity is released")
+        .unwrap();
+    assert_eq!(read, 0);
+
+    first_server.abort();
+    second_server.abort();
+    let _ = first_server.await;
+    let _ = second_server.await;
+}
+
+#[tokio::test]
 async fn tcp_listener_closes_connections_over_per_source_limit() {
     let zones = ZoneStore::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -754,6 +833,7 @@ async fn tcp_listener_closes_connections_over_per_source_limit() {
             metrics: RuntimeMetrics::new(),
             active_connections: active.clone(),
             active_connections_by_source: source_counts.clone(),
+            capacity_available: Arc::new(tokio::sync::Notify::new()),
         },
     ));
 

@@ -101,7 +101,7 @@
             store,
             options,
             |_, _| true,
-            |_, _, _| {},
+            |_, _, _| true,
             |_| {},
             provider,
         ) {

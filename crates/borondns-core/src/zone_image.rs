@@ -3474,7 +3474,16 @@ impl ZoneImage {
         }
 
         for removed_labels in 1..=relative_labels {
-            let closest_start = label_ranges[removed_labels].0.saturating_sub(1);
+            let closest_start = match label_ranges.get(removed_labels) {
+                Some(range) => range.0.saturating_sub(1),
+                None if removed_labels == label_ranges.len() => {
+                    delegation_wire.len().saturating_sub(1)
+                }
+                None => {
+                    plan.set_dnssec_proof_servfail();
+                    return;
+                }
+            };
             let Ok((closest, _)) = DomainName::parse(delegation_wire, closest_start) else {
                 continue;
             };
@@ -3487,7 +3496,11 @@ impl ZoneImage {
             ) else {
                 continue;
             };
-            let next_closer_start = label_ranges[removed_labels - 1].0.saturating_sub(1);
+            let Some(next_closer_range) = label_ranges.get(removed_labels - 1) else {
+                plan.set_dnssec_proof_servfail();
+                return;
+            };
+            let next_closer_start = next_closer_range.0.saturating_sub(1);
             let Ok((next_closer, _)) = DomainName::parse(delegation_wire, next_closer_start) else {
                 break;
             };
@@ -5130,6 +5143,14 @@ impl ZoneImageLookupPlan {
         self.answer_rrsets
             .iter()
             .copied()
+            .chain(self.answer_items.iter().filter_map(|answer| match answer {
+                PlanAnswer::Rrset(rrset_id) | PlanAnswer::RrsetWithOwner { rrset_id, .. } => {
+                    Some(*rrset_id)
+                }
+                PlanAnswer::SelectedRecord(record)
+                | PlanAnswer::SelectedRecordWithOwner { record, .. } => Some(record.rrset_id),
+                PlanAnswer::DynamicRecord(_) => None,
+            }))
             .chain(self.authority_rrsets.iter().copied())
             .chain(self.additional_rrsets.iter().copied())
             .chain(
@@ -5146,6 +5167,11 @@ impl ZoneImageLookupPlan {
                 self.selected_additionals
                     .iter()
                     .map(|record| record.rrset_id),
+            )
+            .chain(
+                self.selected_additionals_with_owner
+                    .iter()
+                    .map(|(record, _)| record.rrset_id),
             )
     }
 }

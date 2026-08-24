@@ -50,7 +50,7 @@ use borondns_core::{
         sign_tsig_error_response,
     },
     zone::{
-        CatalogZoneView, SoaTimers, TransferZoneSnapshot, ZoneMetadata,
+        CatalogZoneView, PreparedZonePublication, SoaTimers, TransferZoneSnapshot, ZoneMetadata,
         ZoneOverlayCompactionOutcome, ZoneSnapshot, ZoneState, ZoneStore,
     },
 };
@@ -58,7 +58,10 @@ use borondns_core::{
 use borondns_core::{dns::RecordType, zone::Rrset};
 use tokio::{
     net::TcpListener,
-    sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
+    sync::{
+        Mutex as AsyncMutex, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc,
+        oneshot,
+    },
     task::{Id as TaskId, JoinError, JoinSet},
 };
 use tracing::{error, info, warn};
@@ -166,9 +169,10 @@ pub(crate) use transfer::{build_xot_client_config, load_pem_certs_for_primary};
 pub use transfer::{poll_soa_from_primary, transfer_axfr_from_primary, transfer_ixfr_from_primary};
 
 pub fn validate_secret_store_config(config: &ServerConfig) -> Result<(), String> {
-    SecretManager::from_config(config)
+    SecretManager::from_config(config).map_err(|error| error.to_string())?;
+    ObservabilityAuth::from_config(&config.observability)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("failed to read observability bearer token file: {error}"))
 }
 use transfer_plan::{TransferPlan, ZoneTransferPlan};
 #[cfg(test)]
@@ -404,7 +408,7 @@ impl Runtime {
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
         let metrics = RuntimeMetrics::try_new_with_settings(
-            self.config.rrl.max_keys,
+            self.config.metrics.dns_cookie_prefix_max_keys,
             self.config.metrics.latency_histogram_buckets_seconds(),
             self.config.metrics.pipeline_timing_enabled,
             self.config.metrics.hot_path_detail,
@@ -446,6 +450,7 @@ impl Runtime {
         }
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         let tcp_source_connections = Arc::new(Mutex::new(HashMap::new()));
+        let tcp_capacity_available = Arc::new(Notify::new());
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let runtime_status = RuntimeStatus::new();
         let notify_authority = NotifyAuthority::from_config(&self.config, secrets.clone());
@@ -788,6 +793,7 @@ impl Runtime {
             let chaos_hostname = self.config.chaos.hostname.clone();
             let tcp_connections = tcp_connections.clone();
             let tcp_source_connections = tcp_source_connections.clone();
+            let tcp_capacity_available = tcp_capacity_available.clone();
             let tcp_settings = TcpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
@@ -815,6 +821,7 @@ impl Runtime {
                 metrics: metrics.clone(),
                 active_connections: tcp_connections,
                 active_connections_by_source: tcp_source_connections,
+                capacity_available: tcp_capacity_available,
             };
             let (tcp_shutdown_tx, tcp_shutdown_rx) = oneshot::channel();
             tcp_shutdown.push(tcp_shutdown_tx);
@@ -1786,6 +1793,16 @@ impl CatalogManager {
                 // either linearizes before cleanup or observes a missing lifecycle.
                 refresh_registry.remove_zone(&member_origin);
                 self.remove_member_notify_registry_entry(&member_origin);
+                if let Some(persistence) = zone_persistence
+                    && let Err(error) = persistence.remove(&member_origin)
+                {
+                    warn!(
+                        catalog_zone = %catalog.origin,
+                        zone = %member_origin,
+                        %error,
+                        "failed to remove last-good cache for removed catalog member"
+                    );
+                }
                 removed_ixfr_members.push(member_origin.clone());
                 info!(
                     category = "transfer",
@@ -1812,6 +1829,16 @@ impl CatalogManager {
                 notify_authority.remove_zone(&owner_member.zone);
                 refresh_registry.remove_zone(&owner_member.zone);
                 self.remove_member_notify_registry_entry(&owner_member.zone);
+                if let Some(persistence) = zone_persistence
+                    && let Err(error) = persistence.remove(&owner_member.zone)
+                {
+                    warn!(
+                        catalog_zone = %owner_catalog.origin,
+                        zone = %owner_member.zone,
+                        %error,
+                        "failed to remove last-good cache for renamed catalog member"
+                    );
+                }
                 removed_ixfr_members.push(owner_member.zone.clone());
                 info!(
                     category = "transfer",
@@ -2465,34 +2492,6 @@ impl ZoneRefreshRegistry {
         })
     }
 
-    fn try_begin_attempt_for_generation(
-        &self,
-        origin: &DomainName,
-        expected_generation: u64,
-    ) -> Option<ZoneRefreshAttempt> {
-        let ownership = self.ownership_for(origin).try_lock_owned().ok()?;
-        let generation = {
-            let mut statuses = self
-                .statuses
-                .lock()
-                .expect("zone refresh registry lock poisoned");
-            let status = statuses.get_mut(&origin.canonical_key())?;
-            if status.generation != expected_generation || status.in_progress {
-                return None;
-            }
-            status.in_progress = true;
-            status.generation
-        };
-        Some(ZoneRefreshAttempt {
-            registry: self.clone(),
-            origin: origin.clone(),
-            generation,
-            created_status: false,
-            _ownership: ownership,
-            finished: false,
-        })
-    }
-
     fn fresh_generation(&self) -> u64 {
         self.next_generation.fetch_add(1, Ordering::Relaxed)
     }
@@ -2915,20 +2914,14 @@ impl ZoneRefreshRegistry {
             .expect("zone refresh registry lock poisoned")
             .values()
             .filter(|status| {
-                !status.in_progress
-                    && !status.expired
-                    && status.expire_at.is_some_and(|expire_at| expire_at <= now)
+                !status.expired && status.expire_at.is_some_and(|expire_at| expire_at <= now)
             })
             .map(|status| (status.origin.clone(), status.generation))
             .collect::<Vec<_>>();
         let mut expired = Vec::new();
         for (origin, generation) in candidates {
             before_attempt(&origin);
-            let Some(attempt) = self.try_begin_attempt_for_generation(&origin, generation) else {
-                continue;
-            };
             let Some(current_snapshot) = zones.exact_snapshot_for_transfer(&origin) else {
-                attempt.finish();
                 continue;
             };
             let still_due = self
@@ -2966,7 +2959,6 @@ impl ZoneRefreshRegistry {
             if did_expire {
                 expired.push(origin.clone());
             }
-            attempt.finish();
         }
         expired
     }
@@ -4311,7 +4303,7 @@ fn signal_notify_refresh(
     qname: &DomainName,
     source: IpAddr,
     soa_serial: Option<u32>,
-) {
+) -> bool {
     match notify_refresh.record_after_enqueue_serial(qname, soa_serial, |token| {
         notify_refresh_tx
             .try_send(
@@ -4333,6 +4325,7 @@ fn signal_notify_refresh(
                 action = "refresh_signalled",
                 "accepted NOTIFY"
             );
+            true
         }
         Ok(NotifyRefreshAction::Deduplicated) => {
             metrics.record_notify_refresh_action(NotifyRefreshAction::Deduplicated);
@@ -4343,6 +4336,7 @@ fn signal_notify_refresh(
                 action = "deduplicated",
                 "accepted NOTIFY"
             );
+            true
         }
         Err(mpsc::error::TrySendError::Full(())) => {
             warn!(
@@ -4350,6 +4344,7 @@ fn signal_notify_refresh(
                 zone = %qname,
                 "NOTIFY refresh queue full; refresh request dropped"
             );
+            false
         }
         Err(mpsc::error::TrySendError::Closed(())) => {
             warn!(
@@ -4357,6 +4352,7 @@ fn signal_notify_refresh(
                 zone = %qname,
                 "NOTIFY refresh queue closed; refresh request dropped"
             );
+            false
         }
     }
 }
@@ -5506,16 +5502,52 @@ struct RefreshZoneOutcome {
     obsolete: bool,
 }
 
-async fn persist_last_good_before_publication(
+async fn stage_last_good_before_publication(
     persistence: &Option<ZonePersistence>,
     snapshot: Arc<ZoneSnapshot>,
+) -> Result<Option<zone_persistence::StagedZoneCache>, String> {
+    let Some(persistence) = persistence.clone() else {
+        return Ok(None);
+    };
+    tokio::task::spawn_blocking(move || persistence.stage(&snapshot))
+        .await
+        .map_err(|error| format!("zone-cache writer task failed: {error}"))?
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+async fn run_zone_image_preparation<T, E, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("zone-image preparation task failed: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+async fn prepare_zone_publication(
+    zones: &ZoneStore,
+    snapshot: Arc<ZoneSnapshot>,
+) -> Result<PreparedZonePublication, String> {
+    let zones = zones.clone();
+    run_zone_image_preparation(move || zones.prepare_snapshot_arc_for_transfer(snapshot)).await
+}
+
+async fn renew_last_good_freshness(
+    persistence: &Option<ZonePersistence>,
+    metadata: &ZoneMetadata,
 ) -> Result<(), String> {
     let Some(persistence) = persistence.clone() else {
         return Ok(());
     };
-    tokio::task::spawn_blocking(move || persistence.persist(&snapshot))
+    let origin = metadata.origin.clone();
+    let serial = metadata.serial;
+    tokio::task::spawn_blocking(move || persistence.renew_freshness(&origin, serial))
         .await
-        .map_err(|error| format!("zone-cache writer task failed: {error}"))?
+        .map_err(|error| format!("zone-cache freshness writer task failed: {error}"))?
         .map_err(|error| error.to_string())
 }
 
@@ -5523,6 +5555,7 @@ enum CurrentZoneConfirmationError {
     Missing,
     Obsolete,
     PublicationFailed(String),
+    PersistenceFailed(String),
 }
 
 fn record_ixfr_current_confirmation(
@@ -6385,34 +6418,64 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                         }
                                     };
                                     if let Some(catalog_members) = catalog_members {
-                                        if let Err(error) = persist_last_good_before_publication(
+                                        let prepared = match prepare_zone_publication(
+                                            zones,
+                                            snapshot.clone(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(prepared) => prepared,
+                                            Err(error) => {
+                                                context.metrics.record_ixfr_failed();
+                                                warn!(
+                                                    zone = %plan.origin,
+                                                    %primary,
+                                                    %error,
+                                                    reason = %context.reason,
+                                                    "IXFR zone-image preparation failed; falling back to AXFR"
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                        let staged = match stage_last_good_before_publication(
                                             &context.zone_persistence,
                                             snapshot.clone(),
                                         )
                                         .await
                                         {
-                                            context.metrics.record_ixfr_failed();
-                                            warn!(
-                                                zone = %plan.origin,
-                                                %primary,
-                                                %error,
-                                                reason = %context.reason,
-                                                "IXFR last-good persistence failed before publication; falling back to AXFR"
-                                            );
-                                            continue;
-                                        }
+                                            Ok(staged) => staged,
+                                            Err(error) => {
+                                                context.metrics.record_ixfr_failed();
+                                                warn!(
+                                                    zone = %plan.origin,
+                                                    %primary,
+                                                    %error,
+                                                    reason = %context.reason,
+                                                    "IXFR last-good staging failed before publication; falling back to AXFR"
+                                                );
+                                                continue;
+                                            }
+                                        };
                                         match context
                                             .transfer_plan
                                             .if_current_plan(plan, || {
                                                 context.secrets.if_current_snapshot(
                                                     &secret_snapshot,
                                                     || {
-                                                        zones.insert_snapshot_arc_for_transfer(
-                                                            snapshot.clone(),
-                                                        )
+                                                        zones
+                                                            .publish_prepared_snapshot_for_transfer(
+                                                                prepared,
+                                                                || match staged {
+                                                                    Some(staged) => {
+                                                                        staged.promote()
+                                                                    }
+                                                                    None => Ok(()),
+                                                                },
+                                                            )
                                                     },
                                                 )
                                             })
+                                            .flatten()
                                             .flatten()
                                         {
                                             None => {
@@ -6459,23 +6522,33 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                     %primary,
                                                     %error,
                                                     reason = %context.reason,
-                                                    "IXFR publication failed; falling back to AXFR"
+                                                    "IXFR last-good cache promotion failed; falling back to AXFR"
                                                 );
                                             }
                                         }
                                     }
                                 }
                                 IxfrResponse::Current => {
+                                    let confirmation = match confirm_current_zone_with_secret(
+                                        zones,
+                                        &context.transfer_plan,
+                                        &context.secrets,
+                                        plan,
+                                        &secret_snapshot,
+                                        &current,
+                                    ) {
+                                        Ok(metadata) => renew_last_good_freshness(
+                                            &context.zone_persistence,
+                                            &metadata,
+                                        )
+                                        .await
+                                        .map(|()| metadata)
+                                        .map_err(CurrentZoneConfirmationError::PersistenceFailed),
+                                        Err(error) => Err(error),
+                                    };
                                     let confirmation = record_ixfr_current_confirmation(
                                         context.metrics,
-                                        confirm_current_zone_with_secret(
-                                            zones,
-                                            &context.transfer_plan,
-                                            &context.secrets,
-                                            plan,
-                                            &secret_snapshot,
-                                            &current,
-                                        ),
+                                        confirmation,
                                     );
                                     let cached_metadata = current.into_metadata();
                                     match confirmation {
@@ -6523,6 +6596,17 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                 reason = %context.reason,
                                                 %error,
                                                 "failed to reactivate current zone after IXFR"
+                                            );
+                                        }
+                                        Err(CurrentZoneConfirmationError::PersistenceFailed(
+                                            error,
+                                        )) => {
+                                            warn!(
+                                                zone = %plan.origin,
+                                                %primary,
+                                                reason = %context.reason,
+                                                %error,
+                                                "failed to renew last-good cache freshness after IXFR current confirmation"
                                             );
                                         }
                                     }
@@ -6629,32 +6713,59 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     reason = %context.reason,
                     "zone transfer publication phase"
                 );
-                if let Err(error) = persist_last_good_before_publication(
+                let prepared = match prepare_zone_publication(zones, snapshot.clone()).await {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        last_failure_cause = Some(format!(
+                            "AXFR zone-image preparation failed for primary {primary}: {error}"
+                        ));
+                        context.metrics.record_axfr_failed();
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            %error,
+                            reason = %context.reason,
+                            "AXFR zone-image preparation failed"
+                        );
+                        continue;
+                    }
+                };
+                let staged = match stage_last_good_before_publication(
                     &context.zone_persistence,
                     snapshot.clone(),
                 )
                 .await
                 {
-                    last_failure_cause = Some(format!(
-                        "AXFR last-good persistence failed for primary {primary}: {error}"
-                    ));
-                    context.metrics.record_axfr_failed();
-                    warn!(
-                        zone = %plan.origin,
-                        %primary,
-                        %error,
-                        reason = %context.reason,
-                        "AXFR last-good persistence failed before publication"
-                    );
-                    continue;
-                }
+                    Ok(staged) => staged,
+                    Err(error) => {
+                        last_failure_cause = Some(format!(
+                            "AXFR last-good staging failed for primary {primary}: {error}"
+                        ));
+                        context.metrics.record_axfr_failed();
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            %error,
+                            reason = %context.reason,
+                            "AXFR last-good staging failed before publication"
+                        );
+                        continue;
+                    }
+                };
                 match context
                     .transfer_plan
                     .if_current_plan(plan, || {
                         context.secrets.if_current_snapshot(&secret_snapshot, || {
-                            zones.insert_snapshot_arc_for_transfer(snapshot.clone())
+                            zones.publish_prepared_snapshot_for_transfer(
+                                prepared,
+                                || match staged {
+                                    Some(staged) => staged.promote(),
+                                    None => Ok(()),
+                                },
+                            )
                         })
                     })
+                    .flatten()
                     .flatten()
                 {
                     None => {
@@ -6681,7 +6792,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     }
                     Some(Err(error)) => {
                         last_failure_cause = Some(format!(
-                            "AXFR publication failed for primary {primary}: {error}"
+                            "AXFR last-good cache promotion failed for primary {primary}: {error}"
                         ));
                         context.metrics.record_axfr_failed();
                         warn!(
@@ -6689,7 +6800,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                             %primary,
                             %error,
                             reason = %context.reason,
-                            "AXFR publication failed"
+                            "AXFR last-good cache promotion failed"
                         );
                     }
                 }
@@ -6711,7 +6822,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
     if equal_primary_confirmed && !newer_primary_observed {
         let current_serial =
             current_serial.expect("equal SOA confirmation requires current serial");
-        match confirm_current_zone_for_serial_with_secret(
+        let confirmation = match confirm_current_zone_for_serial_with_secret(
             zones,
             &context.transfer_plan,
             &context.secrets,
@@ -6719,6 +6830,13 @@ async fn refresh_zone_from_primaries_with_snapshot(
             &secret_snapshot,
             current_serial,
         ) {
+            Ok(metadata) => renew_last_good_freshness(&context.zone_persistence, &metadata)
+                .await
+                .map(|()| metadata)
+                .map_err(CurrentZoneConfirmationError::PersistenceFailed),
+            Err(error) => Err(error),
+        };
+        match confirmation {
             Ok(metadata) => return RefreshZoneOutcome::current(metadata),
             Err(CurrentZoneConfirmationError::Obsolete) => {
                 warn!(
@@ -6735,6 +6853,11 @@ async fn refresh_zone_from_primaries_with_snapshot(
             Err(CurrentZoneConfirmationError::PublicationFailed(error)) => {
                 last_failure_cause = Some(format!(
                     "failed to reactivate current zone after equal SOA confirmations: {error}"
+                ));
+            }
+            Err(CurrentZoneConfirmationError::PersistenceFailed(error)) => {
+                last_failure_cause = Some(format!(
+                    "failed to renew last-good cache freshness after equal SOA confirmations: {error}"
                 ));
             }
         }

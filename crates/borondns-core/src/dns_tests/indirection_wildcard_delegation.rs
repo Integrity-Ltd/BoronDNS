@@ -1565,6 +1565,72 @@
     }
 
     #[test]
+    fn root_nsec3_optout_unsigned_referral_does_not_index_past_labels() {
+        let mut ring_names = vec![".".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}."));
+            if nsec3_covering_owner("child.", &ring_names, "") != nsec3_owner(".", "") {
+                break;
+            }
+        }
+        let expected_closest = nsec3_owner(".", "");
+        let expected_cover = nsec3_covering_owner("child.", &ring_names, "");
+        assert_ne!(expected_closest, expected_cover);
+
+        let apex = DomainName::from_absolute_str(".").unwrap();
+        let child = DomainName::from_absolute_str("child.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            ),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                child,
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.child.")],
+            ),
+        ];
+        for name in &ring_names[1..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_optout_ring_rrsets(
+            &ring_names,
+            "",
+            "child.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(b"\x03www\x05child\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+        let owners = response_authority_owners(&response, RecordType::Nsec3 as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x0400, 0);
+        assert!(owners.contains(&expected_closest));
+        assert!(owners.contains(&expected_cover));
+    }
+
+    #[test]
     fn nsec3_unsigned_referral_rejects_cover_without_optout_flag() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let child = DomainName::from_absolute_str("child.example.test.").unwrap();

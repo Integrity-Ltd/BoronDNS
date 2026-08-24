@@ -616,6 +616,47 @@ fn refresh_registry_expires_zone_once() {
 }
 
 #[test]
+fn refresh_registry_expires_zone_while_refresh_is_in_progress() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let now = std::time::Instant::now();
+    let origin = DomainName::from_absolute_str("in-progress.example.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata()],
+        )],
+    );
+    let zones = ZoneStore::new();
+    registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    zones.insert_snapshot(snapshot);
+    assert_eq!(
+        registry.start_due_refreshes(now + std::time::Duration::from_secs(3600)),
+        vec![origin.clone()]
+    );
+
+    assert_eq!(
+        registry.expire_due_zones(&zones, now + std::time::Duration::from_secs(604_800)),
+        vec![origin.clone()]
+    );
+    assert_eq!(
+        zones
+            .exact_zone_control_metadata(&origin)
+            .expect("expired zone remains registered")
+            .state,
+        ZoneState::Expired
+    );
+}
+
+#[test]
 fn expiration_candidate_removed_before_attempt_does_not_recreate_refresh_status() {
     let registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::ZERO,
@@ -799,7 +840,7 @@ async fn paused_same_zone_attempt_cannot_publish_after_a_newer_refresh() {
 }
 
 #[tokio::test]
-async fn paused_success_ownership_prevents_expiry_from_racing_publication() {
+async fn expiry_during_paused_refresh_is_reactivated_by_valid_publication() {
     let registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
@@ -824,7 +865,17 @@ async fn paused_success_ownership_prevents_expiry_from_racing_publication() {
 
     let old_expiry = base + std::time::Duration::from_secs(604_800);
     let mut refresh = registry.begin_attempt(&origin).await;
-    assert!(registry.expire_due_zones(&zones, old_expiry).is_empty());
+    assert_eq!(
+        registry.expire_due_zones(&zones, old_expiry),
+        vec![origin.clone()]
+    );
+    assert_eq!(
+        zones
+            .exact_zone_control_metadata(&origin)
+            .expect("expired zone remains registered")
+            .state,
+        ZoneState::Expired
+    );
 
     let new_snapshot = ZoneSnapshot::active(
         origin.clone(),
@@ -1699,7 +1750,7 @@ allow_non_rfc5936_cold_start = true
         .expect("zone transfer plan");
     let zones = ZoneStore::new();
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
-    zones.insert_snapshot(ZoneSnapshot::active(
+    let snapshot = ZoneSnapshot::active(
         apex.clone(),
         Some(2),
         vec![Rrset::new(
@@ -1709,7 +1760,18 @@ allow_non_rfc5936_cold_start = true
             3600,
             vec![soa_rdata_with_serial(2)],
         )],
+    );
+    let cache = std::env::temp_dir().join(format!(
+        "borondns-current-freshness-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
+    let persistence = ZonePersistence::new(cache.clone(), 1024 * 1024);
+    persistence.persist(&snapshot).unwrap();
+    zones.insert_snapshot(snapshot);
     let metrics = RuntimeMetrics::new();
     let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
@@ -1727,7 +1789,7 @@ allow_non_rfc5936_cold_start = true
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             reason: "test",
-            zone_persistence: None,
+            zone_persistence: Some(persistence),
         },
     )
     .await
@@ -1740,6 +1802,13 @@ allow_non_rfc5936_cold_start = true
 
     assert_eq!(metadata.serial, Some(2));
     assert_eq!(peer.ip(), expected_ip);
+    assert!(
+        std::fs::read_dir(&cache)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "fresh")),
+        "equal-SOA current confirmation must durably renew cache freshness"
+    );
     assert!(
         zones
             .exact_snapshot_for_transfer(&DomainName::from_absolute_str("example.test.").unwrap())
@@ -1754,6 +1823,7 @@ allow_non_rfc5936_cold_start = true
             .answers
             .is_empty()
     );
+    std::fs::remove_dir_all(cache).unwrap();
 }
 
 #[tokio::test]
