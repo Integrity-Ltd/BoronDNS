@@ -85,7 +85,7 @@ large RRL source-IP rotation.
 ## 4. Build the Binary
 
 ```bash
-cargo build --locked --release -p borondns-cli
+cargo build --locked --release -p borondns-cli --features af-xdp
 ./target/release/borondns --version
 ```
 

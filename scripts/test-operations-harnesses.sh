@@ -9996,7 +9996,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     "fixture_transient_sbom_mutated=$(printf '%q' "$workdir/package-transient-sbom-mutated")" \
     'fixture_manifest=""; fixture_arguments=("$@"); for ((fixture_index = 0; fixture_index < ${#fixture_arguments[@]}; fixture_index++)); do if [[ "${fixture_arguments[$fixture_index]}" == --manifest-path ]]; then fixture_manifest="${fixture_arguments[$((fixture_index + 1))]:-}"; fi; done' \
     'fixture_root="${fixture_manifest%/Cargo.toml}"' \
-    'if [[ "$fixture_manifest" == "$fixture_main_manifest" ]]; then printf "%s\n" "$*" >>"$fixture_main_cargo_log"; fi' \
+    'if [[ "$fixture_manifest" == "$fixture_main_manifest" || "$PWD" == "$fixture_source_root" ]]; then printf "%s\n" "$*" >>"$fixture_main_cargo_log"; fi' \
     'case "${1:-}" in' \
     'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.1\"}]}" ;;' \
     'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == boron-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
@@ -11103,6 +11103,7 @@ package_build_env_log="$workdir/package-build-env.log"
         "$package_dirty_repo/scripts/package-installer.sh"
 )
 package_clean_manifest="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl/manifest.txt"
+grep -Eq 'build .* -p borondns-cli --features af-xdp( |$)' "$package_cargo_log"
 grep -Fqx 'source_clean=1' "$package_clean_manifest"
 grep -Fqx 'release_eligible=1' "$package_clean_manifest"
 grep -Fqx 'dirty_source_override=0' "$package_clean_manifest"
@@ -11947,6 +11948,8 @@ grep -Fqx 'reproducible_build_status=false' "$repro_fixture_evidence/reproducibl
 grep -Fqx 'artifact_match=true' "$repro_fixture_evidence/reproducible-build-summary.env"
 grep -Fqx 'release_eligible=false' "$repro_fixture_evidence/reproducible-build-summary.env"
 grep -Fqx 'dirty_source_override=1' "$repro_fixture_evidence/reproducible-build-summary.env"
+[[ "$(awk -F '\t' '$1 == "borondns" && $5 == "af-xdp" { count++ } END { print count + 0 }' \
+    "$repro_fixture_evidence/artifact-manifest.tsv")" == 2 ]]
 grep -Fq 'must not be used as release provenance' "$repro_fixture_evidence/README.md"
 
 repro_stale_evidence="$workdir/repro-stale-evidence"

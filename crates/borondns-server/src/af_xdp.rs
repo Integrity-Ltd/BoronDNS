@@ -6,10 +6,14 @@ use std::{
     error::Error,
     ffi::CString,
     fmt,
-    io::{self, ErrorKind},
+    fs::File,
+    io::{self, ErrorKind, Read},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Range,
-    os::fd::{AsRawFd, RawFd},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::fs::MetadataExt,
+    },
     path::Path,
     sync::Arc,
     time::Duration,
@@ -21,6 +25,7 @@ use aya::{
     programs::{Xdp, XdpFlags},
 };
 use borondns_core::config::{XdpConfig, XdpMode, XdpZeroCopyMode};
+use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
 use tokio::{
     io::{Interest, unix::AsyncFd},
     net::UdpSocket,
@@ -49,6 +54,7 @@ const RING_KICK_RETRY_DELAY: Duration = Duration::from_millis(1);
 // ownership remains pending across this bounded service attempt, so a later
 // receive/send pass can retry without recycling kernel-owned descriptors.
 const RING_KICK_MAX_RECOVERY_ATTEMPTS: u64 = 64;
+const MAX_XDP_OBJECT_BYTES: u64 = 16 * 1024 * 1024;
 const BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE: [u8; 65] = [
     0x00, 0x00, // ID, patched from the query.
     0x84, 0x00, // QR + AA, NOERROR.
@@ -636,7 +642,8 @@ impl XdpRedirectGuard {
         local_addr: SocketAddr,
         xsk_entries: &[(u32, RawFd)],
     ) -> io::Result<Self> {
-        let mut bpf = Ebpf::load_file(object).map_err(|error| {
+        let object_bytes = read_trusted_xdp_object(object)?;
+        let mut bpf = Ebpf::load(&object_bytes).map_err(|error| {
             io::Error::new(
                 ErrorKind::InvalidInput,
                 format!(
@@ -688,6 +695,75 @@ impl XdpRedirectGuard {
 
         Ok(Self { _bpf: bpf })
     }
+}
+
+fn read_trusted_xdp_object(path: &Path) -> io::Result<Vec<u8>> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the AF_XDP redirect object path must be absolute",
+        ));
+    }
+    let fd = openat2(
+        rustix::fs::CWD,
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|error| {
+        io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!("failed to open AF_XDP redirect object without following links: {error}"),
+        )
+    })?;
+    let file = File::from(fd);
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the AF_XDP redirect object must be a regular file",
+        ));
+    }
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if metadata.uid() != 0 && metadata.uid() != effective_uid {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "the AF_XDP redirect object must be owned by root or the BoronDNS process user",
+        ));
+    }
+    if metadata.mode() & 0o022 != 0 || metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "the AF_XDP redirect object must not be group/world writable or hard-linked",
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_XDP_OBJECT_BYTES {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("the AF_XDP redirect object must be 1..={MAX_XDP_OBJECT_BYTES} bytes"),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    (&file)
+        .take(MAX_XDP_OBJECT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    let final_metadata = file.metadata()?;
+    if bytes.len() as u64 != metadata.len()
+        || metadata.dev() != final_metadata.dev()
+        || metadata.ino() != final_metadata.ino()
+        || metadata.len() != final_metadata.len()
+        || metadata.mtime() != final_metadata.mtime()
+        || metadata.mtime_nsec() != final_metadata.mtime_nsec()
+        || metadata.ctime() != final_metadata.ctime()
+        || metadata.ctime_nsec() != final_metadata.ctime_nsec()
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "the AF_XDP redirect object changed while it was being read",
+        ));
+    }
+    Ok(bytes)
 }
 
 // SAFETY: the adapter owns the AF_XDP socket, rings, UMEM, slabs, and all
@@ -1994,13 +2070,45 @@ fn ipv6_addr_at(frame: &[u8], offset: usize) -> Ipv6Addr {
 mod tests {
     use std::{
         cell::Cell,
+        fs,
         future::Future,
         io::{Read, Write},
+        os::unix::fs::{PermissionsExt, symlink},
         os::unix::net::UnixStream,
         task::{Context, Poll, Waker},
     };
 
     use super::*;
+
+    #[test]
+    fn xdp_object_reader_binds_trusted_regular_file_descriptor() {
+        let directory = std::env::temp_dir().join(format!(
+            "borondns-xdp-object-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir(&directory).expect("create fixture directory");
+        let object = directory.join("redirect.bpf.o");
+        fs::write(&object, b"trusted-object").expect("write fixture object");
+        fs::set_permissions(&object, fs::Permissions::from_mode(0o600))
+            .expect("secure fixture permissions");
+
+        assert_eq!(
+            read_trusted_xdp_object(&object).expect("trusted object"),
+            b"trusted-object"
+        );
+        assert!(read_trusted_xdp_object(Path::new("relative.bpf.o")).is_err());
+
+        let link = directory.join("redirect-link.bpf.o");
+        symlink(&object, &link).expect("create symlink fixture");
+        assert!(read_trusted_xdp_object(&link).is_err());
+
+        fs::set_permissions(&object, fs::Permissions::from_mode(0o622))
+            .expect("make fixture writable");
+        assert!(read_trusted_xdp_object(&object).is_err());
+
+        fs::remove_dir_all(directory).expect("remove fixture directory");
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn async_fd_readiness_wait_can_be_cancelled_and_resumed() {

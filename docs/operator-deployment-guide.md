@@ -82,7 +82,7 @@ Install prerequisites for a source build:
 Build the release binary:
 
 ```sh
-cargo build --locked --release -p borondns-cli
+cargo build --locked --release -p borondns-cli --features af-xdp
 ```
 
 Release builds use `--locked` so the checked-in lockfile is part of the build

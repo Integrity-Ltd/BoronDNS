@@ -217,7 +217,7 @@ fi
         BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
         SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0 \
         CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release \
-        --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli
+        --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli --features af-xdp
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
         CARGO_ENCODED_RUSTFLAGS="$release_encoded_rustflags" \

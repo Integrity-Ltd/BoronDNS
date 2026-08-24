@@ -69,7 +69,7 @@ accepted.
 | `crates/boron-gun/src/main.rs` | Support tooling outside BoronDNS server runtime requirements | BoronGun load-generator CLI, portable UDP backend, packet generation, response classification, and self-test path. |
 | `crates/boron-gun/src/xdp_backend.rs` | Support tooling unsafe boundary for BoronGun lab-only AF_XDP backend | Linux AF_XDP UMEM and ring adapter used only when BoronGun is built with the explicit `xdp` feature; not part of the BoronDNS server runtime. |
 | `crates/boron-gun-ebpf/src/lib.rs` | BoronGun lab-only XDP drop program and audited unsafe boundary | no_std eBPF `XDP_DROP` support program used only by BoronGun's lab backend for reply suppression tests. |
-| `crates/borondns-server-ebpf/src/lib.rs` | Feature-gated BoronDNS XDP redirect program and audited unsafe boundary | no_std eBPF redirect program used only by the server AF_XDP adapter when explicitly built and attached in a lab profile. |
+| `crates/borondns-server-ebpf/src/lib.rs` | BoronDNS XDP redirect program and audited unsafe boundary | no_std eBPF redirect program used only when the AF_XDP backend is explicitly configured; official binaries contain the adapter, while the object is built separately with the pinned eBPF build script. |
 
 The module count is measured at the first-party Rust file/module boundary,
 including `build.rs` and support-tool modules, while excluding test-only files

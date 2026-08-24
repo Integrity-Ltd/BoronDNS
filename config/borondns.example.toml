@@ -281,12 +281,18 @@ zsm_loading_warning_threshold_secs = 3600
 #bearer_token_file = "/etc/borondns/observability-token"
 
 #[xdp]
-# Experimental AF_XDP backend controls. These are used only when
+# Optional AF_XDP backend controls. Official BoronDNS release binaries include
+# this backend; it remains inactive unless limits.udp_backend = "af_xdp".
+# These controls are used only when
 # limits.udp_backend = "af_xdp". Every UDP listener must use a concrete local
 # IP address in this mode; wildcard 0.0.0.0/[::] binds are rejected because XDP
 # runs before the kernel's local-destination routing decision.
 #interface = "eth0"
-#redirect_object = "/path/to/borondns-xdp-redirect.bpf.o"
+# The object path must be absolute. BoronDNS opens it without following any
+# symlink, accepts only a root/process-owned regular file with one link and no
+# group/world write bits, bounds it to 16 MiB, and loads the descriptor-bound
+# bytes. Build the audited object with scripts/borondns-server-build-ebpf.sh.
+#redirect_object = "/usr/lib/borondns/borondns-xdp-redirect.bpf.o"
 #queue_id = 0
 # Optional sparse AF_XDP queue list. Queue IDs must be in 0..=63 and the list
 # may contain at most 64 unique entries, matching the shipped redirect map.

@@ -190,6 +190,7 @@ pub struct ZoneImageLookupPlan {
     termination: Option<LookupTermination>,
     continuation: Option<ZoneImageIndirectionContinuation>,
     denial_context: Option<ZoneImageDenialContext>,
+    wildcard_proof_name: Option<Box<DomainName>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1318,10 +1319,12 @@ impl ZoneImage {
                 }
             }
             if wildcard_candidate {
+                let wildcard_proof_name = plan.wildcard_proof_name.clone();
+                let proof_name = wildcard_proof_name.as_deref().unwrap_or(qname);
                 self.add_wildcard_nsec_augmentations(
-                    qname,
+                    proof_name,
                     qclass,
-                    qname_ascii_lowercase,
+                    wildcard_proof_name.is_some() || qname_ascii_lowercase,
                     &mut plan,
                     &mut state,
                 );
@@ -2225,6 +2228,7 @@ impl ZoneImage {
     ) -> u16 {
         let owner_wire = owner_override_wire(owner);
         let metrics = self.rrset_plan_metrics_with_owner_len(rrset, owner_wire.len());
+        plan.wildcard_proof_name = Some(Box::new(owner.clone()));
         plan.push_answer_rrset_with_owner_wire(rrset, owner_wire, metrics)
     }
 
@@ -3594,7 +3598,7 @@ impl ZoneImage {
             ) {
                 self.push_authority_rrset(plan, nsec3, state);
             } else {
-                plan.set_dnssec_proof_servfail();
+                self.add_nsec3_unsigned_referral_proof(&qname.to_wire(), qclass, plan, state);
             }
         }
     }
@@ -3617,11 +3621,6 @@ impl ZoneImage {
             && let Some(closest_labels) =
                 self.closest_encloser_labels_from_node(qname, closest_qname_node)
         {
-            let closest_encloser = NameLabelView {
-                prefix: None,
-                labels: closest_labels,
-                ascii_lowercase: qname_ascii_lowercase,
-            };
             let wildcard_child = NameLabelView {
                 prefix: Some(b"*"),
                 labels: closest_labels,
@@ -3631,37 +3630,51 @@ impl ZoneImage {
                 self.push_nsec_covering_label_view(wildcard_child, qclass, plan, state);
             }
             if has_nsec3_ranges {
-                let next_closer_start = qname
+                let relative_labels = qname
                     .labels()
                     .len()
-                    .checked_sub(closest_labels.len().saturating_add(1));
-                let exact_closest = self.nsec3_exact_rrset_for_label_view(
-                    closest_encloser,
-                    qclass,
-                    &mut state.nsec3_iterations_exceeded,
-                    state.nsec3_max_iterations,
-                );
-                let covering_next_closer = next_closer_start.and_then(|start| {
-                    self.nsec3_covering_rrset_for_label_view(
+                    .saturating_sub(self.origin.labels().len());
+                let mut proof = None;
+                for closest_start in 1..=relative_labels {
+                    let closest_labels = &qname.labels()[closest_start..];
+                    let Some(exact_closest) = self.nsec3_exact_rrset_for_label_view(
                         NameLabelView {
                             prefix: None,
-                            labels: &qname.labels()[start..],
+                            labels: closest_labels,
                             ascii_lowercase: qname_ascii_lowercase,
                         },
                         qclass,
                         &mut state.nsec3_iterations_exceeded,
                         state.nsec3_max_iterations,
-                    )
-                });
-                let covering_wildcard = self.nsec3_covering_rrset_for_label_view(
-                    wildcard_child,
-                    qclass,
-                    &mut state.nsec3_iterations_exceeded,
-                    state.nsec3_max_iterations,
-                );
-                if let (Some(exact_closest), Some(covering_next_closer), Some(covering_wildcard)) =
-                    (exact_closest, covering_next_closer, covering_wildcard)
-                {
+                    ) else {
+                        continue;
+                    };
+                    let covering_next_closer = self.nsec3_covering_rrset_for_label_view(
+                        NameLabelView {
+                            prefix: None,
+                            labels: &qname.labels()[closest_start - 1..],
+                            ascii_lowercase: qname_ascii_lowercase,
+                        },
+                        qclass,
+                        &mut state.nsec3_iterations_exceeded,
+                        state.nsec3_max_iterations,
+                    );
+                    let covering_wildcard = self.nsec3_covering_rrset_for_label_view(
+                        NameLabelView {
+                            prefix: Some(b"*"),
+                            labels: closest_labels,
+                            ascii_lowercase: qname_ascii_lowercase,
+                        },
+                        qclass,
+                        &mut state.nsec3_iterations_exceeded,
+                        state.nsec3_max_iterations,
+                    );
+                    proof = covering_next_closer
+                        .zip(covering_wildcard)
+                        .map(|(next, wildcard)| (exact_closest, next, wildcard));
+                    break;
+                }
+                if let Some((exact_closest, covering_next_closer, covering_wildcard)) = proof {
                     self.push_authority_rrset(plan, exact_closest, state);
                     self.push_authority_rrset(plan, covering_next_closer, state);
                     self.push_authority_rrset(plan, covering_wildcard, state);
@@ -4689,6 +4702,7 @@ impl ZoneImageLookupPlan {
             termination: None,
             continuation: None,
             denial_context: None,
+            wildcard_proof_name: None,
         }
     }
 

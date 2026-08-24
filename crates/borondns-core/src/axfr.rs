@@ -826,7 +826,7 @@ fn apply_ixfr_incremental(
     normalize_record_owner(&mut current_soa);
     let (delta, terminal_soa_seen) =
         parse_ixfr_incremental_delta_parts(zone_apex, qclass, &current_soa, answers)?;
-    let mut working_rrsets = HashMap::<(String, u16, u16), Vec<ResourceRecord>>::new();
+    let mut working_rrsets = HashMap::<(String, u16, u16), WorkingRrset>::new();
 
     for sequence in delta.sequences() {
         remove_delta_record(current_zone, &mut working_rrsets, sequence.old_soa())?;
@@ -843,8 +843,8 @@ fn apply_ixfr_incremental(
     }
     let replacements = working_rrsets
         .into_iter()
-        .map(|((owner_key, rr_type, class), records)| {
-            let mut rrsets = rrsets_from_records(records);
+        .map(|((owner_key, rr_type, class), working)| {
+            let mut rrsets = rrsets_from_records(working.records);
             debug_assert!(rrsets.len() <= 1);
             (owner_key, rr_type, class, rrsets.pop())
         })
@@ -855,41 +855,73 @@ fn apply_ixfr_incremental(
     Ok(IxfrResponse::Updated(Box::new(updated)))
 }
 
+struct WorkingRrset {
+    records: Vec<ResourceRecord>,
+    indexes: HashMap<RecordKey, usize>,
+}
+
+impl WorkingRrset {
+    fn from_records(records: Vec<ResourceRecord>) -> Self {
+        let indexes = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (RecordKey::from_record(record), index))
+            .collect();
+        Self { records, indexes }
+    }
+
+    fn remove(&mut self, record: &ResourceRecord) -> bool {
+        let key = RecordKey::from_record(record);
+        let Some(index) = self.indexes.remove(&key) else {
+            return false;
+        };
+        self.records.swap_remove(index);
+        if index < self.records.len() {
+            self.indexes
+                .insert(RecordKey::from_record(&self.records[index]), index);
+        }
+        true
+    }
+
+    fn add(&mut self, record: &ResourceRecord) -> bool {
+        let key = RecordKey::from_record(record);
+        if self.indexes.contains_key(&key) {
+            return false;
+        }
+        let index = self.records.len();
+        self.records.push(record.clone());
+        self.indexes.insert(key, index);
+        true
+    }
+}
+
 fn remove_delta_record(
     current_zone: &ZoneSnapshot,
-    working_rrsets: &mut HashMap<(String, u16, u16), Vec<ResourceRecord>>,
+    working_rrsets: &mut HashMap<(String, u16, u16), WorkingRrset>,
     record: &ResourceRecord,
 ) -> Result<(), IxfrError> {
     let key = rrset_identity(record);
-    let records = working_rrsets
-        .entry(key.clone())
-        .or_insert_with(|| current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2));
-    let Some(index) = records
-        .iter()
-        .position(|existing| resource_records_semantically_equal(existing, record))
-    else {
+    let working = working_rrsets.entry(key.clone()).or_insert_with(|| {
+        WorkingRrset::from_records(current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2))
+    });
+    if !working.remove(record) {
         return Err(IxfrError::DeleteAbsentRecord);
-    };
-    records.swap_remove(index);
+    }
     Ok(())
 }
 
 fn add_delta_record(
     current_zone: &ZoneSnapshot,
-    working_rrsets: &mut HashMap<(String, u16, u16), Vec<ResourceRecord>>,
+    working_rrsets: &mut HashMap<(String, u16, u16), WorkingRrset>,
     record: &ResourceRecord,
 ) -> Result<(), IxfrError> {
     let key = rrset_identity(record);
-    let records = working_rrsets
-        .entry(key.clone())
-        .or_insert_with(|| current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2));
-    if records
-        .iter()
-        .any(|existing| resource_records_semantically_equal(existing, record))
-    {
+    let working = working_rrsets.entry(key.clone()).or_insert_with(|| {
+        WorkingRrset::from_records(current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2))
+    });
+    if !working.add(record) {
         return Err(IxfrError::AddExistingRecord);
     }
-    records.push(record.clone());
     Ok(())
 }
 
@@ -2292,6 +2324,46 @@ mod tests {
             RecordType::Ns as u16,
             name_rdata("ns.example.test."),
         )
+    }
+
+    #[test]
+    fn indexed_ixfr_rrset_mutation_scales_to_large_rrsets() {
+        const RECORDS: u32 = 100_000;
+        let owner = DomainName::from_absolute_str("large.example.test.").unwrap();
+        let records = (0..RECORDS)
+            .map(|value| ResourceRecord {
+                owner: owner.clone(),
+                rr_type: 65280,
+                class: 1,
+                ttl: 300,
+                rdata: value.to_be_bytes().to_vec(),
+            })
+            .collect();
+        let mut working = WorkingRrset::from_records(records);
+
+        for value in (0..RECORDS).step_by(2) {
+            let record = ResourceRecord {
+                owner: owner.clone(),
+                rr_type: 65280,
+                class: 1,
+                ttl: 300,
+                rdata: value.to_be_bytes().to_vec(),
+            };
+            assert!(working.remove(&record));
+        }
+        for value in RECORDS..RECORDS + (RECORDS / 2) {
+            let record = ResourceRecord {
+                owner: owner.clone(),
+                rr_type: 65280,
+                class: 1,
+                ttl: 300,
+                rdata: value.to_be_bytes().to_vec(),
+            };
+            assert!(working.add(&record));
+        }
+
+        assert_eq!(working.records.len(), RECORDS as usize);
+        assert_eq!(working.indexes.len(), RECORDS as usize);
     }
 
     fn name_rdata(name: &str) -> Vec<u8> {

@@ -958,6 +958,88 @@
     }
 
     #[test]
+    fn do_nsec3_cname_to_wildcard_proves_terminal_next_closer_name() {
+        let mut ring_names = vec!["example.test.".to_owned(), "*.example.test.".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}.example.test."));
+            let target = nsec3_covering_owner(
+                "missing.example.test.",
+                &ring_names,
+                "example.test.",
+            );
+            let original =
+                nsec3_covering_owner("alias.example.test.", &ring_names, "example.test.");
+            if target != original {
+                break;
+            }
+        }
+        let expected_cover =
+            nsec3_covering_owner("missing.example.test.", &ring_names, "example.test.");
+        let wrong_original_cover =
+            nsec3_covering_owner("alias.example.test.", &ring_names, "example.test.");
+        assert_ne!(expected_cover, wrong_original_cover);
+
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(apex.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata()]),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                RecordType::Cname as u16,
+                1,
+                300,
+                vec![cname_rdata("deep.missing.example.test.")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 21].to_vec()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("*.example.test.").unwrap(),
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::A)],
+            ),
+        ];
+        for name in &ring_names[2..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_ring_rrsets(&ring_names, "example.test."));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_authority_owners(&response, RecordType::Nsec3 as u16),
+            vec![expected_cover]
+        );
+    }
+
+    #[test]
     fn non_do_wildcard_answer_omits_nsec_dnssec_augmentation() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -1562,6 +1644,138 @@
         assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x0400, 0);
         assert!(owners.contains(&expected_closest));
         assert!(owners.contains(&expected_cover));
+    }
+
+    #[test]
+    fn nsec3_optout_unsigned_delegation_ds_nodata_uses_optout_proof() {
+        let mut ring_names = vec!["example.test.".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}.example.test."));
+            if nsec3_covering_owner("child.example.test.", &ring_names, "example.test.")
+                != nsec3_owner("example.test.", "example.test.")
+            {
+                break;
+            }
+        }
+        let expected_closest = nsec3_owner("example.test.", "example.test.");
+        let expected_cover =
+            nsec3_covering_owner("child.example.test.", &ring_names, "example.test.");
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(apex.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata()]),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("child.example.test.").unwrap(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.child.example.test.")],
+            ),
+        ];
+        for name in &ring_names[1..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_optout_ring_rrsets(
+            &ring_names,
+            "example.test.",
+            "child.example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+        let mut packet = query(
+            b"\x05child\x07example\x04test\x00",
+            RecordType::Ds as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+        let owners = response_authority_owners(&response, RecordType::Nsec3 as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert!(owners.contains(&expected_closest));
+        assert!(owners.contains(&expected_cover));
+    }
+
+    #[test]
+    fn nsec3_optout_empty_nonterminal_nodata_and_nxdomain_do_not_servfail() {
+        let mut ring_names = vec!["example.test.".to_owned()];
+        for index in 0..1_000 {
+            ring_names.push(format!("anchor-{index}.example.test."));
+            if nsec3_covering_owner("ent.example.test.", &ring_names, "example.test.")
+                != nsec3_owner("example.test.", "example.test.")
+            {
+                break;
+            }
+        }
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let expected_closest = nsec3_owner("example.test.", "example.test.");
+        let expected_cover =
+            nsec3_covering_owner("ent.example.test.", &ring_names, "example.test.");
+        let mut rrsets = vec![
+            Rrset::new(apex.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata()]),
+            Rrset::new(
+                apex.clone(),
+                RecordType::Nsec3Param as u16,
+                1,
+                300,
+                vec![nsec3param_rdata(1)],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("child.ent.example.test.").unwrap(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns.child.ent.example.test.")],
+            ),
+        ];
+        for name in &ring_names[1..] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(name).unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                vec![b"\x06anchor".to_vec()],
+            ));
+        }
+        rrsets.extend(nsec3_optout_ring_rrsets(
+            &ring_names,
+            "example.test.",
+            "ent.example.test.",
+        ));
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(apex, Some(1), rrsets));
+
+        for (wire_name, expected_rcode) in [
+            (
+                b"\x03ent\x07example\x04test\x00".as_slice(),
+                Rcode::NoError,
+            ),
+            (
+                b"\x07missing\x03ent\x07example\x04test\x00".as_slice(),
+                Rcode::NxDomain,
+            ),
+        ] {
+            let mut packet = query(wire_name, RecordType::Txt as u16, 1);
+            append_opt(&mut packet, 4096, 0x8000, &[]);
+            let response = store_response(&packet, &store);
+            let owners = response_authority_owners(&response, RecordType::Nsec3 as u16);
+            assert_eq!(response[3] & 0x0f, expected_rcode as u8);
+            assert!(owners.contains(&expected_closest));
+            assert!(owners.contains(&expected_cover));
+        }
     }
 
     #[test]
