@@ -810,6 +810,93 @@ fn incremental_overlay_nsec3_nxdomain_matches_fresh_compact_image() {
 }
 
 #[test]
+fn incremental_overlay_nsec3_optout_referral_matches_fresh_compact_image() {
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let delegation = DomainName::from_absolute_str("child.example.test.").unwrap();
+    let mut ring_names = vec!["example.test.".to_owned()];
+    for index in 0..1_000 {
+        ring_names.push(format!("anchor-{index}.example.test."));
+        if nsec3_covering_owner("child.example.test.", &ring_names, "example.test.")
+            != nsec3_owner("example.test.", "example.test.")
+        {
+            break;
+        }
+    }
+    let expected_closest = nsec3_owner("example.test.", "example.test.");
+    let expected_cover =
+        nsec3_covering_owner("child.example.test.", &ring_names, "example.test.");
+    let mut rrsets = vec![
+        Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata()]),
+        Rrset::new(
+            origin.clone(),
+            RecordType::Nsec3Param as u16,
+            1,
+            300,
+            vec![nsec3param_rdata(1)],
+        ),
+        Rrset::new(
+            delegation.clone(),
+            RecordType::Ns as u16,
+            1,
+            300,
+            vec![cname_rdata("ns1.child.example.test.")],
+        ),
+    ];
+    for name in &ring_names[1..] {
+        rrsets.push(Rrset::new(
+            DomainName::from_absolute_str(name).unwrap(),
+            RecordType::Txt as u16,
+            1,
+            300,
+            vec![b"\x06anchor".to_vec()],
+        ));
+    }
+    rrsets.extend(nsec3_optout_ring_rrsets(
+        &ring_names,
+        "example.test.",
+        "child.example.test.",
+    ));
+    let base = ZoneSnapshot::active(origin, Some(1), rrsets);
+    let updated = base.with_cow_rrset_replacements(
+        2,
+        vec![(
+            delegation.canonical_key(),
+            RecordType::Ns as u16,
+            1,
+            Some(Rrset::new(
+                delegation,
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![cname_rdata("ns2.child.example.test.")],
+            )),
+        )],
+    );
+    let overlay_store = ZoneStore::with_publication_policy(crate::zone::ZonePublicationPolicy {
+        strategy: crate::zone::ZonePublicationStrategy::Sharded,
+        sharded_rrset_threshold: 1,
+        ..crate::zone::ZonePublicationPolicy::default()
+    });
+    overlay_store.insert_snapshot(base);
+    overlay_store.insert_snapshot(updated.clone());
+    let compact_store = ZoneStore::new();
+    compact_store.insert_snapshot(updated);
+
+    let mut packet = query(
+        b"\x03www\x05child\x07example\x04test\x00",
+        RecordType::A as u16,
+        1,
+    );
+    append_opt(&mut packet, 4096, 0x8000, &[]);
+    let overlay_response = store_response(&packet, &overlay_store);
+    let compact_response = store_response(&packet, &compact_store);
+    assert_semantic_response_eq(&overlay_response, &compact_response);
+    let owners = response_authority_owners(&overlay_response, RecordType::Nsec3 as u16);
+    assert!(owners.contains(&expected_closest));
+    assert!(owners.contains(&expected_cover));
+}
+
+#[test]
 fn nsec3_only_hashed_owner_is_answered_as_nxdomain() {
     let hashed_owner = nsec3_owner("example.test.", "example.test.");
     let mut rrsets = vec![

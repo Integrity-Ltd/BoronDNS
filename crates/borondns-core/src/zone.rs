@@ -1697,10 +1697,9 @@ impl ZoneSnapshot {
                     &mut dnssec_state.dnssec_augmented,
                 );
             } else {
-                self.push_nsec3_for_name(
+                self.push_nsec3_unsigned_referral_proof(
                     &record.owner,
                     record.class,
-                    true,
                     &mut augmented,
                     &mut seen,
                     dnssec_state,
@@ -1708,6 +1707,69 @@ impl ZoneSnapshot {
             }
         }
         augmented
+    }
+
+    fn push_nsec3_unsigned_referral_proof(
+        &self,
+        delegation: &DomainName,
+        qclass: u16,
+        records: &mut Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_state: &mut DnssecAugmentationState,
+    ) {
+        if let Some(exact) = self.nsec3_rrset_for_name(
+            delegation,
+            qclass,
+            true,
+            &mut dnssec_state.nsec3_iterations_exceeded,
+            dnssec_state.nsec3_max_iterations,
+        ) {
+            push_rrset_records(exact, records, seen, &mut dnssec_state.dnssec_augmented);
+            return;
+        }
+
+        let covering = self.nsec3_rrset_for_name(
+            delegation,
+            qclass,
+            false,
+            &mut dnssec_state.nsec3_iterations_exceeded,
+            dnssec_state.nsec3_max_iterations,
+        );
+        let Some(covering) = covering.filter(|rrset| {
+            rrset
+                .rdatas
+                .iter()
+                .any(|rdata| rdata.get(1).is_some_and(|flags| flags & 1 != 0))
+        }) else {
+            return;
+        };
+
+        let mut candidate = delegation.parent();
+        while let Some(closest) = candidate {
+            if !closest.is_equal_or_subdomain_of(&self.origin) {
+                return;
+            }
+            if let Some(exact_closest) = self.nsec3_rrset_for_name(
+                &closest,
+                qclass,
+                true,
+                &mut dnssec_state.nsec3_iterations_exceeded,
+                dnssec_state.nsec3_max_iterations,
+            ) {
+                push_rrset_records(
+                    exact_closest,
+                    records,
+                    seen,
+                    &mut dnssec_state.dnssec_augmented,
+                );
+                push_rrset_records(covering, records, seen, &mut dnssec_state.dnssec_augmented);
+                return;
+            }
+            if closest == self.origin {
+                return;
+            }
+            candidate = closest.parent();
+        }
     }
 
     fn add_nodata_nsec_augmentations(
