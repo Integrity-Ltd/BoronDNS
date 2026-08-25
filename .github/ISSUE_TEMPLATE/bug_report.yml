@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible BoronDNS defect
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not disclose a non-public vulnerability here. Follow SECURITY.md and
+        remove credentials, keys, private zone data, and personal information.
+  - type: input
+    id: version
+    attributes:
+      label: BoronDNS version or commit
+      placeholder: "1.0.0 or full commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Authoritative query serving
+        - AXFR / IXFR / NOTIFY
+        - TSIG / XoT
+        - DNSSEC / NSEC / NSEC3
+        - Catalog zones
+        - Configuration / CLI
+        - Packaging / container / release artifacts
+        - BoronGun
+        - BoronGen
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, deployment form, primary implementation/version, and relevant transport.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a redacted configuration or packet description when useful.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or evidence
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed secrets, private zone data, internal-only details, and personal information.
+          required: true
+        - label: This is not a non-public security vulnerability.
+          required: true

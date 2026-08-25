@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a scoped BoronDNS capability or operator improvement
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Operator problem
+      description: Describe the operational need rather than only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: standards
+    attributes:
+      label: Relevant RFCs or interoperability constraints
+      description: Include RFC sections and primary/server behavior where applicable.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility and operational impact
+      description: Consider configuration, wire behavior, memory, QPS, security, and migration.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: I understand BoronDNS is a secondary-only authoritative server.
+          required: true
