@@ -193,7 +193,7 @@ PACKAGE_STEP_SHA256 = {
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
-    "Create GitHub release": "ada03c79d427c9bcc8706a78f6b992ad96d8509365735bf3fee89e9f3832e24e",
+    "Create GitHub release": "ed9e6f70d1444ab86190ed6a176b0c12445745f900400aa6008ca28e4f8939df",
 }
 PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
 

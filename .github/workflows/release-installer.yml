@@ -631,6 +631,15 @@ jobs:
           $release_transaction_marker
           BoronDNS $version
 
+          Support posture: initial public beta. The DNS wire behavior and
+          documented operator interfaces are supported; internal Rust crate
+          APIs and ABI are not stable. BoronDNS is a secondary-only
+          authoritative server: primary service, dynamic update, recursive
+          resolution, and encrypted client-query listeners are out of scope.
+          Detailed RFC dispositions and future full-acceptance evidence gaps
+          remain in docs/rfc-compliance-assertions.md and
+          docs/release-acceptance-gap-register.md at this tag.
+
           Assets:
           - Installer archive: $tarball
           - Static BoronDNS binary: $binary

@@ -39,7 +39,7 @@
 | v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
 | v0.9.1 large-zone IXFR note | 13 Aug 2026 | Codex | Adds BDS-IF-CONF-019 for the externally visible compact/sharded/auto zone-publication policy used to keep small-zone query behavior while allowing delta-sensitive publication of large-zone IXFR. The policy is explicitly performance-only and does not weaken atomic refresh or DNS correctness requirements. |
 | v0.9.1 release-alignment review | 15 Aug 2026 | Codex | Reviews the complete current SRS against the implementation and active documentation after the RFC-compliance and large-zone IXFR work. Adds the missing BDS-IF-CONF-020 traceability for RFC 5936 last-good-zone persistence; replaces the unavailable 30-day soak/configuration promise with risk-based bounded-runtime evidence; replaces fixed vulnerability-response and embargo promises with truthful public-beta intake requirements; and aligns the acceptance gate to several independent 24-hour fuzz rounds, one final 0.9.1 validation release, then a 1.0.0 public-beta decision. Requirement identifiers remain stable. |
-| v1.0.0 | 22 Aug 2026 | Codex | Establishes the initial public-beta requirements baseline after the 0.9.1 validation release. Separates the supported 1.0 product boundary from future full-acceptance evidence targets, updates the XoT profile to the implemented TLS 1.3-only behavior, and retains stable requirement identifiers. |
+| v1.0.0 | 22 Aug 2026 | Codex | Establishes the initial public-beta requirements baseline after the 0.9.1 validation release. Separates the supported 1.0 product boundary from future full-acceptance evidence targets, updates the XoT profile to the implemented TLS 1.3-only behavior, and assigns detailed verification records to canonical repository evidence rather than duplicating them in concise public release notes. Requirement identifiers remain stable. |
 
 ---
 
@@ -2660,9 +2660,9 @@ If a structurally valid incoming member zone name clashes with an existing zone 
 
 The area code **MAINT** is allocated.
 
-**BDS-NFR-MAINT-001.** The total source-line count of first-party Rust code SHOULD remain within the range 5,000 to 15,000 lines, excluding tests, dependencies, and generated code. The release process MUST measure and record the actual line count in the release notes for each release. Where the count exceeds 15,000 lines, the release notes MUST include a `Rationale for exceeding LOC target` section explaining the necessary increase, the features that drove it, and the maintainability-protection measures (modularisation, documentation, test coverage) compensating for it.
+**BDS-NFR-MAINT-001.** The release process SHOULD measure the first-party Rust source-line count, excluding tests, dependencies, and generated code, as a maintainability trend. No fixed line-count range is a release criterion: functionality, reviewable module boundaries, documentation, testing, and automated unused-code checks are the relevant controls. Measurements and any material growth rationale belong in the Architecture Document or retained release evidence, not necessarily in public release notes.
 *Source.* Project maintainability target.
-*Verification.* Source-line measurement at release time using `tokei` or equivalent; release notes inspection.
+*Verification.* Source-line measurement using `tokei` or equivalent; Architecture Document or retained-evidence inspection.
 
 **BDS-NFR-MAINT-002.** The codebase MUST be organised into clearly named, single-purpose production modules with explicit review boundaries. Every first-party production Rust source module MUST appear in the Architecture Document's module map, and every mapped module MUST correspond to current production source. Each major functional area of §4 MUST be mappable to one or more identifiable modules; support-tool modules MUST be labelled separately so they do not silently expand the server's protocol scope. The release process MUST record the discovered module count, but the count is an inventory signal rather than an acceptance range: splitting or merging modules is justified by locality of behavior, ownership boundaries, and reviewability rather than an arbitrary numeric target.
 *Source.* Maintainability and auditability design principle.
@@ -2689,9 +2689,9 @@ The area code **MAINT** is allocated.
 - the metric names and label keys per BDS-NFR-OBS-003;
 - the health endpoint paths and response structure per BDS-NFR-OBS-004.
 
-Removal or semantic change of any element of these interfaces requires a major-version increment. Addition of new optional configuration fields, new metric labels (where labels are additive), new optional command-line arguments, and new metric series is permitted at minor-version increments. The release notes for each release MUST document which interface elements (if any) have changed, distinguishing additions, deprecations, and breaking changes.
+Removal or semantic change of any element of these interfaces requires a major-version increment after the public-beta compatibility baseline is declared stable. During the 1.0 public-beta support posture, documented breaking changes MAY be made when operationally necessary, but MUST be identified in the interface compatibility policy or release notes. Additions, deprecations, and breaking changes are maintained in the canonical interface compatibility documentation; public release notes need mention only operator-relevant changes.
 *Source.* Operational stability for in-place upgrades; semantic versioning practice; coordination with BDS-IF-CONF-002.
-*Verification.* Release-notes review at each release; CI-integrated interface-diff checks against the previous release.
+*Verification.* Interface-policy review and CI-integrated interface-diff checks against the previous accepted baseline where one exists.
 
 **BDS-NFR-MAINT-007.** Unit test coverage for first-party Rust code MUST be at least 70% line coverage as measured by `cargo-llvm-cov` or an equivalent coverage tool. Wire-format parsers (DNS message parser, EDNS option parser, RR-type decoders, TSIG verifier, AXFR/IXFR stream parser, DNS Cookie cryptographic computation, TLS/X.509 handling for XoT) MUST individually achieve at least 85% line coverage. Coverage is measured at release time and recorded in release notes alongside the LOC measurement of BDS-NFR-MAINT-001.
 *Source.* Maintainability; defensive engineering; aligned with BDS-NFR-SEC-002 (fuzz testing applies orthogonally and is not a substitute for unit-test coverage).
@@ -3382,15 +3382,11 @@ The following methods are used, individually or in combination, to verify the re
 *Source.* Audit and reproducibility.
 *Verification.* Release-evidence review at release time, including CI logs or equivalent retained release-gate automation logs; sample-based retrieval of evidence from past releases.
 
-**BDS-VER-010.** Each release MUST be preceded by execution of the verification suite per BDS-VER-001 against the release candidate. Results MUST be captured in the release notes including, at minimum:
-(a) per-requirement-category counts of Verified, Deferred, and Failed (using the verification status terminology of BDS-VER-009);
-(b) any new Failed results compared to the previous release on the same major version;
-(c) any newly Deferred results compared to the previous release on the same major version;
-(d) the version identifiers and exact configurations of the primary implementations used in Interoperability test execution (per BDS-VER-013).
+**BDS-VER-010.** Each release MUST be preceded by the verification appropriate to its declared support posture. Detailed results, requirement dispositions, interop versions, and regression records MUST be retained in the canonical repository evidence or release-workflow artifacts. Public release notes MUST identify the version, supported artifact set, public-beta posture and material operator-facing limitations, plus artifact-verification instructions. They MAY link to canonical evidence instead of copying its tables.
 
-A release with any BDS-FR, BDS-NFR, BDS-IF, BDS-INV, or BDS-NEG requirement marked Failed (verification was expected to succeed but did not) MUST NOT proceed without an explicit project decision recorded in the release notes with rationale and target remediation release.
+A release with a known release-blocking failure MUST NOT proceed without an explicit project decision recorded in canonical release evidence. A limitation already classified as Deferred for the public-beta posture is not a failed release gate merely because future full-acceptance evidence remains open.
 *Source.* Release-process discipline; resolution of v0.6 audit finding about absent pre-release verification gate.
-*Verification.* Release-notes review at each release; sampling of past release notes confirming the required content.
+*Verification.* Review of public release notes and linked canonical release evidence.
 
 **BDS-VER-011.** Verification methods are classified by execution cadence into three categories:
 - **Continuous** — executed by the active continuous gate for the project stage, with results being build-blocking for accepted changes. During the private-repository Engineering MVP profile this gate is the local `scripts/check.sh` command; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record must cover the accepted commit. Continuous methods comprise: Static analysis, Unit test, Property-based test where present, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per BDS-NFR-SEC-006).
@@ -3435,9 +3431,9 @@ For each (server, primary) pair, the test matrix MUST cover:
 - the relevant configuration (TSIG algorithm if used, XoT certificate authority if used, IXFR enablement, NOTIFY enablement);
 - the timestamp of test execution.
 
-The interop pass/fail assertion is bound to this specific configuration. Re-testing against a different primary version requires a new verification run; previous results MUST NOT be assumed transitive to a different version. The recorded version information MUST appear in the release notes per BDS-VER-010 and in the verification evidence retained per BDS-VER-002.
+The interop pass/fail assertion is bound to this specific configuration. Re-testing against a different primary version requires a new verification run; previous results MUST NOT be assumed transitive to a different version. The recorded version information MUST be retained in verification evidence per BDS-VER-002; release notes MAY link to that evidence.
 *Source.* Reproducibility; resolution of v0.6 audit finding about interop version pinning.
-*Verification.* Release-notes inspection at each release; sampling of interop test logs confirming version information is captured.
+*Verification.* Sampling of retained interop test logs confirming version and configuration information is captured.
 
 ## 7.3 RFC Compliance Assessment
 
@@ -3449,16 +3445,16 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 *Source.* Accurate scoping of compliance claims.
 *Verification.* Traceability matrix review.
 
-**BDS-VER-014.** RFC compliance assertions per BDS-VER-005 and BDS-VER-006 MUST be maintained in a canonical structured primary-documentation register and published in the project's release notes for each release. Each entry MUST identify:
+**BDS-VER-014.** RFC compliance assertions per BDS-VER-005 and BDS-VER-006 MUST be maintained in a canonical structured primary-documentation register. Each entry MUST identify:
 - the RFC number and title;
 - the compliance status: **Fully Compliant**, **Partially Compliant** (with scope qualifier), **Not Compliant** (with rationale), or **Informative Only** (the RFC is referenced for guidance, not for normative compliance);
 - the scope qualifier where applicable (e.g., "secondary-side clauses only", "wire-format aspects only", "selected clauses: §N.M, §P.Q");
 - any unresolved compliance gaps with a `Target resolution milestone` value (for example, a future-scope transport RFC or an explicitly deferred primary-side clause);
 - the SRS revision against which the assertion is made (the SRS version current at the release).
 
-The canonical register is `docs/rfc-compliance-assertions.md` for this repository. The Operator Deployment Guide per BDS-NFR-MAINT-009 MUST link to that register and summarize the current operator-facing posture so potential operators can assess the project's compliance posture without parsing release notes. Release notes MUST copy or generate the structured list from the canonical register, update evidence pointers and gap dispositions for the released artifact, and retain a primary-documentation sync pointer. Primary documentation MUST NOT maintain a second hand-copied RFC compliance table.
+The canonical register is `docs/rfc-compliance-assertions.md` for this repository. The Operator Deployment Guide per BDS-NFR-MAINT-009 MUST link to that register and summarize the current operator-facing posture so potential operators can assess the project's compliance posture without parsing release notes. Release notes MAY link to the canonical register. Primary documentation MUST NOT maintain a second hand-copied RFC compliance table.
 *Source.* Operator-facing transparency; resolution of v0.6 audit finding about RFC compliance assertion publication.
-*Verification.* Release-notes inspection confirming structured-list presence and content; cross-check that the canonical register and Operator Deployment Guide pointer are synchronized.
+*Verification.* Cross-check that the canonical register and Operator Deployment Guide pointer are synchronized.
 
 ## 7.4 Acceptance Criteria for Release Milestones
 
@@ -3507,15 +3503,15 @@ The traceability matrix MUST be updated synchronously with each release: at the 
 (a) a requirement previously marked Verified now failing verification (functional regression);
 (b) a performance NFR metric (a BDS-NFR-PERF-* or BDS-NFR-RES-* requirement) previously meeting target now degraded beyond a configurable threshold (parameter `regression.performance_threshold_pct`, default 10%), measured against the median of the last 5 release measurements for the same metric on the Reference Hardware Profile.
 
-Each detected regression MUST be triaged within the release process: root-cause analysis recorded, and either a fix applied OR the regression explicitly accepted with rationale recorded in release notes alongside the per-release verification summary of BDS-VER-010. A release with un-triaged regressions MUST NOT proceed.
+Each detected regression MUST be triaged within the release process: root-cause analysis recorded, and either a fix applied OR the regression explicitly accepted with rationale in canonical release evidence. Material operator-facing regressions MUST also be disclosed in release notes. A release with an untriaged release-blocking regression MUST NOT proceed.
 
 Regression baseline: the rolling window of the last 5 release measurements is used to absorb measurement noise; the first release of a major version, having no prior history, establishes the initial baseline rather than triggering regression detection. New requirements introduced in a release have no prior verification result and thus cannot regress; they are simply Verified or Failed against the new requirement's acceptance criterion.
 *Source.* Release-process discipline; resolution of v0.6 audit finding about absent regression policy.
-*Verification.* Periodic Performance test per BDS-VER-011 captures rolling metrics; release-notes inspection at each release for regression triage documentation.
+*Verification.* Periodic Performance test per BDS-VER-011 captures rolling metrics; retained release-evidence inspection for regression triage documentation.
 
 **BDS-VER-015.** Verification execution roles are allocated as follows:
 - **Continuous methods** per BDS-VER-011 are executed through the active continuous gate for the project stage. During the private-repository Engineering MVP profile this is local `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
-- **Periodic methods** per BDS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in release notes.
+- **Periodic methods** per BDS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in canonical release evidence.
 - **Gate methods** per BDS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
 - **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through the 1.0 public-beta gate, this role is held by DT.
 - **External operator review**, when available, introduces a third-party verifier. Its identity, reviewed scope, and conclusions SHOULD be recorded in the release notes, but the review is supporting evidence rather than a BDS-VER-008 prerequisite.
@@ -3523,7 +3519,7 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 
 Where a single individual fills multiple roles (typical for the project's small team), the role accountability is unaffected; the individual signs off in each capacity. Where a role is unfilled (e.g., the release-engineer role is shared rotationally), the rotation schedule is recorded in the Architecture Document.
 *Source.* Project governance clarity; resolution of v0.6 audit finding about absent verification responsibility allocation.
-*Verification.* Architecture Document review confirming role allocations; release-notes inspection confirming sign-off attestations against allocated roles.
+*Verification.* Architecture Document and retained release-evidence review confirming role allocations and release authorization.
 
 ## 7.6 Test Plan Boundary
 

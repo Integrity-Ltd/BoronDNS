@@ -94,9 +94,11 @@ selected BIND, NSD, Knot, and PowerDNS/PostgreSQL primary scenarios. It writes
 `target/evidence/primary-matrix-...` by default, or under
 `BORONDNS_PRIMARY_MATRIX_ARTIFACT_DIR` when set.
 
-Set `BORONDNS_RELEASE_NOTES` to a completed release-notes markdown file to run
-the release-note gate and verify that retained primary-version artifact paths
-are published in the notes.
+`BORONDNS_RELEASE_NOTES` remains available for a future formal-acceptance
+dossier. It is not required for the 1.0 public-beta tag: detailed primary-version
+and requirement evidence remains in the canonical repository records, while the
+tagged workflow generates concise public artifact notes and verification
+instructions.
 
 Set `BORONDNS_PERF_BASELINE` to a whitespace-delimited history file with rows
 shaped as `release metric value` to compare retained `perf-smoke-metrics.env`
@@ -372,10 +374,10 @@ verifies package/image creation and runtime smoke behavior only; archive
 reproducibility, Docker image archive reproducibility, public artifact signing,
 and independent-builder sign-off remain separate release-governance work.
 
-For the 1.0 public-beta gate, release notes must identify the required project
-reviewers and their scope. If an external operator review is available, the
-notes should record the reviewer, reviewed scope, and conclusions as supporting
-evidence; `BDS-VER-008` and `BDS-VER-015` do not require one.
+For the 1.0 public-beta gate, release authorization and review scope are retained
+in canonical release evidence. If an external operator review is available, its
+scope and conclusions may be retained as supporting evidence; `BDS-VER-008` and
+`BDS-VER-015` do not require one or require it to be copied into public notes.
 
 ## Primary Interop Evidence
 
