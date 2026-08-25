@@ -34,7 +34,7 @@ DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 RELEASE_TAG_VERIFIER = ROOT / "scripts" / "verify-release-tag-signature.sh"
 EXPECTED_RELEASE_HELPER_SHA256 = {
     RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
-    RELEASE_REPRODUCIBILITY_VERIFIER: "bd8bf24dbe3e781c000e7d236347860dca0801ef046cc86ac6a60806301a8acd",
+    RELEASE_REPRODUCIBILITY_VERIFIER: "5c78e231ae1148d46a7e597eb9d91298e1708d06836dff8c65dc9a2b16db229e",
     DOCKER_ARCHIVE_VERIFIER: "e461cb8aadf7b3fea389e3210e3a49ad69f0cbb33a8216a69a9710b421ba3923",
     RELEASE_TAG_VERIFIER: "645eb1af3a62a647c1f4c197d487e24d7ed49e4c097268178cd6646f3e3bac1b",
 }
@@ -2765,7 +2765,7 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
             f"{artifact}\tx86_64-unknown-linux-musl\trelease\t{digest}\t{digest}\t"
             f"{size}\t{size}\ttrue\tartifacts/a/{artifact}\tartifacts/b/{artifact}"
         )
-        features = "" if artifact == "borondns" else "xdp"
+        features = "af-xdp" if artifact == "borondns" else "xdp"
         for builder in ("a", "b"):
             manifest_rows.append(
                 f"{artifact}\t{builder}\tx86_64-unknown-linux-musl\trelease\t"
@@ -2836,7 +2836,7 @@ def run_release_reproducibility_regressions() -> None:
         manifest = root / "artifact-manifest.tsv"
         original_manifest = manifest.read_text(encoding="utf-8")
         manifest.write_text(
-            original_manifest.replace("\trelease\t\t", "\trelease\txdp\t", 1),
+            original_manifest.replace("\trelease\taf-xdp\t", "\trelease\txdp\t", 1),
             encoding="utf-8",
         )
         mismatched = subprocess.run(command, check=False, capture_output=True, text=True)

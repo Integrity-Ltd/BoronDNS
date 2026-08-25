@@ -157,7 +157,7 @@ def main() -> None:
     for row in manifest:
         artifact, builder = row["artifact"], row["builder"]
         comparison = comparison_by_artifact[artifact]
-        features = "" if artifact == "borondns" else "xdp"
+        features = "af-xdp" if artifact == "borondns" else "xdp"
         package = "borondns-cli" if artifact == "borondns" else "boron-gun"
         feature_suffix = "" if not features else f" --features {features}"
         command_suffix = (
