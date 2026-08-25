@@ -131,9 +131,9 @@ FORBIDDEN_TEXT = {
     "doc alignment": "current SRS revision notes should state product changes, not import-process labels",
     "spec alignment": "current SRS revision notes should state product changes, not import-process labels",
     "tool alignment": "current SRS revision notes should state product changes, not import-process labels",
-    "| Property-based testing in Alpha scope |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
-    "| Server module decomposition (`server/lib.rs` monolith) |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
-    "| 1% idle CPU bound for 1000 zones |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
+    "| Property-based testing in Alpha scope |": "pending project-decision rows belong in project-decision-register.md and release-acceptance-gap-register.md, not the SRS",
+    "| Server module decomposition (`server/lib.rs` monolith) |": "pending project-decision rows belong in project-decision-register.md and release-acceptance-gap-register.md, not the SRS",
+    "| 1% idle CPU bound for 1000 zones |": "pending project-decision rows belong in project-decision-register.md and release-acceptance-gap-register.md, not the SRS",
     "The complete normative catalogue, reproduced from §4.14": "Appendix B must not duplicate the normative §4.14 RR catalogue table",
     "The same structured list MUST be reproduced": "BDS-VER-014 must use a canonical RFC compliance register plus primary-documentation pointer, not duplicated tables",
     "MUST be reproduced — verbatim": "BDS-VER-014 must use a canonical RFC compliance register plus primary-documentation pointer, not duplicated tables",
@@ -345,7 +345,7 @@ REQUIRED_TEXT = [
     "**Status:** Requirements baseline for the BoronDNS 1.0.0 public beta. Requirements identified as future full-acceptance targets are not claims of completed 1.0 release evidence.",
     "only the rule that keeps those documents synchronized.",
     "Appendix C.5 does not duplicate the decision table.",
-    "The current pending subset is summarized in `docs/mvp-gap-register.md`",
+    "The current pending subset is summarized in `docs/release-acceptance-gap-register.md`",
 ]
 
 REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [

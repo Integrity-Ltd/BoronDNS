@@ -72,7 +72,7 @@ passive DNSSEC serving, and opt-in CHAOS diagnostics.
 
 These slices are release-candidate scope because current code and tests own
 them. They are not complete formal SRS release-acceptance claims until the
-relevant rows in `docs/mvp-gap-register.md`, `docs/verification-ledger.md`, and
+relevant rows in `docs/release-acceptance-gap-register.md`, `docs/verification-ledger.md`, and
 `docs/appendix-a-traceability-matrix.md` have retained release-grade evidence.
 
 ## Retained Support And Evidence Tooling

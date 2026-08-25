@@ -42,7 +42,7 @@ BoronDNS 1.0 is the initial public release with a **public-beta support
 posture**. It is an authoritative secondary DNS server, not a claim that every
 aspirational full-SRS acceptance target is complete. Current verification
 status and explicitly retained limitations are tracked in the
-[SRS acceptance gap register](docs/mvp-gap-register.md).
+[SRS acceptance gap register](docs/release-acceptance-gap-register.md).
 
 The current public-beta scope is wider than a minimal static-zone
 secondary. Retained feature slices stay in scope exactly as bounded in
@@ -124,7 +124,7 @@ published as stable crates.io libraries; their Rust APIs and ABI are internal.
 - [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Implemented feature scope](docs/implemented-feature-scope.md)
-- [SRS acceptance gap register](docs/mvp-gap-register.md)
+- [SRS acceptance gap register](docs/release-acceptance-gap-register.md)
 - [SRS review disposition](docs/srs-review-disposition.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)

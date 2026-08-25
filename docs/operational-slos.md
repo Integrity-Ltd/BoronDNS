@@ -6,7 +6,7 @@ This guide records suggested operational service-level objectives for BoronDNS
 deployments. It is not a formal SRS acceptance claim. Engineering MVP provides
 the evidence commands and handoff paths; formal SRS acceptance still depends on
 later performance, reliability, soak, and external-operator evidence execution
-tracked in `docs/mvp-gap-register.md`.
+tracked in `docs/release-acceptance-gap-register.md`.
 
 ## Suggested Operational SLOs
 

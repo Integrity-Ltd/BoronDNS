@@ -2,7 +2,7 @@
 
 This file lists command entry points used by the release-candidate preflight and
 later SRS acceptance evidence flows. It is command inventory only; current
-evidence state and remaining gaps stay in `docs/mvp-gap-register.md`,
+evidence state and remaining gaps stay in `docs/release-acceptance-gap-register.md`,
 `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`.
 
 `scripts/release-evidence-snapshot.sh` copies all shell blocks below into its

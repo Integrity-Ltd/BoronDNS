@@ -30,7 +30,7 @@ must change in the same patch.
 
 The bounded local preflight must not claim completed long-running evidence
 unless release artifacts exist. The following are release closeout or formal
-SRS acceptance activities tracked in `docs/mvp-gap-register.md`:
+SRS acceptance activities tracked in `docs/release-acceptance-gap-register.md`:
 
 - Several independent 24-hour fuzz campaigns across the release-selected
   parser and untrusted-input targets.

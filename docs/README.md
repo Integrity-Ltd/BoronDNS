@@ -33,7 +33,7 @@ and slowly diverging.
 | What is required behavior? | `BoronDNS-Secondary-SRS-v1.0.0.md` | Link to the requirement ID instead of restating normative wording. |
 | What is the current release-candidate boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred from local preflight. |
 | Is the release candidate ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
-| What is still open for SRS acceptance? | `mvp-gap-register.md` | Keep only short active closeout gaps here; put detailed evidence in the ledger or Appendix A. |
+| What is still open for SRS acceptance? | `release-acceptance-gap-register.md` | Keep only short active closeout gaps here; put detailed evidence in the ledger or Appendix A. |
 | What evidence exists by requirement family? | `verification-ledger.md` | Keep coarse status here; put per-requirement/range detail in Appendix A. |
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How are RFC traceability rules maintained? | `rfc-traceability-policy.md` | Keep RFC mapping conventions, status vocabulary, and out-of-scope clause handling here; keep current structured compliance rows in `rfc-compliance-assertions.md`. |
@@ -55,6 +55,7 @@ and slowly diverging.
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
 | Where are operator SLOs published? | `operational-slos.md` | Keep informative SLO targets here and link from the operator guide; do not duplicate the SLO table in the SRS. |
 | How is release evidence captured? | `release-evidence-guide.md` | Keep snapshot options and handoff mechanics here; link from operator docs instead of duplicating the runbook. |
+| What final v0.9.1 fuzz evidence supports the 1.0 public-beta decision? | `fuzz-soak-v0.9.1-2026-08.md` | Keep the collected campaign identity, validation result, execution lower bound, and resource summary here. |
 | What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
 | Which extra implemented features are retained? | `implemented-feature-scope.md` | Keep the exact retained slice and nearby non-claims here; summarize or link elsewhere. |
@@ -129,6 +130,8 @@ and slowly diverging.
   notes for large catalog, AXFR, and NSEC3 load tests.
 - `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
   and XDP evidence campaign runbook for the local physical hosts.
+- `fuzz-soak-v0.9.1-2026-08.md`: collected final v0.9.1 two-host 24-hour
+  AddressSanitizer campaign result and resource summary.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
   release-candidate boundary, opt-in member-transfer extensions, and E2E test
   shape.
@@ -146,7 +149,7 @@ and slowly diverging.
 - `implementation-plan.md`: milestone direction and ownership pointers, without
   duplicating the detailed feature inventory, current status, or
   release-acceptance checklist.
-- `mvp-gap-register.md`: short active queue of SRS acceptance blockers and
+- `release-acceptance-gap-register.md`: short active queue of SRS acceptance blockers and
   evidence gaps.
 - `evidence-command-catalog.md`: command inventory consumed by release evidence
   snapshot tooling.

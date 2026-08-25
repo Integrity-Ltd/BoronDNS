@@ -1185,7 +1185,7 @@ current operator-relevant limitations are:
 
 - Current `main` is aligned to the SRS v1.0.0 requirement set, but formal SRS
   acceptance still requires release-specific evidence and sign-off. The current
-  evidence state is intentionally centralized in `docs/mvp-gap-register.md`,
+  evidence state is intentionally centralized in `docs/release-acceptance-gap-register.md`,
   `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`
   rather than repeated in this operator runbook.
 - Implemented Engineering MVP features that are broader than a minimal

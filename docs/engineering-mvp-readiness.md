@@ -12,7 +12,7 @@ candidate ready, while keeping full SRS `BDS-VER-008` acceptance separate.
 - `docs/engineering-mvp-scope.md` remains the release-candidate scope boundary.
 - `docs/implemented-feature-scope.md` remains the code-aligned source of truth
   for retained implemented slices that exceed a minimal static-zone trim.
-- `docs/mvp-gap-register.md` separates release-candidate evidence from
+- `docs/release-acceptance-gap-register.md` separates release-candidate evidence from
   remaining SRS acceptance gaps.
 - `docs/evidence-command-catalog.md` owns the command inventory consumed by
   evidence snapshot tooling.
@@ -48,7 +48,7 @@ v0.2.0 static-binary reproducible-build comparison is retained in
 `docs/reproducible-build-v0.2.0.md`. Completed benchmark and 24-hour fuzz
 evidence may be retained and cited by the release, including the planned
 several independent 24-hour rounds, but any missing release
-artifact must remain explicit in `docs/mvp-gap-register.md` and the release
+artifact must remain explicit in `docs/release-acceptance-gap-register.md` and the release
 notes.
 
 ## Stop Conditions
@@ -61,4 +61,4 @@ Do not call the release candidate ready when any of the following are true:
   handoff placeholder.
 - Documentation claims full SRS acceptance without release-specific evidence
   and owner sign-off.
-- `docs/mvp-gap-register.md` no longer identifies remaining SRS acceptance gaps.
+- `docs/release-acceptance-gap-register.md` no longer identifies remaining SRS acceptance gaps.

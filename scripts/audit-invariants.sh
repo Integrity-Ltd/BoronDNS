@@ -1006,8 +1006,11 @@ def persistent_mutation_matches(text: str) -> list[tuple[int, str]]:
             if parsed is not None and len(parsed[0]) > flag_index:
                 expression = parsed[0][flag_index]
                 if reference.endswith("openat2"):
+                    safe = provably_read_only_flag_expression(
+                        expression, READ_ONLY_RUSTIX_OPEN_FLAGS, "OFlags"
+                    )
                     flag_call = re.search(r"\.\s*flags\s*\(", expression)
-                    if flag_call is not None:
+                    if not safe and flag_call is not None:
                         nested_open = expression.find("(", flag_call.start())
                         nested = balanced_call_arguments(expression, nested_open)
                         safe = nested is not None and len(nested[0]) == 1 and provably_read_only_flag_expression(
@@ -1026,7 +1029,7 @@ read_only_filesystem_fixture = """
 use std::fs::{File, OpenOptions};
 use std::{fs::{OpenOptions as NestedReadOptions}};
 use tokio::fs::OpenOptions as AsyncOptions;
-use rustix::fs::{open, openat, Mode, OFlags};
+use rustix::fs::{open, openat, openat2, Mode, OFlags, ResolveFlags};
 let mut options = OpenOptions::new();
 options.read(true);
 options.custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK);
@@ -1036,6 +1039,7 @@ let _async = AsyncOptions::default().read(true).open(async_path).await?;
 let _nested = NestedReadOptions::new().read(true).open(nested_path)?;
 let _root = open(root, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())?;
 let _child = openat(&_root, child, OFlags::RDONLY | OFlags::NOFOLLOW, Mode::empty())?;
+let _object = openat2(&_root, object, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty(), ResolveFlags::NO_SYMLINKS)?;
 """
 if persistent_mutation_matches(read_only_filesystem_fixture):
     raise SystemExit("BDS-INV-004 scanner rejected its read-only filesystem fixture")
@@ -5364,6 +5368,7 @@ print()
 print("allowed_startup_file_reads:")
 allowed_reads = [
     "crates/borondns-core/src/config.rs: configuration and TSIG secret file reads at startup validation or config dump",
+    "crates/borondns-server/src/af_xdp.rs: descriptor-bound read-only eBPF object loading during explicit AF_XDP startup",
     "crates/borondns-server/src/lib.rs: XoT certificate/key/trust-anchor reads during startup validation or transfer setup",
 ]
 for item in allowed_reads:

@@ -29,7 +29,7 @@ for:
 This run does not claim XoT release evidence, DNSSEC signing-authority breadth,
 DNS Cookie deployment evidence, production operator acceptance, reference
 hardware performance, or long-running soak acceptance. Those remain tracked as
-separate closeout rows in `docs/mvp-gap-register.md`.
+separate closeout rows in `docs/release-acceptance-gap-register.md`.
 
 ## Tested Versions
 

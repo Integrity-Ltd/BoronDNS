@@ -65,7 +65,7 @@ local verification profile. The exact retained feature slices, source
 ownership, representative evidence, and nearby non-claims are owned by
 `docs/implemented-feature-scope.md`. Current evidence state and remaining
 formal-acceptance gaps are owned by `docs/verification-ledger.md`,
-`docs/mvp-gap-register.md`, and `docs/appendix-a-traceability-matrix.md`.
+`docs/release-acceptance-gap-register.md`, and `docs/appendix-a-traceability-matrix.md`.
 
 Release-candidate runtime scope excludes eBPF/XDP, BoronDNS server AF_XDP,
 io_uring, NSD-style packed arena storage, and a hot response-cache backend.
@@ -75,7 +75,7 @@ backend is load-generator scope only.
 ## SRS Acceptance Execution Target
 
 The later `BDS-VER-008` acceptance execution target is owned by the SRS,
-`docs/mvp-gap-register.md`, `docs/test-plan.md`, and
+`docs/release-acceptance-gap-register.md`, `docs/test-plan.md`, and
 `docs/release-evidence-guide.md`. This plan does not duplicate the acceptance
 checklist. At this level the implementation-plan rule is that formal acceptance
 work may require additional retained evidence without narrowing the
@@ -105,7 +105,7 @@ row. When implementation status changes:
   `docs/architecture.md`;
 - put operator commands and deployment examples in
   `docs/operator-deployment-guide.md`;
-- put active open decisions and release blockers in `docs/mvp-gap-register.md`;
+- put active open decisions and release blockers in `docs/release-acceptance-gap-register.md`;
 - put evidence state by requirement family in `docs/verification-ledger.md`;
 - put detailed requirement-range evidence in
   `docs/appendix-a-traceability-matrix.md`;

@@ -133,7 +133,7 @@ Specifically:
 
 - Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the Engineering MVP companion documents.
 - The RFC compliance target is defined and maintained through Appendix A, the companion traceability matrix, and the canonical RFC compliance assertion register.
-- Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps, if any, and release-evidence gaps tracked in `docs/mvp-gap-register.md` and `docs/verification-ledger.md`.
+- Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps, if any, and release-evidence gaps tracked in `docs/release-acceptance-gap-register.md` and `docs/verification-ledger.md`.
 
 ## 1.3 Intended Audience
 
@@ -3635,7 +3635,7 @@ RFC cross-reference index only.
 | `docs/rfc-compliance-assertions.md` | Current structured RFC compliance assertions for BDS-VER-014, including current status and release-evidence gaps. |
 | `docs/appendix-a-traceability-matrix.md` | Requirement-family/range coverage and evidence pointers checked against current SRS requirement IDs. |
 | `docs/verification-ledger.md` | Coarse evidence state by requirement family. |
-| `docs/mvp-gap-register.md` | Remaining implementation and release-acceptance gaps. |
+| `docs/release-acceptance-gap-register.md` | Remaining implementation and release-acceptance gaps. |
 | `docs/srs-review-disposition.md` | External-review findings, accepted protocol fixes, and rejected scope-trim suggestions. |
 
 ## A.5 Cross-Reference Index
@@ -4000,7 +4000,7 @@ release decision resolves or explicitly defers them. Release handoff consumes
 the register to produce `appendix-c5-decision-register.tsv` for the Appendix
 C.5 Decision Review section of release notes.
 
-The current pending subset is summarized in `docs/mvp-gap-register.md` so
+The current pending subset is summarized in `docs/release-acceptance-gap-register.md` so
 release-readiness review has a short active queue without making the SRS a
 second project-decision table.
 The gap register records any current implementation gap between this formal SRS

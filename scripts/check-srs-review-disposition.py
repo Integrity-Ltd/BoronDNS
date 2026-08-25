@@ -15,7 +15,7 @@ MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
 README_PATH = ROOT / "README.md"
 DOCS_README_PATH = ROOT / "docs" / "README.md"
-GAP_REGISTER_PATH = ROOT / "docs" / "mvp-gap-register.md"
+GAP_REGISTER_PATH = ROOT / "docs" / "release-acceptance-gap-register.md"
 VERIFICATION_LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
 OPERATOR_GUIDE_PATH = ROOT / "docs" / "operator-deployment-guide.md"
 

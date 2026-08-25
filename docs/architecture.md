@@ -9,7 +9,7 @@ release-signing choice for `BDS-NFR-MAINT-008`, source-level functional
 requirement references for `BDS-NFR-MAINT-004`, and verification
 responsibility allocation for `BDS-VER-015`, and the completed v0.2.0
 static-binary reproducible-build proof. Broader architecture content and signed
-release artifacts remain tracked in `docs/mvp-gap-register.md`.
+release artifacts remain tracked in `docs/release-acceptance-gap-register.md`.
 
 ## Module Organisation
 

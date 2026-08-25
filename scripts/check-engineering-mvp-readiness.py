@@ -8,7 +8,7 @@ REQUIRED_FILES = [
     "scripts/check.sh",
     "scripts/engineering-mvp-evidence.sh",
     "docs/engineering-mvp-scope.md",
-    "docs/mvp-gap-register.md",
+    "docs/release-acceptance-gap-register.md",
     "docs/evidence-command-catalog.md",
     "docs/verification-ledger.md",
     "docs/implementation-plan.md",
@@ -24,7 +24,7 @@ REQUIRED_PHRASES = [
     "bounded local preflight profile",
     "deferred-not-run.txt",
     "Do not call the release candidate ready",
-    "docs/mvp-gap-register.md",
+    "docs/release-acceptance-gap-register.md",
     "docs/evidence-command-catalog.md",
     "remaining SRS acceptance gaps",
 ]

@@ -120,7 +120,7 @@ REQUIRED_TEXT_BY_PATH = {
         "bounded EDE diagnostics, and opt-in CHAOS identification",
         "Adjacent features are not implied unless that scope document names them.",
     ],
-    "docs/mvp-gap-register.md": [
+    "docs/release-acceptance-gap-register.md": [
         "kind of blocker",
         "Non-normative quality candidate",
         "Formal release evidence target",
