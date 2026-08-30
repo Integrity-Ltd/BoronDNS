@@ -100,8 +100,9 @@ sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
 
 The tag-push release workflow publishes local-use artifacts for
 `x86_64-unknown-linux-musl`: the installer archive, the raw static `borondns`
-binary, the raw static XDP-enabled `boron-gun` binary, and an Alpine-based
-Docker image archive. Each public artifact has a sibling `.sha256` file, and
+binary, the raw static XDP-enabled `boron-gun` binary, an `amd64` Debian/Ubuntu
+package containing those same MUSL executables, and an Alpine-based Docker
+image archive. Each checksummed public artifact has a sibling `.sha256` file, and
 the release also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
 binaries and Docker image. The Docker image is attached as
 `borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
@@ -139,6 +140,20 @@ directory identities between staging and atomic promotion.
 
 Treat any verification failure as a release-rejection condition; do not
 extract the archive or invoke its installer.
+
+For a verified Debian package and its verified `.sha256` sidecar, install with:
+
+```sh
+sudo apt install ./borondns_<version>-1_amd64.deb
+```
+
+The service is enabled but remains inactive until an operator creates
+`/etc/borondns-secondary/config.toml`. Archive installs must first be migrated:
+the package intentionally rejects a pre-existing locally managed
+`/etc/systemd/system/borondns.service`, because it would shadow the package unit.
+Removal preserves configuration and state; purge removes the configuration and
+retains `/var/lib/borondns` so cached or operational zone data is never silently
+deleted.
 
 ```sh
 sha256sum -c borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
@@ -1201,8 +1216,8 @@ current operator-relevant limitations are:
   soaks may supplement them but are not a fixed 1.0 requirement.
 - Container image size and static-binary release packaging are covered by the
   tag-push release workflow through the installer archive, static `borondns`
-  binary, static XDP-enabled `boron-gun` binary, Alpine Docker image archive,
-  and SHA256 sidecars. Registry publication remains intentionally out of scope
+  binary, static XDP-enabled `boron-gun` binary, Debian/Ubuntu `amd64` package,
+  Alpine Docker image archive, and SHA256 sidecars. Registry publication remains intentionally out of scope
   for the current private-repository phase.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.

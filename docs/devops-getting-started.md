@@ -154,6 +154,26 @@ sudo BORONDNS_ZONE=example.com. \
 
 ## 6. Build the Docker Image Archive
 
+### Debian/Ubuntu package
+
+After `scripts/package-installer.sh` has produced the verified MUSL binaries,
+build the native `amd64` package with `dpkg-deb` available:
+
+```bash
+scripts/package-deb.sh
+sha256sum -c target/dist/borondns_*_amd64.deb.sha256
+sudo apt install ./target/dist/borondns_*_amd64.deb
+```
+
+The package installs `borondns` and `boron-gun` under `/usr/bin`, creates the
+`borondns` service account and state directories, and enables the hardened
+systemd unit. It does not invent a working secondary configuration: the unit
+remains inactive until `/etc/borondns-secondary/config.toml` exists. Package
+upgrades preserve configuration and state, removal preserves both, and purge
+removes configuration while retaining `/var/lib/borondns` operational data.
+Run `scripts/test-deb-package-docker.sh` for the Debian 12/13 and Ubuntu
+22.04/24.04 install, upgrade, remove, and purge matrix.
+
 The tag-push release workflow also builds an Alpine-based Docker image and
 publishes it as a compressed Docker archive, not as a registry image. Build and
 smoke-test the same artifact locally with:

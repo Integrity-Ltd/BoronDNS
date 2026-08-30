@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+# The native installer places a locally managed unit in /etc. Such a unit
+# overrides the packaged /usr unit and still points at /usr/local/bin. Refuse
+# the ambiguous first installation rather than silently running the wrong
+# executable. Package upgrades do not enter this branch.
+if [ "$1" = install ] && [ -e /etc/systemd/system/borondns.service ]; then
+    echo "BoronDNS: remove or migrate /etc/systemd/system/borondns.service before installing the .deb" >&2
+    exit 1
+fi
+
+exit 0

@@ -127,6 +127,8 @@ PACKAGE_STEPS = [
     "Verify current-commit reproducible release binaries",
     "Build installer",
     "Docker installer smoke",
+    "Build and verify Debian package",
+    "Debian package lifecycle smoke",
     "Build Docker image archive",
     "Docker image smoke",
     "Generate release SBOMs",
@@ -177,23 +179,25 @@ VERIFY_STEP_SHA256 = {
 PACKAGE_STEP_SHA256 = {
     "Checkout verified source": "7eca7f77d7449358104f62e3fa7d337dfeed951c5769e0e1718fbfda313ae250",
     "Verify packaging source commit": "cb5e0c0c712eb7f630af958cbf4aa76a5cc10254739e7a55adf1286c177aabf9",
-    "Install packaging tools": "a210c8088ed7b9e159304de155aeee896a58b9cb5142bfbcf13ca3aee3fad699",
+    "Install packaging tools": "ec068fd36a12a9b2cbcd5b40d0b57ae00947b34a6fb8fe708cddc994fd2869c4",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
     "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
     "Build installer": "a19e5a8a4448a1af99905d319d426c80d80ed01d864764f6f350fbf71125565b",
     "Docker installer smoke": "68a9c54f99158c2f5113d94c9fb49ae666a239bd2e609e054e567b047dd02aff",
+    "Build and verify Debian package": "18e1a700d8ac11d9b14c7b83f961787b93abb7efe669844a5590408ca7d51990",
+    "Debian package lifecycle smoke": "58e988f21894e1f282dbe15cbce0400e6ee7a783b9c7cec744ad94b36f415053",
     "Build Docker image archive": "d2ac592c0f3558bd33984484af24ec4a10ca59090211d01d613839f12b005440",
     "Docker image smoke": "ccc458342967f6faafeec9490118cfd80dab5d74d1f5922193327596e7c1dce7",
     "Generate release SBOMs": "ae56cdfcbd898d778cd3eb1d0260607dbb9934434b79e93e81166d5c95d845e9",
     "Verify static binaries": "fea7d7f36c7e4caf00f1872ecadca06ae46f4955e81b4a314ae61e025b041c52",
     "Verify packaged source remained clean": "9dfb112f73616187228d34cea7c993bc3eb919cceafe26a55927cc006e7c25cc",
-    "Prepare authenticated release handoff": "8f8d25ec7f7a470a19384aed83ca07fe1a5e34b4e78b3218b7e30df7d9339236",
+    "Prepare authenticated release handoff": "22c1097039f93cacc4740fc426d316afe9992fc930629cabe4735098acbe4af2",
     "Upload authenticated release handoff": "034888e5028cbbd3c8c53a62fd919f820c75ae9231d920671db88b1b46c114da",
 }
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
-    "Create GitHub release": "ed9e6f70d1444ab86190ed6a176b0c12445745f900400aa6008ca28e4f8939df",
+    "Create GitHub release": "ed9723f9d0279924a473e5d1adde751fa126b686138869060e2880ca2120d4c0",
 }
 PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
 
@@ -572,7 +576,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"',
-        "test \"${#assets[@]}\" -eq 16",
+        "test \"${#assets[@]}\" -eq 18",
         'LC_ALL=C /usr/bin/sha256sum -- "${assets[@]##*/}" > release-handoff.sha256',
         'LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256',
         'name: borondns-release-handoff-${{ github.sha }}',
@@ -600,7 +604,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '-F "prerelease=$release_prerelease" -f "make_latest=$release_make_latest"',
         'run_supervised_release_command 120 "$gh_path" api --method POST',
         '"repos/$GITHUB_REPOSITORY/releases"',
-        'test "${#release_assets[@]}" -eq 34',
+        'test "${#release_assets[@]}" -eq 38',
         'release_upload_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets"',
         'test "$release_upload_url" = "$release_upload_base{?name,label}"',
         '"$release_upload_base" -f "name=$asset" --input "$asset"',
@@ -611,9 +615,9 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         'test "$uploaded_size" = "$expected_asset_size"',
         'test "$uploaded_digest" = "sha256:$expected_asset_sha256"',
         'run_supervised_release_command 120 "$gh_path" api --method PATCH',
-        "test \"$(/usr/bin/wc -l < release-handoff.sha256)\" -eq 16",
+        "test \"$(/usr/bin/wc -l < release-handoff.sha256)\" -eq 18",
         "test \"$(/usr/bin/wc -l < signing-inputs.sha256)\" -eq 9",
-        "test \"$(/usr/bin/find . -type f -print | /usr/bin/wc -l)\" -eq 27",
+        "test \"$(/usr/bin/find . -type f -print | /usr/bin/wc -l)\" -eq 29",
     )
     for required in handoff_requirements:
         if required not in text:
@@ -722,7 +726,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '            -F "prerelease=$release_prerelease" -f "make_latest=false" \\\n',
         '          release_upload_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets"\n',
         '          test "$release_upload_url" = "$release_upload_base{?name,label}"\n',
-        '          test "${#release_assets[@]}" -eq 34\n',
+        '          test "${#release_assets[@]}" -eq 38\n',
         '              "$release_upload_base" -f "name=$asset" --input "$asset" \\\n',
         '          run_supervised_release_command 120 "$gh_path" api --method PATCH \\\n',
         '          release_publish_attempted=1\n',
@@ -1240,10 +1244,10 @@ if args and args[0] == "verify-blob":
     count_file = state / "cosign-verify-count"
     count = int(count_file.read_text(encoding="ascii")) + 1 if count_file.exists() else 1
     count_file.write_text(str(count), encoding="ascii")
-    if count == 34 and scenario == "post-sign-asset-mutation":
+    if count == 38 and scenario == "post-sign-asset-mutation":
         target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz"))
         target.write_bytes(target.read_bytes() + b"post sign asset mutation\n")
-    if count == 34 and scenario == "post-sign-bundle-mutation":
+    if count == 38 and scenario == "post-sign-bundle-mutation":
         target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz.sigstore.json"))
         target.write_bytes(target.read_bytes() + b"post sign bundle mutation\n")
     print("Verified OK")
@@ -1305,6 +1309,7 @@ raise SystemExit(64)
             tarball = f"{prefix}.tar.xz"
             binary = f"{prefix}.bin"
             boron_gun = f"{prefix}-boron-gun.bin"
+            deb = f"borondns_{release_version}-1_amd64.deb"
             docker_image = f"{prefix}-docker-image.tar.xz"
             docker_manifest = f"{prefix}-docker-image.manifest.txt"
             borondns_sbom = f"{prefix}-borondns.cdx.json"
@@ -1312,7 +1317,7 @@ raise SystemExit(64)
             docker_sbom = f"{prefix}-docker-image.cdx.json"
             sbom_manifest = f"{prefix}-sbom-manifest.tsv"
             primary_assets = (
-                tarball, binary, boron_gun, docker_image, docker_manifest,
+                tarball, binary, boron_gun, deb, docker_image, docker_manifest,
                 borondns_sbom, boron_gun_sbom, docker_sbom, sbom_manifest,
             )
             for asset in primary_assets:
@@ -1320,7 +1325,7 @@ raise SystemExit(64)
             (handoff / binary).write_bytes(b"reproducible-borondns\n")
             (handoff / boron_gun).write_bytes(b"reproducible-boron-gun\n")
             checksummed = (
-                tarball, binary, boron_gun, docker_image,
+                tarball, binary, boron_gun, deb, docker_image,
                 borondns_sbom, boron_gun_sbom, docker_sbom,
             )
             for asset in checksummed:
@@ -1331,6 +1336,7 @@ raise SystemExit(64)
             handoff_assets = [
                 tarball, f"{tarball}.sha256", binary, f"{binary}.sha256",
                 boron_gun, f"{boron_gun}.sha256", docker_image,
+                deb, f"{deb}.sha256",
                 f"{docker_image}.sha256", docker_manifest, borondns_sbom,
                 f"{borondns_sbom}.sha256", boron_gun_sbom,
                 f"{boron_gun_sbom}.sha256", docker_sbom,
@@ -1358,7 +1364,7 @@ raise SystemExit(64)
                 signing_manifest, encoding="ascii"
             )
             release_assets: list[str] = []
-            for asset in (tarball, binary, boron_gun, docker_image):
+            for asset in (tarball, binary, boron_gun, deb, docker_image):
                 release_assets.extend(
                     (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
                      f"{asset}.sha256.sigstore.json")
@@ -1373,8 +1379,8 @@ raise SystemExit(64)
                 (sbom_manifest, f"{sbom_manifest}.sigstore.json",
                  "release-handoff.sha256", "release-handoff.sha256.sigstore.json")
             )
-            if len(release_assets) != 34:
-                raise RuntimeError("release publication fixture must model exactly 34 assets")
+            if len(release_assets) != 38:
+                raise RuntimeError("release publication fixture must model exactly 38 assets")
             return (
                 release_assets,
                 hashlib.sha256(handoff_manifest.encode()).hexdigest(),
@@ -1476,7 +1482,7 @@ raise SystemExit(64)
                 uploads = (state / "upload-log").read_text(encoding="utf-8").splitlines()
                 if uploads != fixture_assets:
                     raise RuntimeError(
-                        "release publication did not upload the exact 34 assets through the uploads API"
+                        "release publication did not upload the exact 38 assets through the uploads API"
                     )
 
         runner_cases = {

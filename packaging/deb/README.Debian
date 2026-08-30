@@ -1,0 +1,22 @@
+# BoronDNS Debian package
+
+The package installs the static MUSL BoronDNS and BoronGun executables, creates
+the `borondns` service account, and enables `borondns.service`. The service has
+`ConditionPathExists=/etc/borondns-secondary/config.toml`, so a new installation
+remains inactive until an operator installs a valid configuration.
+
+Start the service after configuring it:
+
+```sh
+sudo install -m 0640 -o root -g borondns config.toml \
+  /etc/borondns-secondary/config.toml
+sudo systemctl start borondns
+```
+
+Package removal and purge preserve `/var/lib/borondns`, including zone cache
+data. Remove that directory explicitly only when its operational data is no
+longer required.
+
+The archive installer and this package use different executable locations.
+Remove or migrate an archive install, including its locally managed
+`/etc/systemd/system/borondns.service`, before installing this package.

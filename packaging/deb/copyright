@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: BoronDNS
+Source: https://github.com/Integrity-Ltd/BoronDNS
+
+Files: *
+Copyright: 2025-2026 Integrity Kft. and BoronDNS contributors
+License: MIT or Apache-2.0
+ The complete license texts are installed as
+ /usr/share/doc/borondns/LICENSE-MIT and
+ /usr/share/doc/borondns/LICENSE-APACHE.

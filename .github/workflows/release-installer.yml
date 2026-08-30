@@ -123,7 +123,7 @@ jobs:
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
           test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y lintian musl-tools
           "$HOME/.cargo/bin/rustup" target add --toolchain "$RUST_TOOLCHAIN_VERSION" x86_64-unknown-linux-musl
           RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
           mkdir -p "$HOME/.local/bin"
@@ -185,6 +185,35 @@ jobs:
       - name: Docker installer smoke
         run: scripts/test-installer-docker.sh
 
+      - name: Build and verify Debian package
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          shopt -s nullglob
+          release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
+          release_boron_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
+          test "${#release_borondns[@]}" -eq 1
+          test "${#release_boron_gun[@]}" -eq 1
+          SOURCE_DATE_EPOCH="$(/usr/bin/git show -s --format=%ct HEAD)" \
+            BORONDNS_DEB_BORONDNS_BIN="${release_borondns[0]}" \
+            BORONDNS_DEB_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-deb.sh
+          debs=(target/dist/borondns_*_amd64.deb)
+          test "${#debs[@]}" -eq 1
+          /usr/bin/cp -- "${debs[0]}" "$RUNNER_TEMP/borondns-first.deb"
+          SOURCE_DATE_EPOCH="$(/usr/bin/git show -s --format=%ct HEAD)" \
+            BORONDNS_DEB_BORONDNS_BIN="${release_borondns[0]}" \
+            BORONDNS_DEB_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-deb.sh
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-first.deb" "${debs[0]}"
+          extracted="$RUNNER_TEMP/borondns-deb-extracted"
+          /usr/bin/rm -rf "$extracted"
+          /usr/bin/dpkg-deb -x "${debs[0]}" "$extracted"
+          /usr/bin/cmp -- "${release_borondns[0]}" "$extracted/usr/bin/borondns"
+          /usr/bin/cmp -- "${release_boron_gun[0]}" "$extracted/usr/bin/boron-gun"
+          /usr/bin/dpkg-deb --info "${debs[0]}"
+          /usr/bin/lintian --fail-on error "${debs[0]}"
+
+      - name: Debian package lifecycle smoke
+        run: scripts/test-deb-package-docker.sh
+
       - name: Build Docker image archive
         run: CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" scripts/package-docker-image.sh
 
@@ -238,6 +267,8 @@ jobs:
             target/dist/borondns-*-x86_64-unknown-linux-musl.bin.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin
             target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin.sha256
+            target/dist/borondns_*_amd64.deb
+            target/dist/borondns_*_amd64.deb.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
@@ -249,7 +280,7 @@ jobs:
             target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
             target/dist/borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
           )
-          test "${#assets[@]}" -eq 16
+          test "${#assets[@]}" -eq 18
           release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
           release_boron_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#release_borondns[@]}" -eq 1
@@ -290,7 +321,7 @@ jobs:
             )
             LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256
           )
-          test "$(/usr/bin/wc -l < "$handoff/release-handoff.sha256")" -eq 16
+          test "$(/usr/bin/wc -l < "$handoff/release-handoff.sha256")" -eq 18
           test "$(/usr/bin/wc -l < "$handoff/signing-inputs.sha256")" -eq 9
           printf 'manifest-sha256=%s\n' \
             "$(/usr/bin/sha256sum "$handoff/release-handoff.sha256" | /usr/bin/awk '{print $1}')" \
@@ -369,6 +400,7 @@ jobs:
           tarball="borondns-$version-x86_64-unknown-linux-musl.tar.xz"
           binary="borondns-$version-x86_64-unknown-linux-musl.bin"
           boron_gun="borondns-$version-x86_64-unknown-linux-musl-boron-gun.bin"
+          deb="borondns_${version}-1_amd64.deb"
           docker_image="borondns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
           docker_manifest="borondns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
           borondns_sbom="borondns-$version-x86_64-unknown-linux-musl-borondns.cdx.json"
@@ -385,6 +417,8 @@ jobs:
             borondns-*-x86_64-unknown-linux-musl.bin.sha256
             borondns-*-x86_64-unknown-linux-musl-boron-gun.bin
             borondns-*-x86_64-unknown-linux-musl-boron-gun.bin.sha256
+            borondns_*_amd64.deb
+            borondns_*_amd64.deb.sha256
             borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
@@ -397,7 +431,7 @@ jobs:
             borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
             release-handoff.sha256
           )
-          test "${#assets[@]}" -eq 17
+          test "${#assets[@]}" -eq 19
           release_borondns=(borondns-*-x86_64-unknown-linux-musl.bin)
           release_boron_gun=(borondns-*-x86_64-unknown-linux-musl-boron-gun.bin)
           test "${#release_borondns[@]}" -eq 1
@@ -413,9 +447,9 @@ jobs:
               test "$checksum" = signing-inputs.sha256 && continue
               /usr/bin/sha256sum -c --strict "$checksum"
             done
-            test "$(/usr/bin/wc -l < release-handoff.sha256)" -eq 16
+            test "$(/usr/bin/wc -l < release-handoff.sha256)" -eq 18
             test "$(/usr/bin/wc -l < signing-inputs.sha256)" -eq 9
-            test "$(/usr/bin/find . -type f -print | /usr/bin/wc -l)" -eq 27
+            test "$(/usr/bin/find . -type f -print | /usr/bin/wc -l)" -eq 29
             python3 verify-release-reproducibility.py --require-artifacts \
               --release-borondns "${release_borondns[0]}" \
               --release-boron-gun "${release_boron_gun[0]}" \
@@ -644,9 +678,10 @@ jobs:
           - Installer archive: $tarball
           - Static BoronDNS binary: $binary
           - Static XDP-enabled BoronGun binary: $boron_gun
+          - Debian/Ubuntu amd64 package: $deb
           - Docker image archive: $docker_image
           - CycloneDX SBOMs: $borondns_sbom, $boron_gun_sbom, $docker_sbom
-          - SHA256 files are attached for the installer, binaries, Docker image archive, and SBOMs.
+          - SHA256 files are attached for the installer, binaries, Debian package, Docker image archive, and SBOMs.
           - The authenticated handoff manifest is release-handoff.sha256.
           - Each published asset has a keyless Sigstore bundle named \`<asset>.sigstore.json\`.
           - SBOM evidence manifest: $sbom_manifest
@@ -717,6 +752,8 @@ jobs:
             "$binary.sigstore.json" "$binary.sha256.sigstore.json"
             "$boron_gun" "$boron_gun.sha256"
             "$boron_gun.sigstore.json" "$boron_gun.sha256.sigstore.json"
+            "$deb" "$deb.sha256"
+            "$deb.sigstore.json" "$deb.sha256.sigstore.json"
             "$docker_image" "$docker_image.sha256"
             "$docker_image.sigstore.json" "$docker_image.sha256.sigstore.json"
             "$docker_manifest" "$docker_manifest.sigstore.json"
@@ -729,7 +766,7 @@ jobs:
             "$sbom_manifest" "$sbom_manifest.sigstore.json"
             release-handoff.sha256 release-handoff.sha256.sigstore.json
           )
-          test "${#release_assets[@]}" -eq 34
+          test "${#release_assets[@]}" -eq 38
           for asset in "${release_assets[@]}"; do
             test -f "$asset"
             test ! -L "$asset"

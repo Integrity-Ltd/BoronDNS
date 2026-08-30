@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = purge ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper purge borondns.service >/dev/null || true
+        deb-systemd-helper unmask borondns.service >/dev/null || true
+    fi
+    rm -f /etc/borondns-secondary/config.toml
+    rmdir /etc/borondns-secondary 2>/dev/null || true
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+# Zone data is deliberately retained under /var/lib/borondns after removal or
+# purge. An administrator must explicitly remove operational data.
+exit 0

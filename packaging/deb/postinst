@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+    if ! getent group borondns >/dev/null 2>&1; then
+        addgroup --system borondns
+    fi
+    install -d -m 0750 -o root -g borondns /var/lib/borondns
+    if ! getent passwd borondns >/dev/null 2>&1; then
+        adduser --system --ingroup borondns --home /var/lib/borondns \
+            --no-create-home --disabled-password --shell /usr/sbin/nologin borondns
+    fi
+
+    install -d -m 0750 -o root -g borondns /etc/borondns-secondary
+    install -d -m 0770 -o root -g borondns /var/lib/borondns/zone-cache
+
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper unmask borondns.service >/dev/null || true
+        if deb-systemd-helper was-enabled borondns.service; then
+            deb-systemd-helper enable borondns.service >/dev/null || true
+        else
+            deb-systemd-helper update-state borondns.service >/dev/null || true
+        fi
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        deb-systemd-invoke restart borondns.service >/dev/null || true
+    fi
+    ;;
+esac
+
+exit 0
