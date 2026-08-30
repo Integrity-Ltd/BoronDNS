@@ -118,9 +118,16 @@ trusted_realpath_bootstrap() {
 bootstrap_trusted_stat() {
     local candidate owner mode
     for candidate in /usr/bin/stat /bin/stat; do
-        [[ -f "$candidate" && ! -L "$candidate" && -x "$candidate" ]] || continue
-        owner="$("$candidate" -c '%u' -- "$candidate" 2>/dev/null)" || continue
-        mode="$("$candidate" -c '%a' -- "$candidate" 2>/dev/null)" || continue
+        [[ -f "$candidate" && -x "$candidate" ]] || continue
+        # Debian-family systems may expose stat through a root-owned symlink,
+        # including Ubuntu's uutils multicall layout.  Use the fixed system
+        # pathname only long enough to inspect its dereferenced executable;
+        # bind_installer_tools subsequently canonicalizes it and validates
+        # every containing directory plus the regular target inode.
+        [[ ! -L "$candidate" || "$("$candidate" -c '%u' -- "$candidate" 2>/dev/null)" == 0 ]] ||
+            continue
+        owner="$("$candidate" -L -c '%u' -- "$candidate" 2>/dev/null)" || continue
+        mode="$("$candidate" -L -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
         ((!(mode & 0022))) || continue
@@ -149,9 +156,11 @@ bootstrap_trusted_stat() {
 bootstrap_trusted_realpath() {
     local candidate owner mode
     for candidate in /usr/bin/realpath /bin/realpath; do
-        [[ -f "$candidate" && ! -L "$candidate" && -x "$candidate" ]] || continue
-        owner="$(trusted_stat_bootstrap -c '%u' -- "$candidate" 2>/dev/null)" || continue
-        mode="$(trusted_stat_bootstrap -c '%a' -- "$candidate" 2>/dev/null)" || continue
+        [[ -f "$candidate" && -x "$candidate" ]] || continue
+        [[ ! -L "$candidate" || "$(trusted_stat_bootstrap -c '%u' -- "$candidate" 2>/dev/null)" == 0 ]] ||
+            continue
+        owner="$(trusted_stat_bootstrap -L -c '%u' -- "$candidate" 2>/dev/null)" || continue
+        mode="$(trusted_stat_bootstrap -L -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
         ((!(mode & 0022))) || continue

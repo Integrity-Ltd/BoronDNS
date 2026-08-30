@@ -121,8 +121,9 @@ slice and the adjacent non-claims are recorded in
 `docs/implemented-feature-scope.md` under "Retained Support And Evidence
 Tooling". They do not expand the secondary-server protocol requirements unless
 a current SRS, architecture, or gap-register row explicitly says so. BoronGun's
-AF_XDP backend is test-tool scope only; BoronDNS server XDP/eBPF remains a
-deferred unsafe-boundary track.
+AF_XDP backend is test-tool scope only. The separate BoronDNS server AF_XDP
+backend is a current audited unsafe boundary shipped in the official binary as
+an experimental, opt-in profile; production qualification remains deferred.
 
 Not every review-suggested defer item has a code-backed retained slice.
 `extended-runtime evidence`, `CVE governance`, and `External operator review` are

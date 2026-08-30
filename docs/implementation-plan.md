@@ -67,10 +67,13 @@ ownership, representative evidence, and nearby non-claims are owned by
 formal-acceptance gaps are owned by `docs/verification-ledger.md`,
 `docs/release-acceptance-gap-register.md`, and `docs/appendix-a-traceability-matrix.md`.
 
-Release-candidate runtime scope excludes eBPF/XDP, BoronDNS server AF_XDP,
-io_uring, NSD-style packed arena storage, and a hot response-cache backend.
-Those remain post-MVP optimization tracks. The current `boron-gun` AF_XDP
-backend is load-generator scope only.
+Release-candidate runtime scope includes the feature-gated BoronDNS server
+AF_XDP backend as an experimental, opt-in profile in the official binary. The
+standard UDP backend remains the supported default, and production promotion
+of AF_XDP still requires broader physical-NIC and zero-copy evidence. io_uring,
+NSD-style packed arena storage, and a hot response-cache backend remain future
+optimization tracks. BoronGun's AF_XDP backend remains separate load-generator
+scope.
 
 ## SRS Acceptance Execution Target
 

@@ -15,7 +15,7 @@ sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
 sudo cosign verify-blob \
   --bundle "$install_root/$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$install_root/$asset"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
@@ -31,8 +31,13 @@ documentation file, or service template that is not root-owned and protected
 from group/other writes. Do not run the privileged installer directly from a
 normal-user-owned download directory.
 
-The installer requires Linux with `/bin/bash`, Perl, SHA-256 and GNU-style
+The installer requires Linux with `/bin/bash`, Perl, SHA-256, compatible
 `stat`/`realpath` utilities, `flock`, and the standard account/file utilities.
+Protected distribution symlinks are supported: the installer canonicalizes
+each tool, validates the regular executable target and every containing
+directory, and rejects targets reached through writable directories. This
+includes Ubuntu 26.04's default uutils coreutils layout as well as conventional
+GNU coreutils installations.
 On Alpine/OpenRC, install the exact prerequisite set first:
 
 ```sh

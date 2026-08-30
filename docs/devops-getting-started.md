@@ -7,7 +7,7 @@ full production-oriented reference.
 ## 1. Clone
 
 ```bash
-git clone git@github.com:Integrity-Ltd/borondns.git
+git clone git@github.com:Integrity-Ltd/BoronDNS.git
 cd borondns
 ```
 
@@ -133,7 +133,7 @@ sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
 sudo cosign verify-blob \
   --bundle "$install_root/$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$install_root/$asset"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"

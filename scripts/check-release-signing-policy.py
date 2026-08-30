@@ -2488,7 +2488,7 @@ def installer_readme_errors(text: str) -> list[str]:
         "sudo cosign verify-blob",
         '--bundle "$install_root/$asset.sigstore.json"',
         "--certificate-oidc-issuer https://token.actions.githubusercontent.com",
-        '--certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/'
+        '--certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/'
         'workflows/release-installer.yml@refs/tags/$tag"',
         "target_triple=x86_64-unknown-linux-musl",
         'asset="borondns-${tag#v}-$target_triple.tar.xz"',
@@ -2528,7 +2528,7 @@ def run_installer_readme_mutation_regressions(text: str) -> None:
         ("exact OIDC issuer", "--certificate-oidc-issuer https://token.actions.githubusercontent.com"),
         (
             "exact tagged workflow identity",
-            '--certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/'
+            '--certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/'
             'workflows/release-installer.yml@refs/tags/$tag"',
         ),
         (

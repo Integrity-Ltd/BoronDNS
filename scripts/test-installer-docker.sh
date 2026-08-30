@@ -7,6 +7,7 @@ version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json
 dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
 archive="${BORONDNS_INSTALLER_ARCHIVE:-$dist_dir/borondns-$version-$target_triple.tar.xz}"
 image="${BORONDNS_INSTALLER_TEST_IMAGE:-ubuntu:24.04}"
+uutils_image="${BORONDNS_INSTALLER_UUTILS_TEST_IMAGE:-ubuntu:26.04}"
 alpine_image="${BORONDNS_INSTALLER_ALPINE_TEST_IMAGE:-alpine:3.22}"
 workdir="$repo_root/target/installer-docker-test/$$"
 
@@ -2949,6 +2950,50 @@ EOF
 			mv /usr/bin/flock.borondns-test-backup /usr/bin/flock
 BORONDNS_UBUNTU_TEST
 
+# Ubuntu 26.04 reaches its default uutils coreutils applets through protected
+# symlinks. Exercise the real distribution layout so the bootstrap trust check
+# cannot silently regress to requiring regular /usr/bin/stat and realpath
+# pathnames.
+docker run --rm \
+    -v "$payload_dir:/pkg-source:ro" \
+    "$uutils_image" \
+    /bin/bash -ec '
+        apt-get update >/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xz-utils perl util-linux passwd libcap2-bin >/dev/null
+        test -L /usr/bin/stat
+        test -L /usr/bin/realpath
+        test "$(readlink -f /usr/bin/stat)" = /usr/lib/cargo/bin/coreutils/stat
+        cp -a /pkg-source /root/pkg
+        chown -R root:root /root/pkg
+        chmod -R go-w /root/pkg
+        /root/pkg/install.sh --help >/dev/null
+
+        BORONDNS_ZONE=installer-uutils.example. \
+            BORONDNS_PRIMARY=127.0.0.1:9 \
+            BORONDNS_NOTIFY_SOURCE=127.0.0.1 \
+            BORONDNS_DNS_LISTEN=127.0.0.1:5300 \
+            BORONDNS_MGMT_LISTEN=127.0.0.1:18080 \
+            BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
+            /root/pkg/install.sh install --yes --init none --no-start
+        /usr/local/bin/borondns check-config \
+            --config /etc/borondns-secondary/config.toml
+        /root/pkg/install.sh uninstall --yes --init none --no-start
+
+        # A symlink is acceptable only when its resolved inode and every
+        # containing directory retain the protected system trust boundary.
+        mkdir -p /tmp/untrusted-tool-parent
+        cp -L /usr/bin/stat /tmp/untrusted-tool-parent/stat
+        chmod 0755 /tmp/untrusted-tool-parent/stat
+        mv /usr/bin/stat /usr/bin/stat.borondns-test-backup
+        ln -s /tmp/untrusted-tool-parent/stat /usr/bin/stat
+        if /root/pkg/install.sh --help >/tmp/unsafe-uutils.log 2>&1; then
+            echo "installer accepted a tool resolved through a world-writable directory" >&2
+            exit 1
+        fi
+        grep -q "missing or unsafe required installer tool: stat" /tmp/unsafe-uutils.log
+    '
+
 # Exercise the documented OpenRC host path with Alpine's real package layout
 # and service-manager tools. Dependencies are installed explicitly so this
 # smoke also verifies the operator prerequisite list and trusted-tool bootstrap.
@@ -2995,5 +3040,5 @@ docker run --rm \
         test -f /etc/borondns-secondary/config.toml
     '
 
-printf 'installer Docker smoke passed: %s on %s and %s/OpenRC\n' \
-    "$archive" "$image" "$alpine_image"
+printf 'installer Docker smoke passed: %s on %s, %s/uutils, and %s/OpenRC\n' \
+    "$archive" "$image" "$uutils_image" "$alpine_image"

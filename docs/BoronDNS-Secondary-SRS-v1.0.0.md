@@ -4002,20 +4002,22 @@ second project-decision table.
 The gap register records any current implementation gap between this formal SRS
 MVP policy and the Engineering MVP code evidence.
 
-## C.6 Post-MVP / v2 Scope Items
+## C.6 Experimental And Future Optimization Profiles
 
-This section records future BoronDNS server optimisation tracks that remain
-outside the current Engineering MVP runtime. They are retained so the current
-architecture does not foreclose later packet-I/O, zone-store, or response-cache
-work, but they are not hidden Engineering MVP requirements. Current
+This section records experimental or future BoronDNS server optimisation
+tracks. The feature-gated AF_XDP profile in C.6.1 is present in the official
+binary and within the current product boundary, but remains opt-in and is not
+the supported default. The later zone-store and response-cache tracks remain
+outside the current runtime. These entries ensure the architecture does not
+foreclose later promotion work without turning unimplemented tracks into hidden
+requirements. Current
 implementation status and unsafe-boundary ownership are maintained by
 `docs/future-optimization-tracks.md`, the Architecture Document,
 `docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
-Capitalized requirement keywords in this C.6 section are conditional promotion
-constraints: they apply only if a later SRS revision brings the named track into
-scope, unless another current requirement explicitly references the same
-constraint. They are not evaluated as current Engineering MVP conformance
-requirements.
+Capitalized requirement keywords in C.6.1 apply whenever the experimental
+AF_XDP profile is selected. Requirements in later unimplemented subsections are
+conditional promotion constraints and apply only if a later SRS revision brings
+the named track into scope.
 
 ### C.6.1 XDP/eBPF Kernel-Bypass on the DNS Query Interface
 

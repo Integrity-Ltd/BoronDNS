@@ -500,7 +500,7 @@ claim_generated_paths
         --manifest-path "$repo_root/Cargo.toml" >/dev/null
     env RUSTC="$rustc_bin" "$cargo_bin" cyclonedx \
         --manifest-path "$repo_root/Cargo.toml" --format json --describe binaries \
-        --target "$target_triple" --features boron-gun/xdp --spec-version 1.5
+        --target "$target_triple" --features borondns-cli/af-xdp,boron-gun/xdp --spec-version 1.5
 )
 
 [[ -f "$generated_borondns" && -f "$generated_boron_gun" ]] || {
@@ -558,10 +558,10 @@ esac
 {
     printf 'artifact\tformat\tsource\tfeatures\tpath\tsha256\ttool\n'
     printf 'borondns\tCycloneDX 1.5 JSON\tCargo.lock+cargo metadata\t%s\t%s\t%s\t%s\n' \
-        'borondns-cli/default,boron-gun/xdp' "$(basename "$borondns_sbom")" \
+        'borondns-cli/af-xdp,boron-gun/xdp' "$(basename "$borondns_sbom")" \
         "$(sha256_file "$run_borondns_sbom" | awk '{print $1}')" "$(cargo_cyclonedx_version)"
     printf 'boron-gun\tCycloneDX 1.5 JSON\tCargo.lock+cargo metadata\t%s\t%s\t%s\t%s\n' \
-        'borondns-cli/default,boron-gun/xdp' "$(basename "$boron_gun_sbom")" \
+        'borondns-cli/af-xdp,boron-gun/xdp' "$(basename "$boron_gun_sbom")" \
         "$(sha256_file "$run_boron_gun_sbom" | awk '{print $1}')" "$(cargo_cyclonedx_version)"
     if [[ "$docker_sbom_status" == created ]]; then
         printf 'docker-image\tCycloneDX JSON\t%s\t%s\t%s\t%s\t%s\n' "$docker_image_id" \
