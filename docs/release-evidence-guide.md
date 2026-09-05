@@ -324,12 +324,13 @@ commit-pinned Cosign action before downloading and fully verifying the handoff;
 no executable or action step is allowed between verification and signing.
 Only that short signing/publishing job receives `contents: write` and
 `id-token: write`, and it neither checks out nor executes repository or built
-code. The workflow keylessly signs every published asset, including the handoff
-manifest, with Cosign and attaches `<asset>.sigstore.json`. Generated release
-notes include a `cosign verify-blob` command constrained to the GitHub Actions
+code. The workflow publishes one checksum manifest covering every released
+artifact, keylessly signs that manifest with Cosign, and attaches
+`release-handoff.sha256.sigstore.json`. Generated release notes include a
+`cosign verify-blob` command constrained to the GitHub Actions
 OIDC issuer and this repository's tagged `release-installer.yml` workflow
-identity. Release acceptance must execute that command against every downloaded
-asset/bundle pair and retain the verification output; the existence of workflow
+identity. Release acceptance must verify that manifest once, verify every
+downloaded artifact against it, and retain the verification output; the existence of workflow
 YAML alone does not close the signing evidence gap.
 GitHub release API mutations run through `scripts/release-api-supervisor.py`.
 Each call receives one absolute operation deadline, blocks cancellation signals
@@ -356,10 +357,11 @@ For installer acceptance, run verification before extraction or privilege:
 tag=v0.2.0
 asset="borondns-${tag#v}-x86_64-unknown-linux-musl.tar.xz"
 cosign verify-blob \
-  --bundle "$asset.sigstore.json" \
+  --bundle release-handoff.sha256.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
-  "$asset"
+  release-handoff.sha256
+sha256sum --ignore-missing -c release-handoff.sha256
 ```
 
 The recorded tag, identity, bundle, asset digest, Cosign output, and time of

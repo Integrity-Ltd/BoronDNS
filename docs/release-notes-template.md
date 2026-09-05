@@ -111,8 +111,9 @@ CLI, metrics, logs, health endpoints, and network behavior.
 - Vulnerability disclosure policy reviewed: TBD
 - Release authorization tag signer and fingerprint: Tibor Dravecz,
   `E72382CD34A6DBC21070BAB1A0F90CBE53C07CA9`; verification instructions: TBD
-- Release signing mechanism and verification instructions: keyless Sigstore;
-  exact asset/bundle verification output: TBD
+- Release signing mechanism and verification instructions: keyless Sigstore on
+  the checksum manifest; exact manifest-signature and artifact-checksum
+  verification output: TBD
 - SBOM artifacts and manifest: TBD
 - Docker image verification: TBD
 - Docker image hardening notes: non-root UID/GID 53053, read-only root

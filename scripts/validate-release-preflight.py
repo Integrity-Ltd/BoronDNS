@@ -35,20 +35,15 @@ def main() -> int:
     prefix = f"borondns-{version}-x86_64-unknown-linux-musl"
     names = [
         f"{prefix}.tar.xz",
-        f"{prefix}.tar.xz.sha256",
         f"{prefix}.bin",
-        f"{prefix}.bin.sha256",
         f"{prefix}-boron-gun.bin",
-        f"{prefix}-boron-gun.bin.sha256",
+        f"borondns_{version}-1_amd64.deb",
+        f"borondns-{version}-1.x86_64.rpm",
         f"{prefix}-docker-image.tar.xz",
-        f"{prefix}-docker-image.tar.xz.sha256",
         f"{prefix}-docker-image.manifest.txt",
         f"{prefix}-borondns.cdx.json",
-        f"{prefix}-borondns.cdx.json.sha256",
         f"{prefix}-boron-gun.cdx.json",
-        f"{prefix}-boron-gun.cdx.json.sha256",
         f"{prefix}-docker-image.cdx.json",
-        f"{prefix}-docker-image.cdx.json.sha256",
         f"{prefix}-sbom-manifest.tsv",
     ]
     dist = args.dist.resolve(strict=True)
@@ -56,14 +51,6 @@ def main() -> int:
     missing = [path.name for path in assets if not path.is_file() or path.stat().st_size == 0]
     if missing:
         raise SystemExit(f"missing or empty release assets: {missing}")
-
-    for sidecar in (path for path in assets if path.name.endswith(".sha256")):
-        fields = sidecar.read_text(encoding="utf-8").strip().split()
-        if len(fields) != 2:
-            raise SystemExit(f"invalid SHA-256 sidecar: {sidecar.name}")
-        target = dist / fields[1].removeprefix("*")
-        if target.parent != dist or not target.is_file() or fields[0] != digest(target):
-            raise SystemExit(f"SHA-256 sidecar mismatch: {sidecar.name}")
 
     for document in (path for path in assets if path.name.endswith(".cdx.json")):
         data = json.loads(document.read_text(encoding="utf-8"))
@@ -98,8 +85,8 @@ def main() -> int:
     (output / "release-handoff.sha256").write_text("".join(handoff_lines), encoding="utf-8")
 
     unsigned_names = names + ["release-handoff.sha256"]
-    published_names = unsigned_names + [f"{name}.sigstore.json" for name in unsigned_names]
-    if len(unsigned_names) != 17 or len(published_names) != 34:
+    published_names = unsigned_names + ["release-handoff.sha256.sigstore.json"]
+    if len(unsigned_names) != 12 or len(published_names) != 13:
         raise SystemExit("release publication asset cardinality changed")
     if len(set(published_names)) != len(published_names):
         raise SystemExit("release publication asset names collide")

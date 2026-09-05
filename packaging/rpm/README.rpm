@@ -1,0 +1,12 @@
+# BoronDNS RPM package
+
+The RPM installs static MUSL BoronDNS and BoronGun executables, creates the
+`borondns` system account, and installs `borondns.service`. The service only
+starts after `/etc/borondns-secondary/config.toml` exists.
+
+Configuration and `/var/lib/borondns`, including the zone cache, are retained
+when the package is removed. Delete operational data explicitly only when it is
+no longer required.
+
+Remove or migrate an archive installation and its locally managed
+`/etc/systemd/system/borondns.service` before installing this RPM.

@@ -11,6 +11,7 @@ executing YAML tags.
 
 from pathlib import Path
 import hashlib
+import importlib.util
 import os
 import re
 import signal
@@ -33,7 +34,7 @@ RELEASE_REPRODUCIBILITY_VERIFIER = (
 DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 RELEASE_TAG_VERIFIER = ROOT / "scripts" / "verify-release-tag-signature.sh"
 EXPECTED_RELEASE_HELPER_SHA256 = {
-    RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
+    RELEASE_API_SUPERVISOR: "1e72e525bdf588ea486c984f0d6146485b0b6166c8a7957be3b4f27a687f8714",
     RELEASE_REPRODUCIBILITY_VERIFIER: "5c78e231ae1148d46a7e597eb9d91298e1708d06836dff8c65dc9a2b16db229e",
     DOCKER_ARCHIVE_VERIFIER: "e461cb8aadf7b3fea389e3210e3a49ad69f0cbb33a8216a69a9710b421ba3923",
     RELEASE_TAG_VERIFIER: "645eb1af3a62a647c1f4c197d487e24d7ed49e4c097268178cd6646f3e3bac1b",
@@ -129,6 +130,8 @@ PACKAGE_STEPS = [
     "Docker installer smoke",
     "Build and verify Debian package",
     "Debian package lifecycle smoke",
+    "Build and verify RPM package",
+    "RPM package lifecycle smoke",
     "Build Docker image archive",
     "Docker image smoke",
     "Generate release SBOMs",
@@ -179,25 +182,27 @@ VERIFY_STEP_SHA256 = {
 PACKAGE_STEP_SHA256 = {
     "Checkout verified source": "7eca7f77d7449358104f62e3fa7d337dfeed951c5769e0e1718fbfda313ae250",
     "Verify packaging source commit": "cb5e0c0c712eb7f630af958cbf4aa76a5cc10254739e7a55adf1286c177aabf9",
-    "Install packaging tools": "ec068fd36a12a9b2cbcd5b40d0b57ae00947b34a6fb8fe708cddc994fd2869c4",
+    "Install packaging tools": "af5e36d40ef91aae88b4a0d066cd7cc0fdbd95910742247da7c1429f51c6d534",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
     "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
     "Build installer": "a19e5a8a4448a1af99905d319d426c80d80ed01d864764f6f350fbf71125565b",
     "Docker installer smoke": "68a9c54f99158c2f5113d94c9fb49ae666a239bd2e609e054e567b047dd02aff",
     "Build and verify Debian package": "18e1a700d8ac11d9b14c7b83f961787b93abb7efe669844a5590408ca7d51990",
     "Debian package lifecycle smoke": "58e988f21894e1f282dbe15cbce0400e6ee7a783b9c7cec744ad94b36f415053",
+    "Build and verify RPM package": "56cf80d0bd90b9eaca39f3f3a15bf9a184fb8ad6b018bd7be520a7f0e6c2bf66",
+    "RPM package lifecycle smoke": "4bf1615c7fbfda3d553bd139b82b5fba8719e8094edb6ada97347e19bd04c852",
     "Build Docker image archive": "d2ac592c0f3558bd33984484af24ec4a10ca59090211d01d613839f12b005440",
     "Docker image smoke": "ccc458342967f6faafeec9490118cfd80dab5d74d1f5922193327596e7c1dce7",
     "Generate release SBOMs": "ae56cdfcbd898d778cd3eb1d0260607dbb9934434b79e93e81166d5c95d845e9",
     "Verify static binaries": "fea7d7f36c7e4caf00f1872ecadca06ae46f4955e81b4a314ae61e025b041c52",
     "Verify packaged source remained clean": "9dfb112f73616187228d34cea7c993bc3eb919cceafe26a55927cc006e7c25cc",
-    "Prepare authenticated release handoff": "22c1097039f93cacc4740fc426d316afe9992fc930629cabe4735098acbe4af2",
+    "Prepare authenticated release handoff": "f6557993fdb676de6f0d851b3948fec27eb426a7e668ef3dd304d8e8edb04bc7",
     "Upload authenticated release handoff": "034888e5028cbbd3c8c53a62fd919f820c75ae9231d920671db88b1b46c114da",
 }
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
-    "Create GitHub release": "ed9723f9d0279924a473e5d1adde751fa126b686138869060e2880ca2120d4c0",
+    "Create GitHub release": "ba3823477635bac7186a120a48dea0294135add93b5e1237889c3b1c76c11ab5",
 }
 PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
 
@@ -576,7 +581,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/boron-gun" "${release_boron_gun[0]}"',
         '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/boron-gun" "${release_boron_gun[0]}"',
-        "test \"${#assets[@]}\" -eq 18",
+        "test \"${#assets[@]}\" -eq 11",
         'LC_ALL=C /usr/bin/sha256sum -- "${assets[@]##*/}" > release-handoff.sha256',
         'LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256',
         'name: borondns-release-handoff-${{ github.sha }}',
@@ -604,7 +609,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '-F "prerelease=$release_prerelease" -f "make_latest=$release_make_latest"',
         'run_supervised_release_command 120 "$gh_path" api --method POST',
         '"repos/$GITHUB_REPOSITORY/releases"',
-        'test "${#release_assets[@]}" -eq 38',
+        'test "${#release_assets[@]}" -eq 13',
         'release_upload_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets"',
         'test "$release_upload_url" = "$release_upload_base{?name,label}"',
         '"$release_upload_base" -f "name=$asset" --input "$asset"',
@@ -615,9 +620,9 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         'test "$uploaded_size" = "$expected_asset_size"',
         'test "$uploaded_digest" = "sha256:$expected_asset_sha256"',
         'run_supervised_release_command 120 "$gh_path" api --method PATCH',
-        "test \"$(/usr/bin/wc -l < release-handoff.sha256)\" -eq 18",
+        "test \"$(/usr/bin/wc -l < release-handoff.sha256)\" -eq 11",
         "test \"$(/usr/bin/wc -l < signing-inputs.sha256)\" -eq 9",
-        "test \"$(/usr/bin/find . -type f -print | /usr/bin/wc -l)\" -eq 29",
+        "test \"$(/usr/bin/find . -type f -print | /usr/bin/wc -l)\" -eq 22",
     )
     for required in handoff_requirements:
         if required not in text:
@@ -726,7 +731,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '            -F "prerelease=$release_prerelease" -f "make_latest=false" \\\n',
         '          release_upload_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets"\n',
         '          test "$release_upload_url" = "$release_upload_base{?name,label}"\n',
-        '          test "${#release_assets[@]}" -eq 38\n',
+        '          test "${#release_assets[@]}" -eq 13\n',
         '              "$release_upload_base" -f "name=$asset" --input "$asset" \\\n',
         '          run_supervised_release_command 120 "$gh_path" api --method PATCH \\\n',
         '          release_publish_attempted=1\n',
@@ -1244,11 +1249,11 @@ if args and args[0] == "verify-blob":
     count_file = state / "cosign-verify-count"
     count = int(count_file.read_text(encoding="ascii")) + 1 if count_file.exists() else 1
     count_file.write_text(str(count), encoding="ascii")
-    if count == 38 and scenario == "post-sign-asset-mutation":
+    if count == 24 and scenario == "post-sign-asset-mutation":
         target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz"))
         target.write_bytes(target.read_bytes() + b"post sign asset mutation\n")
-    if count == 38 and scenario == "post-sign-bundle-mutation":
-        target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz.sigstore.json"))
+    if count == 24 and scenario == "post-sign-bundle-mutation":
+        target = Path("release-handoff.sha256.sigstore.json")
         target.write_bytes(target.read_bytes() + b"post sign bundle mutation\n")
     print("Verified OK")
     raise SystemExit(0)
@@ -1310,6 +1315,7 @@ raise SystemExit(64)
             binary = f"{prefix}.bin"
             boron_gun = f"{prefix}-boron-gun.bin"
             deb = f"borondns_{release_version}-1_amd64.deb"
+            rpm = f"borondns-{release_version}-1.x86_64.rpm"
             docker_image = f"{prefix}-docker-image.tar.xz"
             docker_manifest = f"{prefix}-docker-image.manifest.txt"
             borondns_sbom = f"{prefix}-borondns.cdx.json"
@@ -1317,31 +1323,14 @@ raise SystemExit(64)
             docker_sbom = f"{prefix}-docker-image.cdx.json"
             sbom_manifest = f"{prefix}-sbom-manifest.tsv"
             primary_assets = (
-                tarball, binary, boron_gun, deb, docker_image, docker_manifest,
+                tarball, binary, boron_gun, deb, rpm, docker_image, docker_manifest,
                 borondns_sbom, boron_gun_sbom, docker_sbom, sbom_manifest,
             )
             for asset in primary_assets:
                 (handoff / asset).write_bytes(f"fixture {asset}\n".encode())
             (handoff / binary).write_bytes(b"reproducible-borondns\n")
             (handoff / boron_gun).write_bytes(b"reproducible-boron-gun\n")
-            checksummed = (
-                tarball, binary, boron_gun, deb, docker_image,
-                borondns_sbom, boron_gun_sbom, docker_sbom,
-            )
-            for asset in checksummed:
-                digest = hashlib.sha256((handoff / asset).read_bytes()).hexdigest()
-                (handoff / f"{asset}.sha256").write_text(
-                    f"{digest}  {asset}\n", encoding="ascii"
-                )
-            handoff_assets = [
-                tarball, f"{tarball}.sha256", binary, f"{binary}.sha256",
-                boron_gun, f"{boron_gun}.sha256", docker_image,
-                deb, f"{deb}.sha256",
-                f"{docker_image}.sha256", docker_manifest, borondns_sbom,
-                f"{borondns_sbom}.sha256", boron_gun_sbom,
-                f"{boron_gun_sbom}.sha256", docker_sbom,
-                f"{docker_sbom}.sha256", sbom_manifest,
-            ]
+            handoff_assets = list(primary_assets)
             handoff_manifest = "".join(
                 f"{hashlib.sha256((handoff / asset).read_bytes()).hexdigest()}  {asset}\n"
                 for asset in handoff_assets
@@ -1363,24 +1352,13 @@ raise SystemExit(64)
             (handoff / "signing-inputs.sha256").write_text(
                 signing_manifest, encoding="ascii"
             )
-            release_assets: list[str] = []
-            for asset in (tarball, binary, boron_gun, deb, docker_image):
-                release_assets.extend(
-                    (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
-                     f"{asset}.sha256.sigstore.json")
-                )
-            release_assets.extend((docker_manifest, f"{docker_manifest}.sigstore.json"))
-            for asset in (borondns_sbom, boron_gun_sbom, docker_sbom):
-                release_assets.extend(
-                    (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
-                     f"{asset}.sha256.sigstore.json")
-                )
-            release_assets.extend(
-                (sbom_manifest, f"{sbom_manifest}.sigstore.json",
-                 "release-handoff.sha256", "release-handoff.sha256.sigstore.json")
-            )
-            if len(release_assets) != 38:
-                raise RuntimeError("release publication fixture must model exactly 38 assets")
+            release_assets = [
+                tarball, binary, boron_gun, deb, rpm, docker_image, docker_manifest,
+                borondns_sbom, boron_gun_sbom, docker_sbom, sbom_manifest,
+                "release-handoff.sha256", "release-handoff.sha256.sigstore.json",
+            ]
+            if len(release_assets) != 13:
+                raise RuntimeError("release publication fixture must model exactly 13 assets")
             return (
                 release_assets,
                 hashlib.sha256(handoff_manifest.encode()).hexdigest(),
@@ -1482,7 +1460,7 @@ raise SystemExit(64)
                 uploads = (state / "upload-log").read_text(encoding="utf-8").splitlines()
                 if uploads != fixture_assets:
                     raise RuntimeError(
-                        "release publication did not upload the exact 38 assets through the uploads API"
+                        "release publication did not upload the exact 13 assets through the uploads API"
                     )
 
         runner_cases = {
@@ -2598,6 +2576,23 @@ def require_process_gone(pid: int, label: str) -> None:
 
 def run_release_api_supervisor_regressions() -> None:
     """Exercise cancellation gaps, exact status, deadline, and group cleanup."""
+    specification = importlib.util.spec_from_file_location(
+        "borondns_release_api_supervisor", RELEASE_API_SUPERVISOR
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("could not load release API supervisor regression target")
+    supervisor = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(supervisor)
+    original_read = supervisor.os.read
+    try:
+        supervisor.os.read = lambda _fd, _size: (_ for _ in ()).throw(
+            BlockingIOError(11, "Resource temporarily unavailable")
+        )
+        if supervisor.consume_cancel_signal(123) is not None:
+            raise RuntimeError("release API supervisor treated EAGAIN as cancellation")
+    finally:
+        supervisor.os.read = original_read
+
     base = [sys.executable, str(RELEASE_API_SUPERVISOR)]
     natural = subprocess.run(
         base + ["--timeout-seconds", "3", "--", sys.executable, "-c", "raise SystemExit(37)"],

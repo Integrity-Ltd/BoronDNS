@@ -41,6 +41,18 @@ def positive_bounded(value: str, maximum: int, label: str) -> int:
     return parsed
 
 
+def consume_cancel_signal(signal_fd: int) -> int | None:
+    try:
+        raw_signals = os.read(signal_fd, 128 * 16)
+    except BlockingIOError:
+        return None
+    delivered = [
+        int.from_bytes(raw_signals[offset : offset + 4], sys.byteorder)
+        for offset in range(0, len(raw_signals), 128)
+    ]
+    return next((value for value in delivered if value in CANCEL_SIGNALS), None)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -141,14 +153,6 @@ def main() -> None:
             signal.signal(restored_signal, disposition)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
-    def consume_cancel_signal() -> int | None:
-        raw_signals = os.read(signal_fd, 128 * 16)
-        delivered = [
-            int.from_bytes(raw_signals[offset : offset + 4], sys.byteorder)
-            for offset in range(0, len(raw_signals), 128)
-        ]
-        return next((value for value in delivered if value in CANCEL_SIGNALS), None)
-
     def signal_group(delivered_signal: int) -> None:
         if child_pid is None:
             return
@@ -226,7 +230,7 @@ def main() -> None:
         while not os.path.exists(continuation):
             events = poller.poll(10)
             if any(fd == signal_fd for fd, _event in events):
-                delivered = consume_cancel_signal()
+                delivered = consume_cancel_signal(signal_fd)
                 if delivered is not None:
                     return 128 + delivered
             if any(fd == timer_fd for fd, _event in events):
@@ -251,7 +255,7 @@ def main() -> None:
                 raise RuntimeError("release API parent authority token is invalid")
             events = poller.poll(10)
             if any(fd == signal_fd for fd, _event in events):
-                delivered = consume_cancel_signal()
+                delivered = consume_cancel_signal(signal_fd)
                 if delivered is not None:
                     return 128 + delivered
             if any(fd == timer_fd for fd, _event in events):
@@ -281,7 +285,7 @@ def main() -> None:
             while True:
                 events = poller.poll()
                 if any(fd == signal_fd for fd, _event in events):
-                    delivered = consume_cancel_signal()
+                    delivered = consume_cancel_signal(signal_fd)
                     if delivered is not None:
                         result = 128 + delivered if terminate_and_reap() else 125
                         break

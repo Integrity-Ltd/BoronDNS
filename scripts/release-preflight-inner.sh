@@ -80,6 +80,14 @@ for builder in a b; do
 done
 
 scripts/test-installer-docker.sh
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+    BORONDNS_DEB_BORONDNS_BIN="${release_borondns[0]}" \
+    BORONDNS_DEB_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-deb.sh
+scripts/test-deb-package-docker.sh
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+    BORONDNS_RPM_BORONDNS_BIN="${release_borondns[0]}" \
+    BORONDNS_RPM_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-rpm.sh
+scripts/test-rpm-package-docker.sh
 CARGO="$cargo_path" RUSTC="$rustc_path" scripts/package-docker-image.sh
 scripts/test-docker-image.sh
 CARGO="$cargo_path" RUSTC="$rustc_path" BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
@@ -98,5 +106,5 @@ python3 scripts/validate-release-preflight.py \
 
 printf 'release_preflight=passed\n'
 printf 'release_preflight_commit=%s\n' "$actual_commit"
-printf 'release_preflight_unsigned_assets=17\n'
-printf 'release_preflight_published_asset_plan=34\n'
+printf 'release_preflight_unsigned_assets=12\n'
+printf 'release_preflight_published_asset_plan=13\n'
