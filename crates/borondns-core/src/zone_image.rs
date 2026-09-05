@@ -2586,14 +2586,15 @@ impl ZoneImage {
             return rrset_id_from_policy(self.nodes[node_index as usize].nearest_in_delegation);
         }
 
+        let mut first_cut = None;
         while node_index != 0 {
             if let Some(rrset) = self.find_rrset_at_node(node_index, RecordType::Ns as u16, qclass)
             {
-                return Some(rrset);
+                first_cut = Some(rrset);
             }
             node_index = self.nodes[node_index as usize].parent;
         }
-        None
+        first_cut
     }
 
     fn dname_for_node(
@@ -4902,6 +4903,9 @@ impl ZoneImageLookupPlan {
     }
 
     fn push_answer_rrset(&mut self, rrset: ZoneImageRrsetId, metrics: ZoneImageRrsetPlanMetrics) {
+        if self.answer_rrsets.contains(&rrset) {
+            return;
+        }
         self.clear_flag(PLAN_FLAG_DIRECT_ANSWER_CANDIDATE);
         self.set_flag(PLAN_FLAG_ANSWER_HAS_RECORDS, true);
         add_plan_record_count(&mut self.answer_record_count, metrics.record_count);
@@ -4920,6 +4924,19 @@ impl ZoneImageLookupPlan {
         metrics: ZoneImageRrsetPlanMetrics,
     ) -> u16 {
         self.ensure_answer_items();
+        if let Some(owner_index) = self.answer_items.iter().find_map(|answer| match answer {
+            PlanAnswer::RrsetWithOwner {
+                rrset_id,
+                owner_index,
+            } if *rrset_id == rrset
+                && self.owner_overrides[usize::from(*owner_index)] == owner_wire =>
+            {
+                Some(*owner_index)
+            }
+            _ => None,
+        }) {
+            return owner_index;
+        }
         self.set_flag(PLAN_FLAG_WILDCARD_SYNTHESIZED, true);
         let owner_index = self.owner_overrides.len();
         self.owner_overrides.push(owner_wire);
@@ -4955,9 +4972,17 @@ impl ZoneImageLookupPlan {
     ) -> u16 {
         self.clear_flag(PLAN_FLAG_DIRECT_ANSWER_CANDIDATE);
         self.ensure_answer_items();
+        let owner_wire = owner_override_wire(owner);
+        if let Some(index) = self.dynamic_answers.iter().position(|answer| {
+            answer.owner_wire == owner_wire
+                && answer.fixed_fields == fixed_fields
+                && answer.rdata_encoding == rdata_encoding
+                && answer.rdata == rdata
+        }) {
+            return u16::try_from(index).expect("dynamic answer index is DNS-answer-count bounded");
+        }
         self.set_flag(PLAN_FLAG_ANSWER_HAS_RECORDS, true);
         add_plan_record_count(&mut self.answer_record_count, 1);
-        let owner_wire = owner_override_wire(owner);
         let wire_upper_bound = owner_wire
             .len()
             .saturating_add(10)
@@ -5524,11 +5549,14 @@ impl ZoneImageBuilder {
             } else {
                 nodes[build_node.parent as usize].nearest_in_dname
             };
-            let nearest_in_delegation =
+            let nearest_in_delegation = if inherited_delegation != u32::MAX {
+                inherited_delegation
+            } else {
                 find_build_node_in_rrset(&self.image_rrsets, build_node, RecordType::Ns as u16)
                     .filter(|_| node_index != 0)
                     .map(|rrset| rrset.0)
-                    .unwrap_or(inherited_delegation);
+                    .unwrap_or(u32::MAX)
+            };
             let nearest_in_dname =
                 find_build_node_in_rrset(&self.image_rrsets, build_node, RecordType::Dname as u16)
                     .map(|rrset| rrset.0)

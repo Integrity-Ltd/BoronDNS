@@ -392,7 +392,7 @@ docker run --rm -i \
 			mkdir -p /opt/custom-service-bin
 		printf "%s\n" "#!/bin/sh" \
 			"if [ -n \"\${SYSTEMCTL_LOG:-}\" ]; then printf \"%s\\n\" \"\$*\" >>\"\$SYSTEMCTL_LOG\"; fi" \
-			"case \"\$1\" in is-active) echo inactive; exit 3 ;; is-enabled) echo not-found; exit 4 ;; *) exit 0 ;; esac" \
+			"case \"\$1\" in is-active) echo inactive; exit 4 ;; is-enabled) echo not-found; exit 4 ;; *) exit 0 ;; esac" \
 			>/opt/custom-service-bin/systemctl
 		printf "%s\n" "#!/bin/sh" \
 			"case \"\$2\" in status) printf \" * rc-service: service \\\\140borondns\\\\047 does not exist\\n\"; exit 1 ;; *) exit 0 ;; esac" \

@@ -25,6 +25,21 @@ use crate::zone_image::{
     ZoneImageStats,
 };
 
+fn append_rrset_once(answers: &mut Vec<ResourceRecord>, records: Vec<ResourceRecord>) {
+    let Some(first) = records.first() else {
+        return;
+    };
+    let owner = first.owner.canonical_key();
+    if answers.iter().any(|record| {
+        record.class == first.class
+            && record.rr_type == first.rr_type
+            && record.owner.canonical_key() == owner
+    }) {
+        return;
+    }
+    answers.extend(records);
+}
+
 // BDS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
 // - BDS-FR-ZONE-001 BDS-FR-ZONE-002 BDS-FR-ZONE-003
@@ -1376,10 +1391,10 @@ impl ZoneSnapshot {
         };
         let cname_records = cname_rrset.records();
         let Some(target) = cname_records.first().and_then(cname_target) else {
-            answers.extend(cname_records);
+            append_rrset_once(&mut answers, cname_records);
             return LookupResult::positive_records(answers);
         };
-        answers.extend(cname_records);
+        append_rrset_once(&mut answers, cname_records);
 
         self.resolve_indirection_target(target, qtype, qclass, answers, visited, remaining - 1)
     }
@@ -1420,7 +1435,7 @@ impl ZoneSnapshot {
         visited.push(target_key);
 
         if let Some(rrset) = self.rrset(&target, qtype, qclass) {
-            answers.extend(rrset.records());
+            append_rrset_once(&mut answers, rrset.records());
             let additionals = self.additionals_for_answer_records(&answers, qclass);
             return LookupResult::positive_with_additionals(answers, additionals);
         }
@@ -1557,16 +1572,17 @@ impl ZoneSnapshot {
 
     fn delegation_for(&self, qname: &DomainName, qclass: u16) -> Option<&Rrset> {
         let mut candidate = Some(qname.clone());
+        let mut first_cut = None;
         while let Some(name) = candidate {
             if !name.is_equal_or_subdomain_of(&self.origin) {
                 return None;
             }
             let is_origin = name.label_count() == self.origin.label_count();
             if !is_origin && let Some(rrset) = self.rrset(&name, RecordType::Ns as u16, qclass) {
-                return Some(rrset);
+                first_cut = Some(rrset);
             }
             if is_origin {
-                return None;
+                return first_cut;
             }
             candidate = name.parent();
         }

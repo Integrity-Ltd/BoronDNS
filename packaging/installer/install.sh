@@ -1464,7 +1464,7 @@ service_active_state() {
         output="${output##*$'\n'}"
         case "$status:$output" in
         0:active | 0:reloading | 0:activating) state=active ;;
-        3:inactive | 3:failed | 3:deactivating | 4:unknown) state=inactive ;;
+        3:inactive | 3:failed | 3:deactivating | 4:inactive | 4:unknown) state=inactive ;;
         *)
             printf 'systemd active-state probe failed (status=%s output=%q)\n' "$status" "$output" >&2
             return 2
@@ -2042,7 +2042,7 @@ validate_installer_managed_readiness_endpoints() {
     local validator="$1"
     local config="$2"
     local output kind host port extra numeric_port count=0
-    output="$("$validator" readiness-endpoints --config "$config")" ||
+    output="$(run_validator_clean_environment "$validator" readiness-endpoints --config "$config")" ||
         die "candidate binary could not resolve readiness endpoints from $config"
     while IFS=$'\t' read -r kind host port extra; do
         [[ -n "$kind" || -n "$host" || -n "$port" || -n "$extra" ]] || continue
@@ -2057,6 +2057,10 @@ validate_installer_managed_readiness_endpoints() {
         count=$((count + 1))
     done <<<"$output"
     ((count > 0)) || die "candidate binary returned no installer readiness endpoint"
+}
+
+run_validator_clean_environment() {
+    env -i PATH="$PATH" "$@"
 }
 
 write_config_candidate() {
@@ -2166,7 +2170,7 @@ write_config_candidate() {
     } >"$tmp_config"
     chown root:"$RUN_GROUP" "$tmp_config"
     chmod 0640 "$tmp_config"
-    "$validator" check-config --config "$tmp_config"
+    run_validator_clean_environment "$validator" check-config --config "$tmp_config"
     validate_installer_managed_readiness_endpoints "$validator" "$tmp_config"
     info "Prepared and validated candidate configuration for $CONFIG_FILE"
 }
@@ -2218,7 +2222,7 @@ ensure_config() {
         [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]] ||
             die "existing configuration must be a regular non-symlink file: $CONFIG_FILE"
         remember_config_file_identity
-        "$validator" check-config --config "$CONFIG_FILE"
+        run_validator_clean_environment "$validator" check-config --config "$CONFIG_FILE"
         validate_installer_managed_readiness_endpoints "$validator" "$CONFIG_FILE"
         verify_config_file_identity || die "existing configuration changed while it was validated: $CONFIG_FILE"
         info "Candidate binary accepts existing config: $CONFIG_FILE"

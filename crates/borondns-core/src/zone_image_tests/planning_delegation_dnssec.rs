@@ -419,6 +419,8 @@
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let child = DomainName::from_absolute_str("child.example.test.").unwrap();
         let child_host = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+        let nested = DomainName::from_absolute_str("nested.child.example.test.").unwrap();
+        let nested_host = DomainName::from_absolute_str("www.nested.child.example.test.").unwrap();
         let dname = DomainName::from_absolute_str("dname.example.test.").unwrap();
         let dname_host = DomainName::from_absolute_str("host.dname.example.test.").unwrap();
         let chaos = DomainName::from_absolute_str("chaos.example.test.").unwrap();
@@ -440,6 +442,20 @@
                     1,
                     300,
                     vec![vec![192, 0, 2, 1]],
+                ),
+                Rrset::new(
+                    nested.clone(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![name_rdata("ns.nested.child.example.test.")],
+                ),
+                Rrset::new(
+                    nested_host.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 3]],
                 ),
                 Rrset::new(
                     dname.clone(),
@@ -469,6 +485,9 @@
         let child_host_node = image
             .find_node(&child_host)
             .expect("child host node exists");
+        let nested_host_node = image
+            .find_node(&nested_host)
+            .expect("nested delegation host node exists");
         let dname_node = image.find_node(&dname).expect("DNAME node exists");
         let dname_host_node = image
             .find_node(&dname_host)
@@ -489,6 +508,24 @@
         assert_eq!(
             image.delegation_for_node(child_host_node, 1),
             Some(child_ns)
+        );
+        assert_eq!(
+            image.delegation_for_node(nested_host_node, 1),
+            Some(child_ns),
+            "the first zone cut hides nested NS data"
+        );
+        let snapshot_referral = snapshot.offline_oracle().lookup(
+            &nested_host,
+            RecordType::A as u16,
+            1,
+        );
+        assert_eq!(
+            snapshot_referral
+                .authorities
+                .first()
+                .map(|record| record.owner.clone()),
+            Some(child.clone()),
+            "the snapshot path must also return the first zone cut"
         );
         assert_eq!(image.delegation_for_node(chaos_node, 1), None);
         assert_eq!(image.delegation_for_node(chaos_node, 3), Some(chaos_ns));

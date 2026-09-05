@@ -919,9 +919,9 @@ fn add_delta_record(
     let working = working_rrsets.entry(key.clone()).or_insert_with(|| {
         WorkingRrset::from_records(current_zone.transfer_rrset_records_by_key(&key.0, key.1, key.2))
     });
-    if !working.add(record) {
-        return Err(IxfrError::AddExistingRecord);
-    }
+    // DNS RRsets have set semantics. Repeating an identical addition in an
+    // IXFR delta is therefore idempotent, just as duplicate RRs in AXFR are.
+    working.add(record);
     Ok(())
 }
 
@@ -4719,7 +4719,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ixfr_adding_existing_record() {
+    fn ixfr_duplicate_addition_is_idempotent() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let existing_a = record(
@@ -4732,20 +4732,33 @@ mod tests {
             RecordType::Soa as u16,
             soa_rdata_with_serial(2),
         );
-        let current_zone = current_zone(vec![current_soa.clone(), existing_a.clone()]);
-        let error = parse_ixfr_response(
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), existing_a.clone()]);
+        let response = parse_ixfr_response(
             0x1234,
             &apex,
             1,
             &current_zone,
             &[ixfr_message(
                 0x1234,
-                vec![new_soa.clone(), current_soa, new_soa, existing_a],
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    new_soa.clone(),
+                    existing_a.clone(),
+                    new_soa,
+                ],
             )],
         )
-        .expect_err("existing add");
+        .expect("duplicate addition uses RRset set semantics");
 
-        assert_eq!(error, IxfrError::AddExistingRecord);
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        let records = snapshot
+            .offline_oracle()
+            .lookup(&existing_a.owner, RecordType::A as u16, 1)
+            .answers;
+        assert_eq!(records, vec![existing_a]);
     }
 
     #[test]
