@@ -72,8 +72,9 @@ conformance claims.
 
 ### Storage
 
-BoronDNS persists only validated RFC 5936 last-good zone snapshots in the
-configured cache directory; the query path has no filesystem access.
+BoronDNS persists only validated RFC 5936 last-good zone state (full
+checkpoints plus bounded incremental journals) in the configured cache
+directory; the query path has no filesystem access.
 Local storage is used only for the host OS, container image storage, runtime
 logs downstream of stdout/stderr, benchmark artifacts, and release evidence.
 Use NVMe SSD for verification hosts so log and artifact persistence does not

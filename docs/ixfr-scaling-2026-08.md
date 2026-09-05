@@ -162,6 +162,33 @@ publication. Operators should therefore alert on IXFR duration, generations
 per response, repeated AXFR fallback, and a serial lag that grows over
 successive polls.
 
+## Durable-publication follow-up — September 2026
+
+A later two-host run isolated durable last-good persistence from the in-memory
+IXFR work above. Before this follow-up, every small IXFR serialized and fsynced
+the complete zone checkpoint. On the 1,000,000-name profile that checkpoint was
+959,152,383 bytes and otherwise-small IXFRs took 15.03–15.53 seconds.
+
+The durable format now keeps that validated checkpoint and atomically replaces
+a bounded, checksummed RRset journal. After 14 measured generations the journal
+was 18,857 bytes, about 50,864 times smaller than the checkpoint. Over the
+physical 25 Gbit/s path, the first post-AXFR IXFR completed in 64.9 ms and the
+following samples in 51–53 ms. This removes zone-size-proportional checkpoint
+serialization from normal small IXFR publication.
+
+Filesystem tracing also measured the lock-held publication boundary. The old
+large-checkpoint promotion took about 156 ms at the 1M profile. Journal renames
+took 0.065–0.176 ms and their following directory fsyncs took 0.422–0.509 ms.
+The journal file fsync (0.75–1.81 ms in these samples) completed before the
+transfer-plan, secret-generation, and zone-publication locks were acquired.
+Thus crash durability remains strict while lock hold time is bounded by compact
+metadata promotion rather than checkpoint size.
+
+On restart, the complete checkpoint is still read and compiled once because
+query serving remains memory-resident. Journal entries are individually
+revalidated and applied without flattening and rebuilding the whole snapshot a
+second time.
+
 ## Environment and evidence
 
 - Remote server: `oxidedns-1`, 48 logical CPUs, approximately 750 GiB RAM.

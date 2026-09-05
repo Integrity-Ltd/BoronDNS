@@ -64,7 +64,8 @@ Operational state boundaries:
   poll durable node operations. It does not add an inbound administrative API
   to BoronDNS.
 - BoronDNS atomically persists validated last-good zones in
-  `server.zone_cache_directory`; it does not persist metrics, transfer history,
+  `server.zone_cache_directory` as full checkpoints with bounded incremental
+  RRset journals; it does not retain historical transfer versions, metrics,
   query statistics, or partial transfers. The cache directory must be durable
   and writable by the runtime user.
 
@@ -675,7 +676,8 @@ Notes:
   non-cooperative task cannot extend the configured process shutdown window.
 - The process handles SIGTERM and SIGINT for graceful shutdown, ignores SIGHUP,
   and sets SIGPIPE to ignored at startup. Do not rely on SIGHUP for reload.
-- BoronDNS writes mandatory last-good zone snapshots and small freshness
+- BoronDNS writes mandatory last-good zone checkpoints, bounded incremental
+  journals, and small freshness
   sidecars beneath `[server].zone_cache_directory`; keep that directory on
   durable storage writable by the service user. The example above matches the
   example configuration's `/var/lib/borondns/zones` path while retaining a

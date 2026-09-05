@@ -316,7 +316,7 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 
 **Time.** The server requires a system clock with reasonable accuracy — typically within a few minutes of real time — for TSIG signature validity. Drift exceeding TSIG's permitted fudge window will cause transfer authentication to fail.
 
-**Storage.** A writable directory is required for the bounded, checksummed last-good zone snapshots mandated by BDS-INV-004. BoronDNS atomically writes only validated zone snapshots there; it does not persist configuration, metrics, query statistics, transfer history, or partial transfers. General configuration is read once at startup and is not subsequently re-read.
+**Storage.** A writable directory is required for the bounded, checksummed last-good zone state mandated by BDS-INV-004. BoronDNS atomically writes validated full checkpoints and bounded incremental RRset journals sufficient only to reconstruct the newest last-good snapshot; it does not retain historical transfer versions, configuration, metrics, query statistics, or partial transfers. General configuration is read once at startup and is not subsequently re-read.
 
 **Memory.** Memory must be sufficient to hold all served zones in fully expanded form, plus working space for in-flight queries and transfers. Capacity planning is the operator's responsibility.
 
@@ -398,7 +398,7 @@ Configuration file reading and secret-file reading per BDS-IF-CONF-004 occur onl
 
 *Rationale.* Eliminates an entire class of latency variability and a category of operational complexity. Removes the possibility of inconsistent on-disk state outliving an operational error. Supports deployment on read-only root filesystems. It does not by itself prove scratch or distroless image compatibility; that claim depends on the release artifact boundary in §2.4 and §2.5, including binary inspection for runtime shared-library dependencies.
 
-*Implications.* Zone data is not memory-mapped from disk. There is no on-disk zone cache. There is no swap-eligible zone storage in the design — operators are responsible for ensuring sufficient RAM (per BDS-NFR-RES-003) and for disabling swap where production performance requires it. Configuration parsing is a startup-only filesystem operation; once startup completes, the query path is filesystem-free.
+*Implications.* Zone data is not memory-mapped from disk. The last-good checkpoint and incremental journal are restart inputs, never query-path storage. There is no swap-eligible zone storage in the design — operators are responsible for ensuring sufficient RAM (per BDS-NFR-RES-003) and for disabling swap where production performance requires it. Configuration parsing is a startup-only filesystem operation; once startup completes, the query path is filesystem-free.
 
 *Verification.* Code review shall confirm that the query path does not invoke filesystem operations against zone-storage paths. System-call tracing (`strace` with `--syscall=openat,read,write,pread,pwrite` or equivalent) during steady-state query serving shall confirm the absence of filesystem activity outside of operator-controlled logging and `/proc/self/*` introspection.
 
@@ -422,7 +422,7 @@ Configuration file reading and secret-file reading per BDS-IF-CONF-004 occur onl
 
 **BDS-INV-004 — Persisted Last-Good Zone State**
 
-*Statement.* Before publishing a successfully validated AXFR or IXFR result, the server MUST atomically persist a checksummed last-good zone snapshot. On restart it MUST revalidate and restore that snapshot before attempting refresh, so a previously served zone remains available when a new transfer fails, as required by RFC 5936 §6. Metrics, query statistics, transfer history, and configuration MUST NOT be persisted.
+*Statement.* Before publishing a successfully validated AXFR or IXFR result, the server MUST atomically persist checksummed state sufficient to reconstruct the newest last-good zone snapshot. It MAY use a full checkpoint plus a bounded incremental RRset journal, but MUST compact back to a checkpoint at the configured implementation bound and MUST NOT retain historical versions as an operational transfer log. On restart it MUST revalidate and restore the reconstructed snapshot before attempting refresh, so a previously served zone remains available when a new transfer fails, as required by RFC 5936 §6. Metrics, query statistics, and configuration MUST NOT be persisted.
 
 *Rationale.* The primary remains authoritative, but RFC 5936 requires the secondary's last successfully validated version to survive restart and remain served if the next transfer fails.
 
@@ -2224,7 +2224,7 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 
 ### Lifecycle and operational prohibitions
 
-**BDS-NEG-010.** The server MUST NOT persist operational state other than the bounded, validated last-good zone snapshots required by BDS-INV-004. It MUST NOT persist metrics, query statistics, transfer history, configuration, or partial/unvalidated transfers.
+**BDS-NEG-010.** The server MUST NOT persist operational state other than the bounded, validated last-good zone state required by BDS-INV-004. A bounded incremental journal used solely to reconstruct the newest snapshot is part of that state, not retained transfer history. It MUST NOT persist metrics, query statistics, historical versions, configuration, or partial/unvalidated transfers.
 *Enforces.* BDS-INV-004.
 *Verification.* System-call tracing during steady-state operation confirming absence of filesystem write operations outside standard streams; runnable on read-only root filesystems.
 

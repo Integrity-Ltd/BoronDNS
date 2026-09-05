@@ -8,7 +8,7 @@ use tracing::warn;
 
 use crate::{
     dns::{DNS_HEADER_LEN, DnsParseError, DomainName, Header, RecordType},
-    zone::{ResourceRecord, Rrset, SoaRecordView, ZoneSnapshot},
+    zone::{PersistenceRrsetChange, ResourceRecord, Rrset, SoaRecordView, ZoneSnapshot},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +449,85 @@ pub fn validated_persisted_zone_snapshot(
         Some(soa_serial),
         rrsets_from_records(records),
     ))
+}
+
+/// Validate a decoded durable delta against its already validated checkpoint.
+///
+/// This deliberately checks only the changed RRsets and the zone-wide
+/// invariants they can affect. Re-flattening and rebuilding the complete zone
+/// here would make restart time proportional to the checkpoint twice over.
+#[doc(hidden)]
+pub fn validate_persisted_zone_delta(
+    zone_apex: &DomainName,
+    qclass: u16,
+    previous: &ZoneSnapshot,
+    updated: &ZoneSnapshot,
+    changes: &[PersistenceRrsetChange],
+) -> Result<(), AxfrError> {
+    let (Some(old_serial), Some(new_serial)) = (previous.serial(), updated.serial()) else {
+        return Err(AxfrError::InvalidZoneSoa);
+    };
+    let distance = new_serial.wrapping_sub(old_serial);
+    if distance == 0 || distance >= (1u32 << 31) {
+        return Err(AxfrError::InvalidZoneSoa);
+    }
+
+    let mut affected_owners = BTreeSet::new();
+    for change in changes {
+        if change.class != qclass {
+            return Err(AxfrError::ClassMismatch);
+        }
+        if change.rr_type == 0 || change.rr_type == u16::MAX {
+            return Err(AxfrError::ReservedType);
+        }
+        if is_prohibited_transfer_content_type(change.rr_type) {
+            return Err(AxfrError::ProhibitedType);
+        }
+        if !change.owner.is_equal_or_subdomain_of(zone_apex) {
+            return Err(AxfrError::OutOfZoneOwner);
+        }
+        if let Some(rrset) = &change.replacement {
+            if rrset.owner.canonical_key() != change.owner.canonical_key()
+                || rrset.rr_type != change.rr_type
+                || rrset.class != change.class
+            {
+                return Err(AxfrError::MalformedMessage);
+            }
+            for rdata in rrset.persistence_rdatas() {
+                validate_record_scope(
+                    &ResourceRecord {
+                        owner: rrset.owner.clone(),
+                        rr_type: rrset.rr_type,
+                        class: rrset.class,
+                        ttl: rrset.ttl,
+                        rdata: rdata.to_vec(),
+                    },
+                    zone_apex,
+                    qclass,
+                )?;
+            }
+        }
+        affected_owners.insert(change.owner.canonical_key());
+    }
+
+    let apex_key = zone_apex.canonical_key();
+    let soa = updated.transfer_rrset_records_by_key(&apex_key, RecordType::Soa as u16, qclass);
+    if soa.len() != 1 || updated.soa_record_count() != 1 || soa_serial(&soa[0].rdata)? != new_serial
+    {
+        return Err(AxfrError::InvalidZoneSoa);
+    }
+    if updated
+        .transfer_rrset_records_by_key(&apex_key, RecordType::Ns as u16, qclass)
+        .is_empty()
+    {
+        return Err(AxfrError::MissingApexNs);
+    }
+
+    let affected_records = affected_owners
+        .into_iter()
+        .flat_map(|owner| updated.transfer_records_at_name_key(&owner))
+        .collect::<Vec<_>>();
+    validate_cname_and_dname_coexistence(zone_apex, &affected_records)
 }
 
 pub fn axfr_response_message_apex_soa_count(
@@ -5881,5 +5960,110 @@ mod tests {
         .expect("accepted AXFR parses");
 
         ZoneImage::compile(&snapshot).expect("accepted AXFR snapshot compiles for publication");
+    }
+
+    #[test]
+    fn persisted_delta_validator_accepts_changed_rrsets_without_full_rebuild() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let previous = validated_persisted_zone_snapshot(
+            &apex,
+            1,
+            Some(1),
+            vec![
+                record(
+                    "example.test.",
+                    RecordType::Soa as u16,
+                    soa_rdata_with_serial(1),
+                ),
+                apex_ns(),
+                record(
+                    "www.example.test.",
+                    RecordType::A as u16,
+                    vec![192, 0, 2, 1],
+                ),
+            ],
+        )
+        .unwrap();
+        let changes = vec![
+            PersistenceRrsetChange {
+                owner: apex.clone(),
+                rr_type: RecordType::Soa as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata_with_serial(2)],
+                )),
+            },
+            PersistenceRrsetChange {
+                owner: DomainName::from_absolute_str("www.example.test.").unwrap(),
+                rr_type: RecordType::A as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 2]],
+                )),
+            },
+        ];
+        let updated = previous.with_persistence_changes(2, changes.clone());
+
+        validate_persisted_zone_delta(&apex, 1, &previous, &updated, &changes).unwrap();
+    }
+
+    #[test]
+    fn persisted_delta_validator_rejects_invalid_changed_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let previous = validated_persisted_zone_snapshot(
+            &apex,
+            1,
+            Some(1),
+            vec![
+                record(
+                    "example.test.",
+                    RecordType::Soa as u16,
+                    soa_rdata_with_serial(1),
+                ),
+                apex_ns(),
+            ],
+        )
+        .unwrap();
+        let owner = DomainName::from_absolute_str("bad.example.test.").unwrap();
+        let changes = vec![
+            PersistenceRrsetChange {
+                owner: apex.clone(),
+                rr_type: RecordType::Soa as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata_with_serial(2)],
+                )),
+            },
+            PersistenceRrsetChange {
+                owner: owner.clone(),
+                rr_type: RecordType::A as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    owner,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2]],
+                )),
+            },
+        ];
+        let updated = previous.with_persistence_changes(2, changes.clone());
+
+        assert_eq!(
+            validate_persisted_zone_delta(&apex, 1, &previous, &updated, &changes),
+            Err(AxfrError::InvalidRdata)
+        );
     }
 }

@@ -718,6 +718,56 @@ impl ZoneSnapshot {
         }
     }
 
+    /// Return the exact RRset replacements needed to reconstruct this snapshot
+    /// from its immediate predecessor. `None` means the snapshots are not in a
+    /// directly comparable lineage and a complete checkpoint is required.
+    #[doc(hidden)]
+    pub fn persistence_changes_from(&self, previous: &Self) -> Option<Vec<PersistenceRrsetChange>> {
+        self.changed_rrset_keys_from(previous).map(|keys| {
+            keys.into_iter()
+                .map(|key| PersistenceRrsetChange {
+                    owner: self.rrsets.get(&key).map_or_else(
+                        || {
+                            previous
+                                .rrsets
+                                .get(&key)
+                                .expect("changed RRset key exists")
+                                .owner
+                                .clone()
+                        },
+                        |rrset| rrset.owner.clone(),
+                    ),
+                    rr_type: key.rr_type,
+                    class: key.class,
+                    replacement: self.rrsets.get(&key).cloned(),
+                })
+                .collect()
+        })
+    }
+
+    /// Apply a previously validated durable RRset delta during cache restore.
+    #[doc(hidden)]
+    pub fn with_persistence_changes(
+        &self,
+        serial: u32,
+        changes: Vec<PersistenceRrsetChange>,
+    ) -> Self {
+        self.with_cow_rrset_replacements(
+            serial,
+            changes
+                .into_iter()
+                .map(|change| {
+                    (
+                        change.owner.canonical_key(),
+                        change.rr_type,
+                        change.class,
+                        change.replacement,
+                    )
+                })
+                .collect(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
         self.persistence_records()
@@ -2934,9 +2984,7 @@ fn nsec3_hash_name(name: &DomainName, params: &Nsec3Params) -> Option<String> {
     if params.hash_algorithm != 1 {
         return None;
     }
-    let canonical = DomainName::from_absolute_str(&name.canonical_key())
-        .ok()?
-        .to_wire();
+    let canonical = name.to_ascii_lowercased().to_wire();
     let mut digest = Sha1::new();
     digest.update(&canonical);
     digest.update(&params.salt);
@@ -4736,6 +4784,15 @@ pub struct ResourceRecord {
     pub rdata: Vec<u8>,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistenceRrsetChange {
+    pub owner: DomainName,
+    pub rr_type: u16,
+    pub class: u16,
+    pub replacement: Option<Rrset>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SoaRecordView<'a> {
     pub owner: &'a DomainName,
@@ -5218,6 +5275,37 @@ impl RrsetKey {
 mod tests {
     use super::*;
     use std::mem;
+
+    #[test]
+    fn nsec3_hashes_canonical_wire_octets_not_escaped_display_text() {
+        let wire = [
+            3, b'A', b'.', b'B', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0,
+        ];
+        let (name, consumed) = DomainName::parse(&wire, 0).unwrap();
+        assert_eq!(consumed, wire.len());
+        assert_eq!(name.canonical_key(), "a\\046b.example.");
+
+        let params = Nsec3Params {
+            hash_algorithm: 1,
+            iterations: 2,
+            salt: vec![0x12, 0x34],
+        };
+        let mut digest = Sha1::new();
+        digest.update(name.to_ascii_lowercased().to_wire());
+        digest.update(&params.salt);
+        let mut expected = digest.finalize().to_vec();
+        for _ in 0..params.iterations {
+            let mut digest = Sha1::new();
+            digest.update(&expected);
+            digest.update(&params.salt);
+            expected = digest.finalize().to_vec();
+        }
+
+        assert_eq!(
+            nsec3_hash_name(&name, &params),
+            Some(base32hex_no_padding_lower(&expected))
+        );
+    }
 
     #[test]
     fn in_only_class_removal_does_not_shrink_core_rrset_layouts() {

@@ -1,26 +1,29 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{self, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use borondns_core::{
-    axfr::{AxfrError, validated_persisted_zone_snapshot},
+    axfr::{AxfrError, validate_persisted_zone_delta, validated_persisted_zone_snapshot},
     dns::DomainName,
-    zone::{ResourceRecord, ZoneSnapshot},
+    zone::{PersistenceRrsetChange, ResourceRecord, Rrset, ZoneSnapshot},
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const MAGIC: &[u8; 8] = b"BORONZ01";
 const FRESHNESS_MAGIC: &[u8; 8] = b"BORONF01";
+const JOURNAL_MAGIC: &[u8; 8] = b"BORONJ01";
 const MAX_RECORDS: u64 = u32::MAX as u64;
 const MIN_RECORD_BYTES: u64 = 13;
+const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_JOURNAL_ENTRIES: u32 = 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
@@ -44,11 +47,24 @@ pub(crate) struct RestoredZone {
     pub(crate) persisted_unix_secs: u64,
 }
 
+struct JournalEntry {
+    old_serial: u32,
+    new_serial: u32,
+    persisted_unix_secs: u64,
+    changes: Vec<PersistenceRrsetChange>,
+}
+
+struct DecodedJournal {
+    base_serial: u32,
+    entries: Vec<JournalEntry>,
+}
+
 pub(crate) struct StagedZoneCache {
     persistence: ZonePersistence,
     origin: DomainName,
     temp_path: PathBuf,
     final_path: PathBuf,
+    remove_journal: bool,
     promoted: bool,
 }
 
@@ -57,6 +73,13 @@ impl StagedZoneCache {
         fs::rename(&self.temp_path, &self.final_path)
             .map_err(|source| self.persistence.io_error(&self.final_path, source))?;
         self.promoted = true;
+        if self.remove_journal {
+            match fs::remove_file(self.persistence.journal_path_for(&self.origin)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => return Err(self.persistence.io_error(&self.final_path, source)),
+            }
+        }
         match fs::remove_file(self.persistence.freshness_path_for(&self.origin)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -212,6 +235,96 @@ impl ZonePersistence {
                 origin: snapshot.origin().clone(),
                 temp_path: temp_path.clone(),
                 final_path,
+                remove_journal: true,
+                promoted: false,
+            })
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result
+    }
+
+    /// Stage only the RRsets changed by a directly-descended IXFR snapshot.
+    /// The bounded journal is rewritten and fsynced outside publication locks;
+    /// promotion only atomically replaces that small journal file.
+    pub(crate) fn stage_incremental(
+        &self,
+        previous: &ZoneSnapshot,
+        snapshot: &ZoneSnapshot,
+    ) -> Result<StagedZoneCache, ZonePersistenceError> {
+        let Some(old_serial) = previous.serial() else {
+            return self.stage(snapshot);
+        };
+        let Some(new_serial) = snapshot.serial() else {
+            return self.stage(snapshot);
+        };
+        let Some(changes) = snapshot.persistence_changes_from(previous) else {
+            return self.stage(snapshot);
+        };
+        let base_path = self.path_for(snapshot.origin());
+        if !base_path.exists() {
+            return self.stage(snapshot);
+        }
+        let base_checksum = self.cache_checksum(&base_path)?;
+        let journal_path = self.journal_path_for(snapshot.origin());
+        let (mut bytes, entries, current_serial) = match fs::symlink_metadata(&journal_path) {
+            Ok(_) => self.read_journal_bytes(snapshot.origin(), &base_checksum)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let mut bytes = Vec::new();
+                bytes.extend_from_slice(JOURNAL_MAGIC);
+                let origin_wire = snapshot.origin().to_wire();
+                bytes.extend_from_slice(&(origin_wire.len() as u16).to_be_bytes());
+                bytes.extend_from_slice(&origin_wire);
+                bytes.extend_from_slice(&base_checksum);
+                bytes.extend_from_slice(&old_serial.to_be_bytes());
+                bytes.extend_from_slice(&0u32.to_be_bytes());
+                (bytes, 0, old_serial)
+            }
+            Err(source) => return Err(self.io_error(&journal_path, source)),
+        };
+        if current_serial != old_serial || entries >= MAX_JOURNAL_ENTRIES {
+            return self.stage(snapshot);
+        }
+        let count_offset = JOURNAL_MAGIC.len() + 2 + snapshot.origin().to_wire().len() + 32 + 4;
+        bytes[count_offset..count_offset + 4].copy_from_slice(&(entries + 1).to_be_bytes());
+        encode_journal_entry(&mut bytes, old_serial, new_serial, &changes)
+            .map_err(|reason| self.malformed(&journal_path, reason))?;
+        let digest = Sha256::digest(&bytes);
+        bytes.extend_from_slice(&digest);
+        if bytes.len() as u64 > self.max_file_bytes.min(MAX_JOURNAL_BYTES) {
+            return self.stage(snapshot);
+        }
+        fs::create_dir_all(&self.directory)
+            .map_err(|source| self.io_error(&self.directory, source))?;
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp_path = self.directory.join(format!(
+            ".{}.tmp.{}.{}",
+            journal_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("zone-journal"),
+            std::process::id(),
+            sequence
+        ));
+        let result = (|| {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options
+                .open(&temp_path)
+                .map_err(|source| self.io_error(&temp_path, source))?;
+            file.write_all(&bytes)
+                .map_err(|source| self.io_error(&temp_path, source))?;
+            file.sync_all()
+                .map_err(|source| self.io_error(&temp_path, source))?;
+            Ok(StagedZoneCache {
+                persistence: self.clone(),
+                origin: snapshot.origin().clone(),
+                temp_path: temp_path.clone(),
+                final_path: journal_path,
+                remove_journal: false,
                 promoted: false,
             })
         })();
@@ -301,41 +414,89 @@ impl ZonePersistence {
         {
             return Err(self.malformed(&path, "trailing bytes"));
         }
-        let effective_persisted_unix_secs = self
-            .read_freshness(&origin, serial, &stored)
-            .unwrap_or(persisted_unix_secs)
-            .max(persisted_unix_secs);
-        validated_persisted_zone_snapshot(&origin, qclass, serial, records)
-            .map(|snapshot| {
-                let elapsed = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .saturating_sub(effective_persisted_unix_secs);
-                let snapshot = if snapshot
-                    .soa_timers()
-                    .is_some_and(|timers| elapsed >= u64::from(timers.expire))
-                {
-                    snapshot.with_state(borondns_core::zone::ZoneState::Expired)
-                } else {
-                    snapshot
-                };
-                Some(RestoredZone {
-                    snapshot,
-                    persisted_unix_secs: effective_persisted_unix_secs,
-                })
-            })
+        let mut snapshot = validated_persisted_zone_snapshot(&origin, qclass, serial, records)
             .map_err(|source| ZonePersistenceError::InvalidZone {
                 path: path.display().to_string(),
                 source,
-            })
+            })?;
+        let mut active_checksum = stored;
+        let mut effective_persisted_unix_secs = persisted_unix_secs;
+        let journal_path = self.journal_path_for(&origin);
+        match fs::symlink_metadata(&journal_path) {
+            Ok(_) => {
+                let (journal_bytes, _, _) = self.read_journal_bytes(&origin, &stored)?;
+                let decoded = decode_journal(&journal_bytes, &origin, &stored)
+                    .map_err(|reason| self.malformed(&journal_path, reason))?;
+                if snapshot.serial() != Some(decoded.base_serial) {
+                    return Err(self.malformed(&journal_path, "journal base serial mismatch"));
+                }
+                for entry in decoded.entries {
+                    if snapshot.serial() != Some(entry.old_serial) {
+                        return Err(self.malformed(&journal_path, "journal serial chain mismatch"));
+                    }
+                    let updated =
+                        snapshot.with_persistence_changes(entry.new_serial, entry.changes.clone());
+                    validate_persisted_zone_delta(
+                        &origin,
+                        qclass,
+                        &snapshot,
+                        &updated,
+                        &entry.changes,
+                    )
+                    .map_err(|source| ZonePersistenceError::InvalidZone {
+                        path: journal_path.display().to_string(),
+                        source,
+                    })?;
+                    snapshot = updated;
+                    effective_persisted_unix_secs = entry.persisted_unix_secs;
+                }
+                let journal_file = self.open_bounded_regular(
+                    &journal_path,
+                    32,
+                    self.max_file_bytes.min(MAX_JOURNAL_BYTES),
+                )?;
+                let mut journal_reader = BufReader::new(journal_file);
+                journal_reader
+                    .seek(SeekFrom::End(-32))
+                    .map_err(|source| self.io_error(&journal_path, source))?;
+                journal_reader
+                    .read_exact(&mut active_checksum)
+                    .map_err(|source| self.io_error(&journal_path, source))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(self.io_error(&journal_path, source)),
+        }
+        effective_persisted_unix_secs = self
+            .read_freshness(&origin, snapshot.serial(), &active_checksum)
+            .unwrap_or(effective_persisted_unix_secs)
+            .max(effective_persisted_unix_secs);
+        {
+            let elapsed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(effective_persisted_unix_secs);
+            let snapshot = if snapshot
+                .soa_timers()
+                .is_some_and(|timers| elapsed >= u64::from(timers.expire))
+            {
+                snapshot.with_state(borondns_core::zone::ZoneState::Expired)
+            } else {
+                snapshot
+            };
+            Ok(Some(RestoredZone {
+                snapshot,
+                persisted_unix_secs: effective_persisted_unix_secs,
+            }))
+        }
     }
 
     pub(crate) fn remove(&self, origin: &DomainName) -> Result<(), ZonePersistenceError> {
         let path = self.path_for(origin);
         let freshness_path = self.freshness_path_for(origin);
+        let journal_path = self.journal_path_for(origin);
         let mut removed = false;
-        for candidate in [&path, &freshness_path] {
+        for candidate in [&path, &freshness_path, &journal_path] {
             match fs::remove_file(candidate) {
                 Ok(()) => removed = true,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -356,7 +517,24 @@ impl ZonePersistence {
         serial: Option<u32>,
     ) -> Result<(), ZonePersistenceError> {
         let final_path = self.path_for(origin);
-        let cache_checksum = self.cache_checksum(&final_path)?;
+        let journal_path = self.journal_path_for(origin);
+        let cache_checksum = if journal_path.exists() {
+            let mut journal = self.open_bounded_regular(
+                &journal_path,
+                32,
+                self.max_file_bytes.min(MAX_JOURNAL_BYTES),
+            )?;
+            journal
+                .seek(SeekFrom::End(-32))
+                .map_err(|source| self.io_error(&journal_path, source))?;
+            let mut checksum = [0; 32];
+            journal
+                .read_exact(&mut checksum)
+                .map_err(|source| self.io_error(&journal_path, source))?;
+            checksum
+        } else {
+            self.cache_checksum(&final_path)?
+        };
         let refreshed_unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -439,18 +617,45 @@ impl ZonePersistence {
         self.path_for(origin).with_extension("fresh")
     }
 
-    fn cache_checksum(&self, path: &Path) -> Result<[u8; 32], ZonePersistenceError> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .map_err(|source| self.io_error(path, source))?;
+    fn journal_path_for(&self, origin: &DomainName) -> PathBuf {
+        self.path_for(origin).with_extension("bdj")
+    }
+
+    fn read_journal_bytes(
+        &self,
+        origin: &DomainName,
+        expected_base_checksum: &[u8; 32],
+    ) -> Result<(Vec<u8>, u32, u32), ZonePersistenceError> {
+        let path = self.journal_path_for(origin);
+        let maximum = self.max_file_bytes.min(MAX_JOURNAL_BYTES);
+        let mut file = self.open_bounded_regular(&path, 32, maximum)?;
         let length = file
             .metadata()
-            .map_err(|source| self.io_error(path, source))?
-            .len();
-        if length < 32 || length > self.max_file_bytes {
-            return Err(self.malformed(path, "cache file cannot contain a bounded checksum"));
+            .map_err(|source| self.io_error(&path, source))?
+            .len() as usize;
+        let mut bytes = vec![0; length];
+        file.read_exact(&mut bytes)
+            .map_err(|source| self.io_error(&path, source))?;
+        if bytes.len() < 32 {
+            return Err(self.malformed(&path, "journal is shorter than its checksum"));
         }
+        let checksum_at = bytes.len() - 32;
+        let computed = Sha256::digest(&bytes[..checksum_at]);
+        if computed.as_slice() != &bytes[checksum_at..] {
+            return Err(self.malformed(&path, "journal checksum mismatch"));
+        }
+        bytes.truncate(checksum_at);
+        let decoded = decode_journal(&bytes, origin, expected_base_checksum)
+            .map_err(|reason| self.malformed(&path, reason))?;
+        let current_serial = decoded
+            .entries
+            .last()
+            .map_or(decoded.base_serial, |entry| entry.new_serial);
+        Ok((bytes, decoded.entries.len() as u32, current_serial))
+    }
+
+    fn cache_checksum(&self, path: &Path) -> Result<[u8; 32], ZonePersistenceError> {
+        let mut file = self.open_bounded_regular(path, 32, self.max_file_bytes)?;
         file.seek(SeekFrom::End(-32))
             .map_err(|source| self.io_error(path, source))?;
         let mut checksum = [0u8; 32];
@@ -465,10 +670,17 @@ impl ZonePersistence {
         expected_serial: Option<u32>,
         expected_cache_checksum: &[u8; 32],
     ) -> Option<u64> {
-        let bytes = fs::read(self.freshness_path_for(origin)).ok()?;
+        let path = self.freshness_path_for(origin);
         let payload_len =
             FRESHNESS_MAGIC.len() + 1 + if expected_serial.is_some() { 4 } else { 0 } + 32 + 8;
-        if bytes.len() != payload_len + 32 || &bytes[..8] != FRESHNESS_MAGIC {
+        let expected_len = payload_len + 32;
+        let mut file = self
+            .open_bounded_regular(&path, expected_len as u64, expected_len as u64)
+            .ok()?;
+        let mut bytes = vec![0; expected_len];
+        file.read_exact(&mut bytes).ok()?;
+        let mut trailing = [0u8; 1];
+        if file.read(&mut trailing).ok()? != 0 || &bytes[..8] != FRESHNESS_MAGIC {
             return None;
         }
         let mut offset = 8;
@@ -495,6 +707,40 @@ impl ZonePersistence {
         (checksum.as_slice() == bytes.get(offset..offset + 32)?).then_some(refreshed)
     }
 
+    fn open_bounded_regular(
+        &self,
+        path: &Path,
+        minimum: u64,
+        maximum: u64,
+    ) -> Result<File, ZonePersistenceError> {
+        let before = fs::symlink_metadata(path).map_err(|source| self.io_error(path, source))?;
+        if !before.file_type().is_file() || before.len() < minimum || before.len() > maximum {
+            return Err(self.malformed(path, "not a bounded regular file"));
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+        let file = options
+            .open(path)
+            .map_err(|source| self.io_error(path, source))?;
+        let opened = file
+            .metadata()
+            .map_err(|source| self.io_error(path, source))?;
+        if !opened.file_type().is_file()
+            || opened.len() < minimum
+            || opened.len() > maximum
+            || opened.len() != before.len()
+        {
+            return Err(self.malformed(path, "file changed while opening"));
+        }
+        #[cfg(unix)]
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(self.malformed(path, "file changed while opening"));
+        }
+        Ok(file)
+    }
+
     fn io_error(&self, path: &Path, source: io::Error) -> ZonePersistenceError {
         ZonePersistenceError::Io {
             path: path.display().to_string(),
@@ -508,6 +754,181 @@ impl ZonePersistence {
             reason: reason.into(),
         }
     }
+}
+
+fn encode_journal_entry(
+    output: &mut Vec<u8>,
+    old_serial: u32,
+    new_serial: u32,
+    changes: &[PersistenceRrsetChange],
+) -> Result<(), &'static str> {
+    output.extend_from_slice(&old_serial.to_be_bytes());
+    output.extend_from_slice(&new_serial.to_be_bytes());
+    output.extend_from_slice(
+        &SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_be_bytes(),
+    );
+    let count = u32::try_from(changes.len()).map_err(|_| "too many changed RRsets")?;
+    output.extend_from_slice(&count.to_be_bytes());
+    for change in changes {
+        let owner = change.owner.to_wire();
+        let owner_len = u16::try_from(owner.len()).map_err(|_| "journal owner is too long")?;
+        output.extend_from_slice(&owner_len.to_be_bytes());
+        output.extend_from_slice(&owner);
+        output.extend_from_slice(&change.rr_type.to_be_bytes());
+        output.extend_from_slice(&change.class.to_be_bytes());
+        match &change.replacement {
+            None => output.push(0),
+            Some(rrset) => {
+                output.push(1);
+                output.extend_from_slice(&rrset.ttl.to_be_bytes());
+                let rdata_count = u32::try_from(rrset.persistence_rdatas().count())
+                    .map_err(|_| "journal RRset has too many records")?;
+                output.extend_from_slice(&rdata_count.to_be_bytes());
+                for rdata in rrset.persistence_rdatas() {
+                    let length =
+                        u16::try_from(rdata.len()).map_err(|_| "journal RDATA is too long")?;
+                    output.extend_from_slice(&length.to_be_bytes());
+                    output.extend_from_slice(rdata);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_journal(
+    bytes: &[u8],
+    expected_origin: &DomainName,
+    expected_base_checksum: &[u8; 32],
+) -> Result<DecodedJournal, &'static str> {
+    let mut cursor = Cursor::new(bytes);
+    if take_bytes(&mut cursor, JOURNAL_MAGIC.len())? != JOURNAL_MAGIC {
+        return Err("invalid journal magic");
+    }
+    let owner_len = take_u16(&mut cursor)? as usize;
+    if owner_len == 0 || owner_len > 255 {
+        return Err("invalid journal origin length");
+    }
+    let owner_wire = take_bytes(&mut cursor, owner_len)?;
+    let (origin, consumed) =
+        DomainName::parse(&owner_wire, 0).map_err(|_| "invalid journal origin")?;
+    if consumed != owner_wire.len() || origin.canonical_key() != expected_origin.canonical_key() {
+        return Err("journal origin mismatch");
+    }
+    if take_bytes(&mut cursor, 32)?.as_slice() != expected_base_checksum {
+        return Err("journal base checksum mismatch");
+    }
+    let base_serial = take_u32(&mut cursor)?;
+    let entry_count = take_u32(&mut cursor)?;
+    if entry_count > MAX_JOURNAL_ENTRIES {
+        return Err("journal entry count exceeds limit");
+    }
+    let mut entries = Vec::with_capacity(entry_count as usize);
+    let mut expected_serial = base_serial;
+    for _ in 0..entry_count {
+        let old_serial = take_u32(&mut cursor)?;
+        let new_serial = take_u32(&mut cursor)?;
+        if old_serial != expected_serial {
+            return Err("journal serial chain mismatch");
+        }
+        let persisted_unix_secs = take_u64(&mut cursor)?;
+        let change_count = take_u32(&mut cursor)?;
+        if change_count as u64 > bytes.len() as u64 / MIN_RECORD_BYTES {
+            return Err("journal change count cannot fit");
+        }
+        let mut changes = Vec::with_capacity(change_count as usize);
+        for _ in 0..change_count {
+            let owner_len = take_u16(&mut cursor)? as usize;
+            if owner_len == 0 || owner_len > 255 {
+                return Err("invalid journal owner length");
+            }
+            let owner_wire = take_bytes(&mut cursor, owner_len)?;
+            let (owner, consumed) =
+                DomainName::parse(&owner_wire, 0).map_err(|_| "invalid journal owner")?;
+            if consumed != owner_wire.len() {
+                return Err("trailing journal owner bytes");
+            }
+            let rr_type = take_u16(&mut cursor)?;
+            let class = take_u16(&mut cursor)?;
+            let replacement = match take_u8(&mut cursor)? {
+                0 => None,
+                1 => {
+                    let ttl = take_u32(&mut cursor)?;
+                    let rdata_count = take_u32(&mut cursor)?;
+                    if rdata_count as u64 > bytes.len() as u64 / 2 {
+                        return Err("journal RDATA count cannot fit");
+                    }
+                    let mut rdatas = Vec::with_capacity(rdata_count as usize);
+                    for _ in 0..rdata_count {
+                        let length = take_u16(&mut cursor)? as usize;
+                        rdatas.push(take_bytes(&mut cursor, length)?);
+                    }
+                    Some(Rrset::new(owner.clone(), rr_type, class, ttl, rdatas))
+                }
+                _ => return Err("invalid journal replacement marker"),
+            };
+            changes.push(PersistenceRrsetChange {
+                owner,
+                rr_type,
+                class,
+                replacement,
+            });
+        }
+        entries.push(JournalEntry {
+            old_serial,
+            new_serial,
+            persisted_unix_secs,
+            changes,
+        });
+        expected_serial = new_serial;
+    }
+    if cursor.position() != bytes.len() as u64 {
+        return Err("trailing journal bytes");
+    }
+    Ok(DecodedJournal {
+        base_serial,
+        entries,
+    })
+}
+
+fn take_bytes(cursor: &mut Cursor<&[u8]>, length: usize) -> Result<Vec<u8>, &'static str> {
+    let position = cursor.position() as usize;
+    let end = position
+        .checked_add(length)
+        .ok_or("journal length overflow")?;
+    let bytes = cursor
+        .get_ref()
+        .get(position..end)
+        .ok_or("truncated journal")?
+        .to_vec();
+    cursor.set_position(end as u64);
+    Ok(bytes)
+}
+
+fn take_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8, &'static str> {
+    Ok(take_bytes(cursor, 1)?[0])
+}
+
+fn take_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16, &'static str> {
+    Ok(u16::from_be_bytes(
+        take_bytes(cursor, 2)?.try_into().expect("exact length"),
+    ))
+}
+
+fn take_u32(cursor: &mut Cursor<&[u8]>) -> Result<u32, &'static str> {
+    Ok(u32::from_be_bytes(
+        take_bytes(cursor, 4)?.try_into().expect("exact length"),
+    ))
+}
+
+fn take_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64, &'static str> {
+    Ok(u64::from_be_bytes(
+        take_bytes(cursor, 8)?.try_into().expect("exact length"),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -674,7 +1095,7 @@ mod tests {
     use super::*;
     use borondns_core::{dns::RecordType, zone::Rrset};
 
-    fn soa_rdata() -> Vec<u8> {
+    fn soa_rdata(serial: u32) -> Vec<u8> {
         let mut rdata = DomainName::from_absolute_str("ns.example.test.")
             .unwrap()
             .to_wire();
@@ -683,7 +1104,7 @@ mod tests {
                 .unwrap()
                 .to_wire(),
         );
-        for value in [7u32, 3600, 600, 604800, 300] {
+        for value in [serial, 3600, 600, 604800, 300] {
             rdata.extend(value.to_be_bytes());
         }
         rdata
@@ -699,7 +1120,7 @@ mod tests {
                     RecordType::Soa as u16,
                     1,
                     3600,
-                    vec![soa_rdata()],
+                    vec![soa_rdata(7)],
                 ),
                 Rrset::new(
                     DomainName::from_absolute_str("example.test.").unwrap(),
@@ -738,6 +1159,180 @@ mod tests {
         assert_eq!(
             restored.snapshot.persistence_record_count(),
             snapshot.persistence_record_count()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn incremented_snapshot(previous: &ZoneSnapshot, serial: u32) -> ZoneSnapshot {
+        let owner = DomainName::from_absolute_str("ns.example.test.").unwrap();
+        let apex = previous.origin().clone();
+        previous.with_persistence_changes(
+            serial,
+            vec![
+                PersistenceRrsetChange {
+                    owner: apex.clone(),
+                    rr_type: RecordType::Soa as u16,
+                    class: 1,
+                    replacement: Some(Rrset::new(
+                        apex,
+                        RecordType::Soa as u16,
+                        1,
+                        3600,
+                        vec![soa_rdata(serial)],
+                    )),
+                },
+                PersistenceRrsetChange {
+                    owner: owner.clone(),
+                    rr_type: RecordType::A as u16,
+                    class: 1,
+                    replacement: Some(Rrset::new(
+                        owner,
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![vec![192, 0, 2, serial as u8]],
+                    )),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn incremental_stage_persists_small_journal_and_restores_latest_zone() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-journal-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let original = snapshot();
+        persistence.persist(&original).unwrap();
+        let updated = incremented_snapshot(&original, 8);
+
+        persistence
+            .stage_incremental(&original, &updated)
+            .unwrap()
+            .promote()
+            .unwrap();
+
+        assert!(
+            fs::metadata(persistence.journal_path_for(original.origin()))
+                .unwrap()
+                .len()
+                < 1024
+        );
+        let restored = persistence.restore(original.origin(), 1).unwrap().unwrap();
+        assert_eq!(restored.snapshot.serial(), Some(8));
+        assert_eq!(
+            restored
+                .snapshot
+                .persistence_records()
+                .into_iter()
+                .find(|record| {
+                    record.owner.canonical_key() == "ns.example.test."
+                        && record.rr_type == RecordType::A as u16
+                })
+                .unwrap()
+                .rdata,
+            vec![192, 0, 2, 8]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn abandoned_incremental_stage_does_not_advance_restart_state() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-journal-abandon-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let original = snapshot();
+        persistence.persist(&original).unwrap();
+        let updated = incremented_snapshot(&original, 8);
+
+        drop(persistence.stage_incremental(&original, &updated).unwrap());
+
+        assert_eq!(
+            persistence
+                .restore(original.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(7)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_incremental_journal_is_rejected_without_partial_restore() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-journal-corrupt-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let original = snapshot();
+        persistence.persist(&original).unwrap();
+        let updated = incremented_snapshot(&original, 8);
+        persistence
+            .stage_incremental(&original, &updated)
+            .unwrap()
+            .promote()
+            .unwrap();
+        let journal = persistence.journal_path_for(original.origin());
+        let mut bytes = fs::read(&journal).unwrap();
+        bytes[20] ^= 1;
+        fs::write(&journal, bytes).unwrap();
+
+        assert!(persistence.restore(original.origin(), 1).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incremental_journal_chains_generations_and_full_checkpoint_resets_it() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-journal-chain-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let original = snapshot();
+        persistence.persist(&original).unwrap();
+        let second = incremented_snapshot(&original, 8);
+        persistence
+            .stage_incremental(&original, &second)
+            .unwrap()
+            .promote()
+            .unwrap();
+        let third = incremented_snapshot(&second, 9);
+        persistence
+            .stage_incremental(&second, &third)
+            .unwrap()
+            .promote()
+            .unwrap();
+
+        assert_eq!(
+            persistence
+                .restore(original.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(9)
+        );
+
+        persistence.stage(&third).unwrap().promote().unwrap();
+        assert!(!persistence.journal_path_for(original.origin()).exists());
+        assert_eq!(
+            persistence
+                .restore(original.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(9)
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -814,6 +1409,45 @@ mod tests {
         assert_eq!(
             restored.snapshot.state(),
             borondns_core::zone::ZoneState::Active
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_and_freshness_readers_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-symlink-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let snapshot = snapshot();
+        persistence.persist(&snapshot).unwrap();
+        persistence
+            .renew_freshness(snapshot.origin(), snapshot.serial())
+            .unwrap();
+
+        let cache_path = persistence.path_for(snapshot.origin());
+        let cache_checksum = persistence.cache_checksum(&cache_path).unwrap();
+        let freshness_path = persistence.freshness_path_for(snapshot.origin());
+        let moved_freshness = root.join("moved.fresh");
+        fs::rename(&freshness_path, &moved_freshness).unwrap();
+        symlink(&moved_freshness, &freshness_path).unwrap();
+        assert_eq!(
+            persistence.read_freshness(snapshot.origin(), snapshot.serial(), &cache_checksum),
+            None
+        );
+
+        let moved_cache = root.join("moved.bdz");
+        fs::rename(&cache_path, &moved_cache).unwrap();
+        symlink(&moved_cache, &cache_path).unwrap();
+        assert!(
+            persistence
+                .renew_freshness(snapshot.origin(), snapshot.serial())
+                .is_err()
         );
         fs::remove_dir_all(root).unwrap();
     }

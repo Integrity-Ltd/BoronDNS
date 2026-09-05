@@ -12,6 +12,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 artifact_dir="${BORON_LOAD_ARTIFACT_DIR:-$repo_root/target/evidence/boron-gen-bounded-load-$timestamp}"
 workdir=""
+zone_cache_directory="${BORON_LOAD_ZONE_CACHE_DIRECTORY:-}"
 unit_suffix="${timestamp,,}-$$"
 generator_unit="boron-gen-load-$unit_suffix.service"
 server_unit="borondns-load-$unit_suffix.service"
@@ -36,6 +37,7 @@ health_listen="${BORON_LOAD_HEALTH_LISTEN:-127.0.0.1:18081}"
 message_bytes="${BORON_LOAD_MESSAGE_BYTES:-60000}"
 transfer_bytes="${BORON_LOAD_MAX_TRANSFER_BYTES:-25769803776}"
 transfer_messages="${BORON_LOAD_MAX_TRANSFER_MESSAGES:-1000000}"
+transfer_resident_bytes="${BORON_LOAD_MAX_TRANSFER_RESIDENT_BYTES:-68719476736}"
 ready_timeout="${BORON_LOAD_READY_TIMEOUT_SECONDS:-7200}"
 ixfr_ready_timeout="${BORON_LOAD_IXFR_READY_TIMEOUT_SECONDS:-$ready_timeout}"
 hold_seconds="${BORON_LOAD_HOLD_SECONDS:-60}"
@@ -110,6 +112,7 @@ for pair in \
     "BORON_LOAD_MESSAGE_BYTES:$message_bytes" \
     "BORON_LOAD_MAX_TRANSFER_BYTES:$transfer_bytes" \
     "BORON_LOAD_MAX_TRANSFER_MESSAGES:$transfer_messages" \
+    "BORON_LOAD_MAX_TRANSFER_RESIDENT_BYTES:$transfer_resident_bytes" \
     "BORON_LOAD_READY_TIMEOUT_SECONDS:$ready_timeout" \
     "BORON_LOAD_IXFR_READY_TIMEOUT_SECONDS:$ixfr_ready_timeout" \
     "BORON_LOAD_HOLD_SECONDS:$hold_seconds" \
@@ -699,6 +702,13 @@ failure_stage="preflight"
 failure_reason=""
 mkdir -p "$artifact_dir"
 workdir="$(mktemp -d -t "boron-gen-bounded-load-$timestamp-XXXXXX")"
+if [[ -z "$zone_cache_directory" ]]; then
+    zone_cache_directory="$workdir/zone-cache"
+elif [[ "$zone_cache_directory" != /* ]]; then
+    printf 'BORON_LOAD_ZONE_CACHE_DIRECTORY must be absolute, got %q\n' \
+        "$zone_cache_directory" >&2
+    exit 64
+fi
 chmod 700 "$workdir" "$artifact_dir"
 cleanup() {
     local status=$?
@@ -906,6 +916,7 @@ overlay_compaction_dirty_owner_threshold = $overlay_compaction_threshold
 [server]
 log_level = "info"
 log_format = "json"
+zone_cache_directory = "$zone_cache_directory"
 
 [interfaces]
 dns = [{ address = "$dns_host:$dns_port", name = "bounded-load" }]
@@ -933,6 +944,7 @@ tcp_connect_timeout_secs = 30
 max_concurrent_transfers = 1
 max_transfer_ingest_bytes = $transfer_bytes
 max_transfer_ingest_messages = $transfer_messages
+max_transfer_resident_bytes = $transfer_resident_bytes
 zsm_loading_warning_threshold_secs = 31536000
 zsm_min_interval_secs = $zsm_min_interval_seconds
 

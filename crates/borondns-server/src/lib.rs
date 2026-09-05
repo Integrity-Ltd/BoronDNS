@@ -5516,6 +5516,21 @@ async fn stage_last_good_before_publication(
         .map_err(|error| error.to_string())
 }
 
+async fn stage_incremental_last_good_before_publication(
+    persistence: &Option<ZonePersistence>,
+    previous: Arc<ZoneSnapshot>,
+    snapshot: Arc<ZoneSnapshot>,
+) -> Result<Option<zone_persistence::StagedZoneCache>, String> {
+    let Some(persistence) = persistence.clone() else {
+        return Ok(None);
+    };
+    tokio::task::spawn_blocking(move || persistence.stage_incremental(&previous, &snapshot))
+        .await
+        .map_err(|error| format!("zone-cache incremental writer task failed: {error}"))?
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 async fn run_zone_image_preparation<T, E, F>(operation: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -6437,25 +6452,27 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                 continue;
                                             }
                                         };
-                                        let staged = match stage_last_good_before_publication(
-                                            &context.zone_persistence,
-                                            snapshot.clone(),
-                                        )
-                                        .await
-                                        {
-                                            Ok(staged) => staged,
-                                            Err(error) => {
-                                                context.metrics.record_ixfr_failed();
-                                                warn!(
-                                                    zone = %plan.origin,
-                                                    %primary,
-                                                    %error,
-                                                    reason = %context.reason,
-                                                    "IXFR last-good staging failed before publication; falling back to AXFR"
-                                                );
-                                                continue;
-                                            }
-                                        };
+                                        let staged =
+                                            match stage_incremental_last_good_before_publication(
+                                                &context.zone_persistence,
+                                                current.snapshot_arc_for_transfer().clone(),
+                                                snapshot.clone(),
+                                            )
+                                            .await
+                                            {
+                                                Ok(staged) => staged,
+                                                Err(error) => {
+                                                    context.metrics.record_ixfr_failed();
+                                                    warn!(
+                                                        zone = %plan.origin,
+                                                        %primary,
+                                                        %error,
+                                                        reason = %context.reason,
+                                                        "IXFR last-good staging failed before publication; falling back to AXFR"
+                                                    );
+                                                    continue;
+                                                }
+                                            };
                                         match context
                                             .transfer_plan
                                             .if_current_plan(plan, || {
