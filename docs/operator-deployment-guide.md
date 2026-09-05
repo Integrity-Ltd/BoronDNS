@@ -102,9 +102,11 @@ sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
 The tag-push release workflow publishes local-use artifacts for
 `x86_64-unknown-linux-musl`: the installer archive, the raw static `borondns`
 binary, the raw static XDP-enabled `boron-gun` binary, an `amd64` Debian/Ubuntu
-package containing those same MUSL executables, and an Alpine-based Docker
-image archive. Each checksummed public artifact has a sibling `.sha256` file, and
-the release also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
+package, a Fedora/RHEL-compatible `x86_64` RPM containing those same MUSL
+executables, and an Alpine-based Docker image archive. The release attaches one
+authenticated `release-handoff.sha256` manifest covering all eleven generated
+artifacts and one keyless `release-handoff.sha256.sigstore.json` bundle for that
+manifest. It also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
 binaries and Docker image. The Docker image is attached as
 `borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
 does not publish a registry image, so operators should load the release asset
@@ -119,12 +121,14 @@ target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
-sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
+sudo install -m 0600 "$asset" release-handoff.sha256 \
+  release-handoff.sha256.sigstore.json "$install_root/"
 sudo cosign verify-blob \
-  --bundle "$install_root/$asset.sigstore.json" \
+  --bundle "$install_root/release-handoff.sha256.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
-  "$install_root/$asset"
+  "$install_root/release-handoff.sha256"
+sudo /bin/sh -c 'cd "$1" && sha256sum --ignore-missing -c release-handoff.sha256' sh "$install_root"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
@@ -142,7 +146,8 @@ directory identities between staging and atomic promotion.
 Treat any verification failure as a release-rejection condition; do not
 extract the archive or invoke its installer.
 
-For a verified Debian package and its verified `.sha256` sidecar, install with:
+After verifying the release manifest and package digest as above, install the
+Debian package with:
 
 ```sh
 sudo apt install ./borondns_<version>-1_amd64.deb
@@ -156,8 +161,16 @@ Removal preserves configuration and state; purge removes the configuration and
 retains `/var/lib/borondns` so cached or operational zone data is never silently
 deleted.
 
+Install the verified Fedora/RHEL-compatible package with:
+
 ```sh
-sha256sum -c borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+sudo dnf install ./borondns-<version>-1.x86_64.rpm
+```
+
+Its service activation, archive-migration guard, upgrade, removal, and retained
+state policy match the Debian package.
+
+```sh
 xz -dc borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
 docker run --rm borondns:<version> --version
 ```
@@ -1219,8 +1232,9 @@ current operator-relevant limitations are:
 - Container image size and static-binary release packaging are covered by the
   tag-push release workflow through the installer archive, static `borondns`
   binary, static XDP-enabled `boron-gun` binary, Debian/Ubuntu `amd64` package,
-  Alpine Docker image archive, and SHA256 sidecars. Registry publication remains intentionally out of scope
-  for the current private-repository phase.
+  Fedora/RHEL-compatible `x86_64` package, Alpine Docker image archive,
+  authenticated checksum manifest, and its keyless Sigstore bundle. Registry
+  publication remains intentionally out of scope.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.
 - There is no general runtime configuration reload, no administrative API,

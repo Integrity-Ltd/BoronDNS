@@ -28,7 +28,8 @@ For this profile, prefer loading the release asset locally instead of relying on
 a registry during beta handover:
 
 ```sh
-sha256sum -c borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+# First verify release-handoff.sha256 and this archive against it as described
+# in docs/release-evidence-guide.md.
 xz -dc borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
 docker tag borondns:<version> borondns:beta
 ```

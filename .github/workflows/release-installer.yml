@@ -510,19 +510,16 @@ jobs:
           # Repeat every authenticated handoff and reproducibility gate at the
           # signing boundary, then retain the accepted digests in this process.
           verify_authenticated_handoff
-          for asset in "${assets[@]}"; do
-            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$asset]}"
-            "$cosign_path" sign-blob --yes --bundle "$asset.sigstore.json" "$asset"
-            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$asset]}"
-            bundle="$asset.sigstore.json"
-            verify_signed_asset "$asset"
-            signed_bundle_sha256["$bundle"]="$(/usr/bin/sha256sum -- "$bundle" | /usr/bin/awk '{print $1}')"
-            signed_bundle_size["$bundle"]="$(/usr/bin/stat -c '%s' -- "$bundle")"
-            bundle_subject["$bundle"]="$asset"
-          done
-          for asset in "${assets[@]}"; do
-            verify_signed_asset "$asset"
-          done
+          signed_asset=release-handoff.sha256
+          test "$(/usr/bin/sha256sum -- "$signed_asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$signed_asset]}"
+          "$cosign_path" sign-blob --yes --bundle "$signed_asset.sigstore.json" "$signed_asset"
+          test "$(/usr/bin/sha256sum -- "$signed_asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$signed_asset]}"
+          bundle="$signed_asset.sigstore.json"
+          verify_signed_asset "$signed_asset"
+          signed_bundle_sha256["$bundle"]="$(/usr/bin/sha256sum -- "$bundle" | /usr/bin/awk '{print $1}')"
+          signed_bundle_size["$bundle"]="$(/usr/bin/stat -c '%s' -- "$bundle")"
+          bundle_subject["$bundle"]="$signed_asset"
+          verify_signed_asset "$signed_asset"
 
           release_cleanup_pending=0
           release_cleanup_running=0

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{self, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -55,6 +56,7 @@ struct JournalEntry {
 }
 
 struct DecodedJournal {
+    base_checksum: [u8; 32],
     base_serial: u32,
     entries: Vec<JournalEntry>,
 }
@@ -269,7 +271,17 @@ impl ZonePersistence {
         let base_checksum = self.cache_checksum(&base_path)?;
         let journal_path = self.journal_path_for(snapshot.origin());
         let (mut bytes, entries, current_serial) = match fs::symlink_metadata(&journal_path) {
-            Ok(_) => self.read_journal_bytes(snapshot.origin(), &base_checksum)?,
+            Ok(_) => {
+                let (bytes, decoded, _) = self.read_journal_bytes(snapshot.origin())?;
+                if decoded.base_checksum != base_checksum {
+                    return self.stage(snapshot);
+                }
+                let current_serial = decoded
+                    .entries
+                    .last()
+                    .map_or(decoded.base_serial, |entry| entry.new_serial);
+                (bytes, decoded.entries.len() as u32, current_serial)
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut bytes = Vec::new();
                 bytes.extend_from_slice(JOURNAL_MAGIC);
@@ -424,44 +436,41 @@ impl ZonePersistence {
         let journal_path = self.journal_path_for(&origin);
         match fs::symlink_metadata(&journal_path) {
             Ok(_) => {
-                let (journal_bytes, _, _) = self.read_journal_bytes(&origin, &stored)?;
-                let decoded = decode_journal(&journal_bytes, &origin, &stored)
-                    .map_err(|reason| self.malformed(&journal_path, reason))?;
-                if snapshot.serial() != Some(decoded.base_serial) {
-                    return Err(self.malformed(&journal_path, "journal base serial mismatch"));
-                }
-                for entry in decoded.entries {
-                    if snapshot.serial() != Some(entry.old_serial) {
-                        return Err(self.malformed(&journal_path, "journal serial chain mismatch"));
+                let (_, decoded, journal_checksum) = self.read_journal_bytes(&origin)?;
+                // A full-checkpoint promotion replaces the base before it
+                // removes the old journal. If the process stops in between,
+                // the independently valid journal is stale rather than a
+                // reason to hide the newly durable checkpoint.
+                if decoded.base_checksum == stored {
+                    if snapshot.serial() != Some(decoded.base_serial) {
+                        return Err(self.malformed(&journal_path, "journal base serial mismatch"));
                     }
-                    let updated =
-                        snapshot.with_persistence_changes(entry.new_serial, entry.changes.clone());
-                    validate_persisted_zone_delta(
-                        &origin,
-                        qclass,
-                        &snapshot,
-                        &updated,
-                        &entry.changes,
-                    )
-                    .map_err(|source| ZonePersistenceError::InvalidZone {
-                        path: journal_path.display().to_string(),
-                        source,
-                    })?;
-                    snapshot = updated;
-                    effective_persisted_unix_secs = entry.persisted_unix_secs;
+                    for entry in decoded.entries {
+                        if snapshot.serial() != Some(entry.old_serial) {
+                            return Err(
+                                self.malformed(&journal_path, "journal serial chain mismatch")
+                            );
+                        }
+                        let updated = snapshot
+                            .with_persistence_changes(entry.new_serial, entry.changes.clone());
+                        validate_persisted_zone_delta(
+                            &origin,
+                            qclass,
+                            &snapshot,
+                            &updated,
+                            &entry.changes,
+                        )
+                        .map_err(|source| {
+                            ZonePersistenceError::InvalidZone {
+                                path: journal_path.display().to_string(),
+                                source,
+                            }
+                        })?;
+                        snapshot = updated;
+                        effective_persisted_unix_secs = entry.persisted_unix_secs;
+                    }
+                    active_checksum = journal_checksum;
                 }
-                let journal_file = self.open_bounded_regular(
-                    &journal_path,
-                    32,
-                    self.max_file_bytes.min(MAX_JOURNAL_BYTES),
-                )?;
-                let mut journal_reader = BufReader::new(journal_file);
-                journal_reader
-                    .seek(SeekFrom::End(-32))
-                    .map_err(|source| self.io_error(&journal_path, source))?;
-                journal_reader
-                    .read_exact(&mut active_checksum)
-                    .map_err(|source| self.io_error(&journal_path, source))?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(source) => return Err(self.io_error(&journal_path, source)),
@@ -517,23 +526,19 @@ impl ZonePersistence {
         serial: Option<u32>,
     ) -> Result<(), ZonePersistenceError> {
         let final_path = self.path_for(origin);
+        let base_checksum = self.cache_checksum(&final_path)?;
         let journal_path = self.journal_path_for(origin);
-        let cache_checksum = if journal_path.exists() {
-            let mut journal = self.open_bounded_regular(
-                &journal_path,
-                32,
-                self.max_file_bytes.min(MAX_JOURNAL_BYTES),
-            )?;
-            journal
-                .seek(SeekFrom::End(-32))
-                .map_err(|source| self.io_error(&journal_path, source))?;
-            let mut checksum = [0; 32];
-            journal
-                .read_exact(&mut checksum)
-                .map_err(|source| self.io_error(&journal_path, source))?;
-            checksum
-        } else {
-            self.cache_checksum(&final_path)?
+        let cache_checksum = match fs::symlink_metadata(&journal_path) {
+            Ok(_) => {
+                let (_, decoded, journal_checksum) = self.read_journal_bytes(origin)?;
+                if decoded.base_checksum == base_checksum {
+                    journal_checksum
+                } else {
+                    base_checksum
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => base_checksum,
+            Err(source) => return Err(self.io_error(&journal_path, source)),
         };
         let refreshed_unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -624,8 +629,7 @@ impl ZonePersistence {
     fn read_journal_bytes(
         &self,
         origin: &DomainName,
-        expected_base_checksum: &[u8; 32],
-    ) -> Result<(Vec<u8>, u32, u32), ZonePersistenceError> {
+    ) -> Result<(Vec<u8>, DecodedJournal, [u8; 32]), ZonePersistenceError> {
         let path = self.journal_path_for(origin);
         let maximum = self.max_file_bytes.min(MAX_JOURNAL_BYTES);
         let mut file = self.open_bounded_regular(&path, 32, maximum)?;
@@ -644,14 +648,13 @@ impl ZonePersistence {
         if computed.as_slice() != &bytes[checksum_at..] {
             return Err(self.malformed(&path, "journal checksum mismatch"));
         }
+        let checksum = bytes[checksum_at..]
+            .try_into()
+            .expect("journal checksum has exact length");
         bytes.truncate(checksum_at);
-        let decoded = decode_journal(&bytes, origin, expected_base_checksum)
-            .map_err(|reason| self.malformed(&path, reason))?;
-        let current_serial = decoded
-            .entries
-            .last()
-            .map_or(decoded.base_serial, |entry| entry.new_serial);
-        Ok((bytes, decoded.entries.len() as u32, current_serial))
+        let decoded =
+            decode_journal(&bytes, origin).map_err(|reason| self.malformed(&path, reason))?;
+        Ok((bytes, decoded, checksum))
     }
 
     fn cache_checksum(&self, path: &Path) -> Result<[u8; 32], ZonePersistenceError> {
@@ -787,6 +790,9 @@ fn encode_journal_entry(
                 output.extend_from_slice(&rrset.ttl.to_be_bytes());
                 let rdata_count = u32::try_from(rrset.persistence_rdatas().count())
                     .map_err(|_| "journal RRset has too many records")?;
+                if rdata_count == 0 {
+                    return Err("journal replacement RRset is empty");
+                }
                 output.extend_from_slice(&rdata_count.to_be_bytes());
                 for rdata in rrset.persistence_rdatas() {
                     let length =
@@ -803,7 +809,6 @@ fn encode_journal_entry(
 fn decode_journal(
     bytes: &[u8],
     expected_origin: &DomainName,
-    expected_base_checksum: &[u8; 32],
 ) -> Result<DecodedJournal, &'static str> {
     let mut cursor = Cursor::new(bytes);
     if take_bytes(&mut cursor, JOURNAL_MAGIC.len())? != JOURNAL_MAGIC {
@@ -819,9 +824,9 @@ fn decode_journal(
     if consumed != owner_wire.len() || origin.canonical_key() != expected_origin.canonical_key() {
         return Err("journal origin mismatch");
     }
-    if take_bytes(&mut cursor, 32)?.as_slice() != expected_base_checksum {
-        return Err("journal base checksum mismatch");
-    }
+    let base_checksum = take_bytes(&mut cursor, 32)?
+        .try_into()
+        .expect("journal base checksum has exact length");
     let base_serial = take_u32(&mut cursor)?;
     let entry_count = take_u32(&mut cursor)?;
     if entry_count > MAX_JOURNAL_ENTRIES {
@@ -841,6 +846,7 @@ fn decode_journal(
             return Err("journal change count cannot fit");
         }
         let mut changes = Vec::with_capacity(change_count as usize);
+        let mut changed_rrsets = BTreeSet::new();
         for _ in 0..change_count {
             let owner_len = take_u16(&mut cursor)? as usize;
             if owner_len == 0 || owner_len > 255 {
@@ -854,11 +860,17 @@ fn decode_journal(
             }
             let rr_type = take_u16(&mut cursor)?;
             let class = take_u16(&mut cursor)?;
+            if !changed_rrsets.insert((owner.canonical_key(), rr_type, class)) {
+                return Err("duplicate journal RRset change");
+            }
             let replacement = match take_u8(&mut cursor)? {
                 0 => None,
                 1 => {
                     let ttl = take_u32(&mut cursor)?;
                     let rdata_count = take_u32(&mut cursor)?;
+                    if rdata_count == 0 {
+                        return Err("journal replacement RRset is empty");
+                    }
                     if rdata_count as u64 > bytes.len() as u64 / 2 {
                         return Err("journal RDATA count cannot fit");
                     }
@@ -890,6 +902,7 @@ fn decode_journal(
         return Err("trailing journal bytes");
     }
     Ok(DecodedJournal {
+        base_checksum,
         base_serial,
         entries,
     })
@@ -1335,6 +1348,102 @@ mod tests {
             Some(9)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_checkpoint_restore_ignores_stale_pre_promotion_journal() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-journal-stale-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let original = snapshot();
+        persistence.persist(&original).unwrap();
+        let updated = incremented_snapshot(&original, 8);
+        persistence
+            .stage_incremental(&original, &updated)
+            .unwrap()
+            .promote()
+            .unwrap();
+
+        let mut staged = persistence.stage(&updated).unwrap();
+        fs::rename(&staged.temp_path, &staged.final_path).unwrap();
+        staged.promoted = true;
+        drop(staged);
+
+        assert!(persistence.journal_path_for(original.origin()).exists());
+        assert_eq!(
+            persistence
+                .restore(original.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(8)
+        );
+        persistence
+            .renew_freshness(original.origin(), Some(8))
+            .unwrap();
+        let base_checksum = persistence
+            .cache_checksum(&persistence.path_for(original.origin()))
+            .unwrap();
+        assert!(
+            persistence
+                .read_freshness(original.origin(), Some(8), &base_checksum)
+                .is_some()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn journal_payload_prefix(origin: &DomainName, change_count: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(JOURNAL_MAGIC);
+        let origin_wire = origin.to_wire();
+        bytes.extend_from_slice(&(origin_wire.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&origin_wire);
+        bytes.extend_from_slice(&[7; 32]);
+        bytes.extend_from_slice(&7u32.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&7u32.to_be_bytes());
+        bytes.extend_from_slice(&8u32.to_be_bytes());
+        bytes.extend_from_slice(&0u64.to_be_bytes());
+        bytes.extend_from_slice(&change_count.to_be_bytes());
+        bytes
+    }
+
+    fn append_journal_change_key(bytes: &mut Vec<u8>, owner: &DomainName) {
+        let owner_wire = owner.to_wire();
+        bytes.extend_from_slice(&(owner_wire.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&owner_wire);
+        bytes.extend_from_slice(&(RecordType::A as u16).to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+    }
+
+    #[test]
+    fn journal_decoder_rejects_empty_and_duplicate_replacements() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let owner = DomainName::from_absolute_str("www.example.test.").unwrap();
+
+        let mut empty = journal_payload_prefix(&origin, 1);
+        append_journal_change_key(&mut empty, &owner);
+        empty.push(1);
+        empty.extend_from_slice(&300u32.to_be_bytes());
+        empty.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            decode_journal(&empty, &origin).err(),
+            Some("journal replacement RRset is empty")
+        );
+
+        let mut duplicate = journal_payload_prefix(&origin, 2);
+        append_journal_change_key(&mut duplicate, &owner);
+        duplicate.push(0);
+        append_journal_change_key(&mut duplicate, &owner);
+        duplicate.push(0);
+        assert_eq!(
+            decode_journal(&duplicate, &origin).err(),
+            Some("duplicate journal RRset change")
+        );
     }
 
     #[test]

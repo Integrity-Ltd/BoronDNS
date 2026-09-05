@@ -129,12 +129,14 @@ target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
-sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
+sudo install -m 0600 "$asset" release-handoff.sha256 \
+  release-handoff.sha256.sigstore.json "$install_root/"
 sudo cosign verify-blob \
-  --bundle "$install_root/$asset.sigstore.json" \
+  --bundle "$install_root/release-handoff.sha256.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
-  "$install_root/$asset"
+  "$install_root/release-handoff.sha256"
+sudo /bin/sh -c 'cd "$1" && sha256sum --ignore-missing -c release-handoff.sha256' sh "$install_root"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
@@ -173,6 +175,21 @@ upgrades preserve configuration and state, removal preserves both, and purge
 removes configuration while retaining `/var/lib/borondns` operational data.
 Run `scripts/test-deb-package-docker.sh` for the Debian 12/13 and Ubuntu
 22.04/24.04 install, upgrade, remove, and purge matrix.
+
+### Fedora/RHEL-compatible package
+
+With `rpmbuild` available, build and verify the native `x86_64` package:
+
+```bash
+scripts/package-rpm.sh
+sha256sum -c target/dist/borondns-*.x86_64.rpm.sha256
+sudo dnf install ./target/dist/borondns-*.x86_64.rpm
+```
+
+It has the same service activation, archive-migration guard, upgrade, removal,
+and retained-state policy as the Debian package. Run
+`scripts/test-rpm-package-docker.sh` for the Fedora 42 and Rocky Linux 9
+install, upgrade, remove, and reinstall matrix.
 
 The tag-push release workflow also builds an Alpine-based Docker image and
 publishes it as a compressed Docker archive, not as a registry image. Build and

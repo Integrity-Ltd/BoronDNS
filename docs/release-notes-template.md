@@ -10,8 +10,10 @@ running `scripts/check-release-notes.sh`.
 - Release date UTC: TBD
 - Evidence snapshot: TBD
 - Release artifacts: installer `.tar.xz`, static `borondns` binary, static
-  XDP-enabled `boron-gun` binary, Debian/Ubuntu `amd64` `.deb`, Alpine Docker image `.tar.xz`, CycloneDX
-  SBOMs for the binaries and Docker image, SBOM manifest, and SHA256 sidecars.
+  XDP-enabled `boron-gun` binary, Debian/Ubuntu `amd64` `.deb`, Fedora/RHEL
+  compatible `x86_64` `.rpm`, Alpine Docker image `.tar.xz`, CycloneDX SBOMs
+  for the binaries and Docker image, SBOM manifest, authenticated
+  `release-handoff.sha256`, and its keyless Sigstore bundle.
 
 ## Verification Summary
 

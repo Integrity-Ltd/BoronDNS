@@ -490,6 +490,7 @@ pub fn validate_persisted_zone_delta(
             if rrset.owner.canonical_key() != change.owner.canonical_key()
                 || rrset.rr_type != change.rr_type
                 || rrset.class != change.class
+                || rrset.persistence_rdatas().next().is_none()
             {
                 return Err(AxfrError::MalformedMessage);
             }
@@ -6064,6 +6065,52 @@ mod tests {
         assert_eq!(
             validate_persisted_zone_delta(&apex, 1, &previous, &updated, &changes),
             Err(AxfrError::InvalidRdata)
+        );
+    }
+
+    #[test]
+    fn persisted_delta_validator_rejects_empty_replacement_rrset() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let previous = validated_persisted_zone_snapshot(
+            &apex,
+            1,
+            Some(1),
+            vec![
+                record(
+                    "example.test.",
+                    RecordType::Soa as u16,
+                    soa_rdata_with_serial(1),
+                ),
+                apex_ns(),
+            ],
+        )
+        .unwrap();
+        let owner = DomainName::from_absolute_str("empty.example.test.").unwrap();
+        let changes = vec![
+            PersistenceRrsetChange {
+                owner: apex.clone(),
+                rr_type: RecordType::Soa as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata_with_serial(2)],
+                )),
+            },
+            PersistenceRrsetChange {
+                owner: owner.clone(),
+                rr_type: RecordType::A as u16,
+                class: 1,
+                replacement: Some(Rrset::new(owner, RecordType::A as u16, 1, 300, Vec::new())),
+            },
+        ];
+        let updated = previous.with_persistence_changes(2, changes.clone());
+
+        assert_eq!(
+            validate_persisted_zone_delta(&apex, 1, &previous, &updated, &changes),
+            Err(AxfrError::MalformedMessage)
         );
     }
 }

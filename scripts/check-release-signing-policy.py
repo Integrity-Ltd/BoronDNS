@@ -202,7 +202,7 @@ PACKAGE_STEP_SHA256 = {
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
-    "Create GitHub release": "ba3823477635bac7186a120a48dea0294135add93b5e1237889c3b1c76c11ab5",
+    "Create GitHub release": "57a2cff7e647473921f02f30ecb5f1768accd7a14fcc1d5c2489a3b63c63be17",
 }
 PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
 
@@ -596,7 +596,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '              . "$GITHUB_SHA"',
         '/usr/bin/sha256sum -c --strict "$checksum"',
         'cosign_path="$authenticated_tools/cosign"',
-        '"$cosign_path" sign-blob --yes --bundle "$asset.sigstore.json" "$asset"',
+        '"$cosign_path" sign-blob --yes --bundle "$signed_asset.sigstore.json" "$signed_asset"',
         'gh_path="$authenticated_tools/gh"',
         'declare -A authenticated_asset_sha256 authenticated_asset_size',
         'declare -A signed_bundle_sha256 signed_bundle_size bundle_subject',
@@ -627,6 +627,12 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
     for required in handoff_requirements:
         if required not in text:
             errors.append(f"authenticated release handoff invariant missing: {required}")
+    manifest_sign_command = (
+        '"$cosign_path" sign-blob --yes --bundle '
+        '"$signed_asset.sigstore.json" "$signed_asset"'
+    )
+    if text.count(manifest_sign_command) != 1:
+        errors.append("release publication must sign exactly the authenticated checksum manifest")
     if "artifact-digest" in text or "HANDOFF_ARTIFACT_DIGEST" in text:
         errors.append(
             "release workflow must not claim an artifact digest that download-artifact cannot compare"
@@ -1249,10 +1255,10 @@ if args and args[0] == "verify-blob":
     count_file = state / "cosign-verify-count"
     count = int(count_file.read_text(encoding="ascii")) + 1 if count_file.exists() else 1
     count_file.write_text(str(count), encoding="ascii")
-    if count == 24 and scenario == "post-sign-asset-mutation":
+    if count == 2 and scenario == "post-sign-asset-mutation":
         target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz"))
         target.write_bytes(target.read_bytes() + b"post sign asset mutation\n")
-    if count == 24 and scenario == "post-sign-bundle-mutation":
+    if count == 2 and scenario == "post-sign-bundle-mutation":
         target = Path("release-handoff.sha256.sigstore.json")
         target.write_bytes(target.read_bytes() + b"post sign bundle mutation\n")
     print("Verified OK")
@@ -1845,8 +1851,8 @@ def run_mutation_regressions(text: str) -> None:
     )
 
     exact_cosign = (
-        '            "$cosign_path" sign-blob --yes --bundle '
-        '"$asset.sigstore.json" "$asset"\n'
+        '          "$cosign_path" sign-blob --yes --bundle '
+        '"$signed_asset.sigstore.json" "$signed_asset"\n'
     )
     path_cosign = text.replace(exact_cosign, exact_cosign.replace('"$cosign_path"', "cosign", 1), 1)
     if path_cosign == text:
@@ -2464,7 +2470,7 @@ def installer_readme_errors(text: str) -> list[str]:
     errors: list[str] = []
     required = (
         "sudo cosign verify-blob",
-        '--bundle "$install_root/$asset.sigstore.json"',
+        '--bundle "$install_root/release-handoff.sha256.sigstore.json"',
         "--certificate-oidc-issuer https://token.actions.githubusercontent.com",
         '--certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/'
         'workflows/release-installer.yml@refs/tags/$tag"',
@@ -2472,8 +2478,10 @@ def installer_readme_errors(text: str) -> list[str]:
         'asset="borondns-${tag#v}-$target_triple.tar.xz"',
         'install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"',
         'sudo chmod 0700 "$install_root"',
-        'sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"',
-        '  "$install_root/$asset"',
+        'sudo install -m 0600 "$asset" release-handoff.sha256 \\',
+        '  release-handoff.sha256.sigstore.json "$install_root/"',
+        '  "$install_root/release-handoff.sha256"',
+        "sudo /bin/sh -c 'cd \"$1\" && sha256sum --ignore-missing -c release-handoff.sha256' sh \"$install_root\"",
         'sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"',
         'sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"',
     )
@@ -2484,15 +2492,34 @@ def installer_readme_errors(text: str) -> list[str]:
         'install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"'
     )
     protect_at = text.find('sudo chmod 0700 "$install_root"')
-    copy_at = text.find('sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"')
+    copy_at = text.find('sudo install -m 0600 "$asset" release-handoff.sha256 \\')
     verify_at = text.find("sudo cosign verify-blob")
-    verify_asset_at = text.find('  "$install_root/$asset"')
+    verify_manifest_at = text.find('  "$install_root/release-handoff.sha256"')
+    checksum_at = text.find(
+        "sudo /bin/sh -c 'cd \"$1\" && sha256sum --ignore-missing -c release-handoff.sha256' sh \"$install_root\""
+    )
     extract_at = text.find(
         'sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"'
     )
     sudo_at = text.find('sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"')
-    if min(allocate_at, protect_at, copy_at, verify_at, verify_asset_at, extract_at, sudo_at) >= 0 and not (
-        allocate_at < protect_at < copy_at < verify_at < verify_asset_at < extract_at < sudo_at
+    if min(
+        allocate_at,
+        protect_at,
+        copy_at,
+        verify_at,
+        verify_manifest_at,
+        checksum_at,
+        extract_at,
+        sudo_at,
+    ) >= 0 and not (
+        allocate_at
+        < protect_at
+        < copy_at
+        < verify_at
+        < verify_manifest_at
+        < checksum_at
+        < extract_at
+        < sudo_at
     ):
         errors.append(
             "installer quick install must protect, verify, extract, and execute the same archive in order"
@@ -2502,7 +2529,10 @@ def installer_readme_errors(text: str) -> list[str]:
 
 def run_installer_readme_mutation_regressions(text: str) -> None:
     for label, needle in (
-        ("protected bundle verification", '--bundle "$install_root/$asset.sigstore.json"'),
+        (
+            "protected manifest bundle verification",
+            '--bundle "$install_root/release-handoff.sha256.sigstore.json"',
+        ),
         ("exact OIDC issuer", "--certificate-oidc-issuer https://token.actions.githubusercontent.com"),
         (
             "exact tagged workflow identity",
@@ -2515,10 +2545,14 @@ def run_installer_readme_mutation_regressions(text: str) -> None:
         ),
         ("root-only extraction directory mode", 'sudo chmod 0700 "$install_root"'),
         (
-            "protected archive and bundle copy",
-            'sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"',
+            "protected archive, manifest, and bundle copy",
+            'sudo install -m 0600 "$asset" release-handoff.sha256 \\',
         ),
-        ("protected archive verification", '  "$install_root/$asset"'),
+        ("protected manifest verification", '  "$install_root/release-handoff.sha256"'),
+        (
+            "protected archive digest verification",
+            "sudo /bin/sh -c 'cd \"$1\" && sha256sum --ignore-missing -c release-handoff.sha256' sh \"$install_root\"",
+        ),
         (
             "root-owned archive extraction",
             'sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"',

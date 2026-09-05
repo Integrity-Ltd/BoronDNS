@@ -11,22 +11,25 @@ target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
-sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
+sudo install -m 0600 "$asset" release-handoff.sha256 \
+  release-handoff.sha256.sigstore.json "$install_root/"
 sudo cosign verify-blob \
-  --bundle "$install_root/$asset.sigstore.json" \
+  --bundle "$install_root/release-handoff.sha256.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
-  "$install_root/$asset"
+  "$install_root/release-handoff.sha256"
+sudo /bin/sh -c 'cd "$1" && sha256sum --ignore-missing -c release-handoff.sha256' sh "$install_root"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
 
 Set `tag` to the exact release tag you downloaded. Do not extract or run the
-archive if Cosign cannot validate its bundle against that exact tag identity.
-The root-owned archive and bundle copies are part of the trust boundary: Cosign
-verifies the protected copy that `tar` later reopens, so a same-user replacement
-of the downloaded pathname after verification cannot change the extracted
-bytes. The installer also rejects a payload directory, manifest, binary,
+archive if Cosign cannot validate the checksum manifest against that exact tag
+identity or if the protected archive fails its manifest digest. The root-owned
+archive, manifest, and bundle copies are part of the trust boundary: digest
+verification covers the protected copy that `tar` later reopens, so a same-user
+replacement of a downloaded pathname cannot change the extracted bytes after
+verification. The installer also rejects a payload directory, manifest, binary,
 documentation file, or service template that is not root-owned and protected
 from group/other writes. Do not run the privileged installer directly from a
 normal-user-owned download directory.
