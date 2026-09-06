@@ -1,31 +1,39 @@
-# Operational SLO Guide
+# Operational objectives
 
-Status: informative operator SLO publication for `BDS-NFR-MAINT-009`.
+Choose service objectives for your deployment before adding alert thresholds.
+These are starting points, not availability guarantees or claims that a
+particular host meets the project's performance targets.
 
-This guide records suggested operational service-level objectives for BoronDNS
-deployments. It is not a formal SRS acceptance claim. Engineering MVP provides
-the evidence commands and handoff paths; formal SRS acceptance still depends on
-later performance, reliability, soak, and external-operator evidence execution
-tracked in `docs/release-acceptance-gap-register.md`.
+## Suggested objectives
 
-## Suggested Operational SLOs
-
-| Objective | Suggested target | Evidence source |
+| Objective | Starting point | How to measure it |
 | --- | --- | --- |
-| Authoritative service readiness | `/readyz` is HTTP 200 for at least 99.9% of one-minute probes outside declared maintenance when at least one zone is expected ACTIVE | `GET /readyz`, zone-state metrics, maintenance record |
-| Initial and refresh transfer health | Every configured zone reaches ACTIVE inside the operator's expected transfer window; long-LOADING behavior beyond `[limits].zsm_loading_warning_threshold_secs` is actionable | `/readyz`, `borondns_secondary_zone_loading_seconds`, `zone_loading_threshold_exceeded` logs |
-| Direct-hit latency | On the Reference Hardware Profile, keep p99 direct-hit UDP query processing below 1 ms at up to 50% of the `BDS-NFR-PERF-001` throughput target, matching `BDS-NFR-PERF-002` | release benchmark artifacts; smoke metrics are not enough for acceptance |
-| Near-capacity latency | On the Reference Hardware Profile, keep p99 query processing below 10 ms at up to 90% of the `BDS-NFR-PERF-001` throughput target, matching `BDS-NFR-PERF-003` | release benchmark artifacts |
-| Memory growth | Under a declared stable workload, post-warm-up RSS shows no unexplained continuing growth across the release-selected observation window, matching `BDS-NFR-REL-003` | fuzz/resource or optional soak report with workload, warm-up point, duration, threshold, and RSS samples |
-| Rolling restart drain | After SIGTERM, `/readyz` reports draining and TCP listeners stop accepting new connections within 100 ms, matching `BDS-NFR-REL-005` | signal/rolling-restart artifacts |
-| Clock synchronisation | Host clock drift stays well below the configured TSIG and DNS Cookie tolerance windows; investigate clock synchronisation drift above 1 second for NTP/PTP-managed hosts, matching the operational premise of `BDS-NFR-REL-007` | host time-sync monitoring, TSIG BADTIME and cookie-invalid metrics/logs |
+| DNS availability | At least 99.9% successful external probes outside declared maintenance; choose representative zones and query types. | Probe both UDP and TCP from client-facing networks. Check answer content, not just response arrival. |
+| Complete zone coverage | Every expected zone is ACTIVE after its initial transfer window. | Per-zone state/serial metrics and an external list of expected zones. `/readyz` only requires one active zone. |
+| Update freshness | A primary update becomes visible within a window appropriate to the zone's update rate and transfer size. | Compare primary and secondary serials; measure NOTIFY-to-publication time and periodic-refresh behavior. |
+| Query latency | Set a p99 budget at a stated load, query mix, answer size, and loss rate. | Client measurements plus server processing histograms when detailed metrics are enabled. |
+| Memory and storage | Leave capacity for transfer/publication overlap and detect unexplained growth after warm-up. | RSS/cgroup usage, transfer-budget metrics, zone-cache space, and a stable workload description. |
+| Rolling restart | Remove a draining node from traffic and finish shutdown within its configured grace period. | Readiness, supervisor logs, and client probes during the restart. |
+| Clock synchronization | Keep drift well below TSIG and DNS Cookie tolerances; investigate drift above one second on managed NTP/PTP hosts. | Host time monitoring and authentication failures. BoronDNS's time endpoint currently reports `unknown`. |
 
-The first two rows are practical day-one Engineering MVP operating checks. Rows
-that depend on the Reference Hardware Profile, release-selected extended-runtime evidence, or release-retained
-artifacts are formal release/operations targets; they are not evidence that the
-bounded local Engineering MVP has completed those long-running runs.
+Treat sustained LOADING, EXPIRED zones, transfer failures, and unexpected
+TSIG/NOTIFY failures as actionable. The default loading warning threshold is
+one hour; a small estate may need a much shorter alert window. Avoid restarting
+every secondary automatically when the shared primary is unavailable.
 
-Operators should tune SLO thresholds to their zone count, primary behavior,
-anycast or load-balancer design, and query mix. A release note may publish
-stricter or looser deployment-specific SLOs, but it must not weaken the
-normative SRS acceptance targets.
+Keep the expected zone inventory, maintenance exclusions, probe locations,
+query mix, thresholds, and alert routing with deployment configuration. A
+Grafana panel or a successful short benchmark is not an availability record.
+
+## Relationship to project targets
+
+The [SRS](BoronDNS-Secondary-SRS-v1.0.0.md) defines development/release targets;
+this guide supplies operational guidance for `BDS-NFR-MAINT-009`.
+The reference throughput and latency requirements
+(`BDS-NFR-PERF-001`, `002`, and `003`) apply to their stated hardware and
+load profile. Memory-growth, drain, and clock requirements are
+`BDS-NFR-REL-003`, `005`, and `007`.
+
+Use the release's measured evidence to assess those targets. Set site
+objectives from your own capacity and redundancy design rather than copying a
+reference-host throughput number into a service promise.

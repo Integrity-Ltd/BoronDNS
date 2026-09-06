@@ -1,0 +1,319 @@
+# Configuration guide
+
+Start with `borondns --example-config` or the commented
+[example TOML](../config/borondns.example.toml). This guide explains the choices
+that matter when adapting it. Validate the completed file before a restart:
+
+```sh
+borondns --validate-config /etc/borondns-secondary/config.toml
+borondns --dump-config /etc/borondns-secondary/config.toml
+```
+
+The dump redacts inline secrets but exposes paths, zone names, and addresses.
+Validation checks referenced credential files; it does not prove that a primary
+is reachable or will authorize a transfer.
+
+## File, command-line, and environment precedence
+
+The default file is `/etc/borondns-secondary/config.toml`. A mode-specific path
+such as `serve --config /path/config.toml` takes precedence over top-level
+`--config`, which takes precedence over `BORONDNS_CONFIG`, then the default.
+The same selection applies to `check-config`, `--validate-config`, and
+`--dump-config`.
+
+The main TOML file must be regular and at most 4 MiB. Configuration keys are
+validated rather than silently accepted as future settings. Topology and policy
+changes require a process restart; `SIGHUP` does not reload them.
+
+These scalar environment overrides take precedence over TOML and appear in the
+effective dump. The override set is explicit; arbitrary TOML keys cannot be
+converted into environment variables.
+
+| Environment variable | TOML setting |
+| --- | --- |
+| `BORONDNS_SERVER_HEALTH` | `server.health` |
+| `BORONDNS_SERVER_LOG_LEVEL` | `server.log_level` |
+| `BORONDNS_SERVER_LOG_FORMAT` | `server.log_format` |
+| `BORONDNS_SERVER_NSID` | `server.nsid` |
+| `BORONDNS_SERVER_ZONE_CACHE_DIRECTORY` | `server.zone_cache_directory` |
+| `BORONDNS_SERVER_ALLOW_NON_RFC5936_COLD_START` | `server.allow_non_rfc5936_cold_start` |
+| `BORONDNS_SERVER_ALLOW_NON_RFC9210_SINGLE_TRANSPORT` | `server.allow_non_rfc9210_single_transport` |
+| `BORONDNS_CHAOS_VERSION` | `chaos.version` |
+| `BORONDNS_CHAOS_HOSTNAME` | `chaos.hostname` |
+| `BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE` | `health.metrics_rate_limit_per_minute` |
+| `BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS` | `health.metrics_rate_limit_idle_seconds` |
+| `BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES` | `logging.max_entry_length_bytes` |
+| `BORONDNS_TSIG_FUDGE_SECONDS` | `tsig.fudge_seconds` |
+| `BORONDNS_TRANSFER_REQUIRE_TSIG` | `transfer.require_tsig` |
+| `BORONDNS_EDNS_EXTENDED_DNS_ERRORS` | `edns.extended_dns_errors` |
+| `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES` | `limits.max_transfer_ingest_bytes` |
+| `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES` | `limits.max_transfer_ingest_messages` |
+| `BORONDNS_LIMITS_ZSM_MAX_INTERVAL_SECS` | `limits.zsm_max_interval_secs` |
+| `BORONDNS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS` | `limits.zsm_loading_warning_threshold_secs` |
+| `BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS` | `dnssec.nsec3_max_iterations` |
+
+Unknown `BORONDNS_*` variables produce non-fatal
+`category=configuration_warning` messages. Other variables are ignored by the
+configuration override parser. The logging subsystem separately honors
+`BORONDNS_LOG_LEVEL`, then `RUST_LOG`, ahead of the configured log filter;
+these filter overrides are not part of the TOML dump.
+
+## Listeners and a first zone
+
+This example uses high local ports. Replace the primary and zone name before
+running it, and create the cache directory writable by the runtime user.
+
+```toml
+[server]
+zone_cache_directory = "/var/lib/borondns/zones"
+log_level = "info"
+log_format = "json"
+
+[interfaces]
+dns = ["127.0.0.1:5300"]
+
+[health]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+notify_sources = ["192.0.2.53"]
+```
+
+This transfers without TSIG and therefore needs a trusted private test network.
+Use the credentials below for authenticated service.
+
+`interfaces.dns` supplies both UDP and TCP addresses and also receives NOTIFY.
+If omitted, the legacy `server.listen_udp` and `server.listen_tcp` lists apply.
+The supported production profile requires both transports.
+
+Health listener precedence is:
+
+1. The explicit `health.bind_address` and `health.bind_port` pair.
+2. Legacy `server.health`.
+3. Each `interfaces.mgmt` IP with `health.default_port` (default 8080).
+
+The port written in an `interfaces.mgmt` socket address is replaced by
+`health.default_port`. With none of these configured, there is no management
+listener; there is no implicit localhost fallback.
+
+Set `interfaces.transfer` to same-family local source sockets when outbound
+transfers need a dedicated address, for example `["192.0.2.11:0"]`. Port zero
+allows ephemeral source-port selection. Without an explicit source the OS
+selects it. NOTIFY belongs on the DNS listener; `interfaces.notify` is not a
+separate supported role.
+
+Add more `[[zones]]` entries for a multi-zone installation. Each zone can list
+several primaries. BoronDNS chooses a random initial primary at startup and
+uses a stable rotation for subsequent attempts. Avoid pointing a secondary at
+another secondary unless the upstream actually provides transfer service.
+
+## TSIG and XoT
+
+For TSIG-protected transfers, reference a named key from the zone:
+
+```toml
+[[zones]]
+name = "example.test."
+primaries = ["192.0.2.53:53"]
+notify_sources = ["192.0.2.53"]
+tsig_key = "transfer-key."
+
+[[tsig_keys]]
+name = "transfer-key."
+algorithm = "hmac-sha256"
+secret_file = "/etc/borondns-secondary/transfer-key.secret"
+```
+
+Use exactly one of `secret` or `secret_file`. The value is non-empty canonical
+padded Base64. Supported algorithms are `hmac-sha256`, `hmac-sha384`,
+`hmac-sha512`, and legacy `hmac-sha1`; MD5 is rejected. Prefer SHA-256 or
+stronger. Set `[transfer].require_tsig = true` when every static zone must be
+authenticated.
+
+Secret files must be regular, readable by BoronDNS, not world-readable, and
+not group/world-writable. Unix final-component symlinks are rejected. A static
+TSIG secret file is limited to 64 KiB. Validation and bounded reading use the
+same file handle. Keep clocks synchronized within the TSIG fudge window.
+
+For XoT-protected transfers, replace the zone's `primaries` field with explicit
+transfer primary entries:
+
+```toml
+[[zones.transfer_primaries]]
+addr = "192.0.2.53:853"
+transport = "xot"
+server_name = "primary.example.test"
+trust_anchors = ["/etc/borondns-secondary/xot-ca.pem"]
+# Optional mutual TLS:
+# client_cert = "/etc/borondns-secondary/xot-client.pem"
+# client_key = "/etc/borondns-secondary/xot-client.key"
+```
+
+Attach that table to the intended `[[zones]]` entry. XoT uses TLS 1.3 and does
+not fall back to cleartext after a TLS failure. It encrypts outbound transfers
+only. A separate explicitly configured TCP primary remains a separate choice.
+
+Mutual TLS requires `client_cert` and exactly one of `client_key` (a path) or
+`client_key_pem` (inline material). Direct TLS material is parsed before
+listeners bind, with a 4 MiB limit per file or inline private key. Private keys
+follow the secret-file permission rules; certificates and trust anchors must
+also be protected from group/world writes. Online CRL/OCSP checks are not
+performed. Use short-lived certificates and rotate trust when required.
+
+## Catalogs and credential rotation
+
+RFC 9432 catalogs provide runtime member discovery. Configure
+`[[catalog_zones]]` with its name, transfer primary, and TSIG key. Catalog
+transfers always require TSIG. By default, members inherit the catalog's
+primary, transport, TSIG key, NOTIFY, and transfer settings. The `catalog_*`
+and `member_*` fields separate those settings when catalog and content
+primaries differ.
+
+`serve_catalog_zone = false` processes the catalog without exposing it through
+public DNS. `max_member_zones` defaults to 10,000 per catalog. Explicit static
+zones take precedence over overlapping catalog members.
+
+`member_transfer_extensions = true` accepts supported transfer metadata under
+the catalog's `ext` subtree. These records carry addresses and key/profile
+names, never raw secrets or TLS material. See the
+[catalog guide](catalog-zone-rfc9432.md) for the record layout and full examples.
+
+Member transfers require TSIG by default. For an explicitly trusted legacy
+private primary only, set
+`member_transfer_policy.unsigned_axfr = "allow-legacy-private"`.
+When `member_tsig_key` is absent, this permits unsigned member AXFR instead of
+inheriting the catalog key. The catalog transfer itself remains signed, and
+unsigned member AXFR to non-private addresses is rejected.
+
+An optional `[secret_store].path` points to a Unix directory containing
+`secrets.toml`. It may define named TSIG keys and XoT profiles:
+
+```toml
+[[tsig_keys]]
+name = "transfer-key."
+algorithm = "hmac-sha256"
+secret_file = "tsig/transfer-key.secret"
+
+[[xot_profiles]]
+name = "primary-xot"
+trust_anchors = ["xot/ca.pem"]
+client_cert = "xot/client.pem"
+client_key = "xot/client.key"
+```
+
+Paths in this manifest must be normalized relative paths. Stage complete,
+immutable generation directories and atomically switch a `current` symlink at
+the configured root. BoronDNS captures that root once per reload and rejects
+nested/final symlinks or writable material beneath it, avoiding mixtures of two
+generations. The manifest is capped at 1 MiB and referenced material at 4 MiB
+per file. The merged static/runtime TSIG store is limited to 1,024 keys, 4 MiB
+encoded material, and 3 MiB decoded material; repeated references count again.
+
+A failed reload retains the prior validated generation. Switching the symlink
+alone does not request a reload: restart BoronDNS or use a configured
+control-plane operation.
+
+## Optional external control plane
+
+`[control_plane.telemetry]` sends transfer reports; `[control_plane.operations]`
+polls durable operations from an external service. Both use outbound HTTPS.
+Cleartext HTTP requires the explicit development override and an IP-literal
+loopback address.
+
+| Operation | Effect |
+| --- | --- |
+| `retry` | Request an immediate refresh of a configured zone. |
+| `pause` | Hide the zone from public query serving. |
+| `resume` | Restore visibility and request a refresh. |
+| `republish_feed` | Reload the configured secret store, then refresh catalogs. |
+| `rotate_tsig` | Reload the configured secret store, then refresh the named zone. |
+
+The poll path is `/api/v1/secondary-nodes/{node_id}/operations`. Responses are
+bounded to 256 KiB and 20 operations. This integration does not change
+listeners, static primaries, or the configured secret-store root, and does not
+expose an inbound administration API.
+
+## DNS response policy
+
+| Setting | Default and operational effect |
+| --- | --- |
+| `query.any_response` | `minimal`; use `full` to return ordinary owner RRsets for ANY. |
+| `dnssec.nsec3_max_iterations` | `100`; required NSEC3 proofs above this cap return SERVFAIL. This includes wildcard answers needing such proofs, not just negative responses. Lower it where primary policy permits. |
+| `edns.extended_dns_errors` | `off`; `minimal` adds numeric diagnostic EDE codes for selected not-ready and NSEC3-cap failures. |
+| `limits.edns_padding_block_size` | `0`; nonzero padding is rejected for the plaintext query transports. |
+| `rrl.enabled` | `true`; retain UDP response rate limiting for public service unless an upstream mitigation has been measured. |
+| `server.nsid` | Empty suppresses NSID. Use a short opaque node identifier when needed. |
+| `chaos.version` | Empty refuses version queries. |
+| `chaos.hostname` | Empty uses printable NSID for hostname queries, otherwise refuses them. |
+
+BoronDNS serves existing DNSSEC signatures and denial records; it does not sign
+or validate the primary's zone as a resolver would. Keep the primary's signing
+and signature-expiry monitoring in place.
+
+DNS Cookies default to the lenient policy. For anycast or load-balanced
+instances, configure the same 32-hex-character `cookie.server_secret` across
+the group. During rollover, `previous_server_secret` accepts the old value while
+responses use the current one. In-process rotation defaults to 30 days; an
+enabled Cookie policy rejects intervals above 36 days.
+
+## Large zones and packet-path tuning
+
+The default `zone_publication.strategy = "auto"` keeps compact query images
+below `sharded_rrset_threshold = 1000000` RRsets and permits structurally
+shared IXFR overlays for larger zones. `compact` always rebuilds the complete
+image; `sharded` permits overlays after initial publication. The former favors
+the simplest query path; the latter reduces small-update work on large zones.
+
+After 100,000 distinct owners differ from the compact base,
+`overlay_compaction_dirty_owner_threshold` schedules background compaction.
+Zero disables that trigger. Allow memory for the current generation, incoming
+transfer, publication, and compaction; these policies do not change the DNS
+contents or atomic publication boundary.
+
+Default ingest limits are 4 GiB and 4,096 transfer messages. Raise
+`max_transfer_ingest_bytes` and `max_transfer_ingest_messages` only with
+measured capacity. The global `max_transfer_resident_bytes` envelope charges
+retained wire bytes conservatively at 256 times their size. Size it below the
+service cgroup memory limit with headroom for serving state and queries.
+See [capacity limits](zone-image-capacity-limits.md) for the exact bounds.
+
+Standard UDP starts with one Tokio worker and batch size one. Measure QPS,
+loss, CPU, and latency on the actual NIC before changing
+`udp_runtime = "dedicated"`, `udp_reuseport_workers`, `udp_batch_size`,
+CPU affinity, socket buffers, or pacing. Worker counts are capped at 64 and
+batches at 1,024. Dedicated Linux workers use `recvmmsg`/`sendmmsg`.
+Pacing needs an appropriate host qdisc; excessive buffers can increase delay
+and memory use. [Metrics detail](health-metrics-interface.md#metrics-detail)
+is another explicit performance/visibility tradeoff.
+
+AF_XDP requires `limits.udp_backend = "af_xdp"`, a matching interface, concrete
+local listener IPs, and a trusted eBPF redirect object. The release binary
+contains the backend; the object is built with
+`scripts/borondns-server-build-ebpf.sh`. Its absolute path must resolve without
+symlinks to a root/process-owned regular file with one link, no group/world
+write bits, and at most 16 MiB.
+
+AF_XDP allows at most 64 unique queue IDs in `0..=63`. Memory limits are per
+queue: up to 262,144 UMEM frames, 65,536 entries per ring, and a 1,024-packet
+batch, with an aggregate startup estimate capped at 32 GiB.
+`xdp.tx_wakeup_interval` must remain `1`. Consult the example configuration
+and physical-NIC benchmarks before enabling this backend.
+
+## Logs and warnings
+
+Use `json` or `logfmt` for service logs; `plain` is useful locally. Warnings
+and errors go to stderr, lower levels to stdout. Bootstrap records on stderr
+are JSON even when the later runtime format differs. Structured entries are
+bounded by `logging.max_entry_length_bytes` (default 16,384); oversized entries
+become a parseable truncation record.
+
+Validation warnings identify valid but questionable settings, including public
+management binds, unsigned transfers, SHA-1 TSIG, broad RRL allowlists, disabled
+Cookies, unusually large timeouts, and expensive NSEC3 iteration caps. Review
+the warning's parameter and explanation rather than treating successful
+validation as a production security assessment. `--validate-config` and
+`--dump-config` write warnings to stderr; startup logs them and counts them in
+`borondns_secondary_configuration_warnings_total`.

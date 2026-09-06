@@ -1,110 +1,84 @@
-# ZoneSnapshot Narrowing Design
+# Reducing retained snapshot memory
 
-Status: scoped design task, 2026-07-18. No runtime representation change is
-claimed by this document.
+This is a design note for further memory work, updated against the September
+2026 implementation. It does not claim that snapshot ownership has already
+been split into new production types.
 
-## Objective
+`ZoneSnapshot` cannot simply be dropped after compiling a `ZoneImage`.
+Transfers need the current records for IXFR; large-zone overlays also answer
+dirty queries from that snapshot. The useful goal is to reduce duplication
+without making updates, recovery, or query behavior more expensive.
 
-Reduce steady-state memory retained beside each immutable `ZoneImage` without
-weakening transfer correctness, catalog reconciliation, lifecycle control, or
-the offline differential oracle. The work is intentionally separate from the
-ZoneImage denial-index and capacity fixes: it changes ownership and lifetime,
-not DNS query semantics.
+## What the snapshot currently owns
 
-## Current Responsibilities
+| Responsibility | Why it remains live |
+| --- | --- |
+| Canonical RRsets and serial lineage | Validate and apply IXFR additions/deletions; identify changes relative to an installed generation |
+| Name/class and empty-non-terminal indexes | Maintain existence semantics during updates and overlay lookups |
+| Delegation and DNAME indexes | Resolve current semantic answers where the compact base cannot be reused |
+| Persistent NSEC/NSEC3 order indexes | Apply small changes without rebuilding every denial index |
+| Cached shape and SOA metadata | Publication policy, refresh scheduling, status, and resource observations |
+| Builder and persistence input | Compile an image and write a lossless checkpoint or journal |
+| Catalog view | Reconcile transferred membership and policy data |
+| Offline oracle | Differential tests and benchmark comparisons |
 
-The current `ZoneSnapshot` is retained after publication because it combines
-several different responsibilities:
+[`zone.rs`](../crates/borondns-core/src/zone.rs) already exposes restricted
+`TransferZoneSnapshot`, `CatalogZoneView`, and `ZoneMetadata` views.
+`offline_oracle()` marks comparison-only access, but the underlying semantic
+lookup also serves current overlays through a separate production path.
 
-1. **Transfer state:** complete RRsets, SOA/serial data, and the current source
-   needed to validate and apply IXFR changes.
-2. **Image builder input:** deterministic source RRsets consumed by
-   `ZoneImage::compile` at publication.
-3. **Catalog input:** a borrowed `CatalogZoneView` used while reconciling
-   catalog membership.
-4. **Control state:** origin, serial, SOA timers, state, and cached shape facts
-   used by scheduling, status, and observability paths.
-5. **Offline oracle:** materialized lookup behavior used by differential tests
-   and retained benchmark evidence, not live serving.
+RRset and name-index maps use copy-on-write shards. All-IN name indexes now
+store reference counts, rather than the July experiment's simple membership
+sets, because incremental deletion must know when a name ceases to exist.
+The [July decision](zone-image-proposal-disposition-2026-07.md) remains useful
+historical evidence, not a description of today's exact allocation layout.
 
-Query serving is not on this list: published queries use `ZoneImage`.
+## A practical next step
 
-## Target Ownership Model
+Measure retained memory by responsibility before creating more types. Separate
+at least source RRsets, name/denial indexes, compact image arenas, changed
+overlay shards, build workspace, and old-generation overlap. Process RSS alone
+cannot show which ownership change helped.
 
-- `TransferZoneData` owns the canonical RRsets and only the indexes required to
-  validate AXFR/IXFR and apply deltas. It survives publication only while those
-  transfer responsibilities require it.
-- `ZoneImageBuilderInput` is a borrowed view over transfer data. Compilation
-  must not clone the complete record corpus.
-- `CatalogZoneView` remains borrowed and must not require query indexes or
-  materialized `LookupResult` values.
-- `ZoneMetadata` remains the narrow cached control-plane value for state,
-  serial, SOA timers, shape, and immutable-image statistics.
-- `ZoneSnapshotOfflineOracle` moves behind an explicit test/evidence boundary.
-  Production builds must not retain its query indexes merely to keep the oracle
-  cheap.
+Then consider narrowing in this order:
 
-Dropping all source records immediately after publication is not an initial
-goal: IXFR application needs a trustworthy current-zone source. The first
-memory target is duplication and query-only index retirement. Record retirement
-requires a separately proven transfer store or a lossless reconstruction
-contract and is a later decision.
+1. Remove duplicated cached metadata or indexes that no production caller
+   needs. Keep the existing restricted views as the API boundary.
+2. Separate genuinely offline-only state from indexes used by IXFR overlays.
+   Do not classify all snapshot query helpers as obsolete.
+3. Rework source/image byte duplication only with a lossless transfer and
+   persistence contract. A query packet is not a substitute for canonical
+   stored records.
+4. Consider retiring canonical source records only if another representation
+   can support IXFR, catalog reconciliation, restoration, and dirty-query
+   semantics without whole-zone reconstruction.
 
-## Migration Stages
+Names such as `TransferZoneData` or `ZoneImageBuilderInput` are possible design
+seams, not existing types or an agreed migration requirement. Preserve
+immutable publication throughout. The
+[current data-plane design](memory-io-data-plane-design.md) owns that contract.
 
-1. Add a counting-allocation evidence probe that reports snapshot construction,
-   post-publication retained transfer state, ZoneImage, and peak compile/reload
-   allocation separately. Keep it out of the query hot path.
-2. Inventory every production `ZoneSnapshot` accessor and classify it as
-   transfer, builder, catalog, control, or offline oracle. The invariant audit
-   must reject new unclassified production access.
-3. Extract control and catalog views without changing ownership. Existing
-   `ZoneMetadata`, `TransferZoneSnapshot`, and `CatalogZoneView` are the starting
-   seams.
-4. Split transfer-required RRset state from offline-oracle/query indexes. Run
-   AXFR, IXFR, catalog, reload, expiry, and differential suites after each
-   ownership move.
-5. Make offline-oracle indexes test/evidence-only or build them transiently for
-   comparison runs.
-6. Consider source-record retirement only after IXFR and recovery have another
-   lossless, bounded-memory source of truth.
+## Evidence for accepting a change
 
-Each stage is independently reversible. No stage may reconstruct records from
-query packets or make `ZoneImage` mutable.
+Use a reproducible signed-registry corpus or generator with at least one
+million owner names, a documented RRset distribution, and realistic owner and
+RDATA lengths. It should include delegations, glue, DS, DNSKEY, NSEC/NSEC3,
+multiple covered RRSIG types, empty non-terminals, high fanout, multi-RRset
+owners, and unknown types.
 
-## Representative Signed-Registry Replay Gate
+Exercise full load, repeated small IXFR, removals, background compaction,
+catalog reconciliation, persistence/restart, and expiry. Replay positive,
+wildcard, referral, NODATA, NXDOMAIN, and DNSSEC queries over UDP and TCP,
+including queries whose overlay dependencies changed.
 
-Evaluation requires a retained, reproducible corpus or generator containing:
+Report steady retained bytes and peak reload memory alongside update latency,
+compact/dirty-query QPS, and packet/semantic parity. Include a small-zone
+control: reducing memory for a large overlay does not justify slowing the
+ordinary compact path. Use matched physical-link runs for performance claims;
+in-process allocation and lookup probes explain a result but do not replace
+service measurements.
 
-- at least one million owner names and a documented RRset/RDATA distribution;
-- apex and delegated NS, glue, DS, DNSKEY, NSEC or NSEC3, and multiple RRSIG
-  covered types;
-- empty non-terminals, high sibling fanout, multi-RRset owners, unknown RR
-  types, and realistic owner/RDATA length distributions;
-- a complete AXFR load followed by representative IXFR additions, deletions,
-  serial changes, catalog reconciliation, publication, and expiry/reload; and
-- a fixed query trace covering positive, wildcard, referral, NODATA, NXDOMAIN,
-  DNSSEC proof, and TCP/UDP composition paths.
-
-The narrowing track may advance only when the replay demonstrates:
-
-1. byte-for-byte response parity and zero transfer/catalog/oracle mismatches;
-2. no new live query fallback to the old snapshot model;
-3. measured peak-reload and steady-state retained-memory reduction, reported
-   per responsibility rather than as process RSS alone;
-4. no statistically meaningful compile or packet-path regression under matched
-   runs, with any regression reported explicitly; and
-5. unchanged safe-failure behavior for malformed transfers and denial rings.
-
-Physical-link evidence remains the final performance gate because isolated
-lookup microbenchmarks can exaggerate cache-layout effects.
-
-## Counting-Allocator CI Decision
-
-A permanent allocation probe is useful, but it is not added blindly to every
-CI run. Wrapping the global allocator introduces an unsafe boundary or a new
-instrumentation dependency, and synthetic fixtures can turn exact byte totals
-into brittle gates. The implementation task should first choose and register a
-safe measurement boundary, then run the probe in a dedicated profiling job.
-CI should retain the measured values and compare broad regression thresholds;
-the existing per-arena ZoneImage statistics remain the stable always-on input.
+A counting allocator or new profiling dependency would need its own reviewed
+unsafe/instrumentation boundary. Prefer dedicated profiling runs and broad
+regression thresholds over exact allocation totals in every CI run. Existing
+per-arena image statistics remain useful without adding allocator hooks.

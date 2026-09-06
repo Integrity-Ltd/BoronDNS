@@ -1,213 +1,118 @@
-# BoronDNS Specification Documents
+# BoronDNS documentation
 
-This directory contains the BoronDNS / BoronDNS-Secondary project
-specification, planning, and evidence documents.
+Start with the guide for your task. Current behavior, formal requirements, and
+dated test results have different purposes; a historical measurement is not a
+performance guarantee for the current release.
 
-The current normative Software Requirements Specification is
-`BoronDNS-Secondary-SRS-v1.0.0.md`.
+## Run BoronDNS
 
-The documentation set intentionally separates three things:
+- [Operator guide](operator-deployment-guide.md): install, configure, upgrade,
+  and troubleshoot a server.
+- [Build from source](devops-getting-started.md): development prerequisites,
+  local checks, and package builds.
+- [Configuration reference](configuration.md): runtime settings and environment
+  overrides.
+- [Catalog zones](catalog-zone-rfc9432.md): member discovery and transfer policy.
+- [Health and metrics](health-metrics-interface.md): HTTP probes and Prometheus.
+- [Observability API](observability-api.md): optional JSON status endpoints.
+- [Operational SLOs](operational-slos.md): deployment targets and measurement.
+- [Debian VM profile](debian12-beta-vm-profile.md): one container deployment example.
+- [Recovery reference](operator-recovery.md): interpreting retained campaign and
+  publication state after an interrupted operation.
+- [Security policy](../SECURITY.md): vulnerability reports and maintenance.
 
-- **Normative requirements** in the current SRS.
-- **Current release-candidate scope** in the scope and readiness documents, with
-  retained feature slices and remaining gaps in their own owner documents.
-- **Formal release-acceptance closeout** such as long fuzz campaigns, reference
-  hardware benchmarks, soak execution, signed release evidence, and external
-  operator acceptance.
+## Understand the implementation
 
-Implemented protocol families must not be removed from release-candidate scope
-only because they exceed a minimal static-zone secondary-server cut. The exact
-retained slices, code owners, and nearby non-claims live in
-`docs/implemented-feature-scope.md`; remaining work for those features is
-tracked as release evidence or, when one exists, an explicit implementation
-gap.
+- [Architecture](architecture.md): components, data flow, and trust boundaries.
+- [Feature reference](implemented-feature-scope.md): supported behavior and limits.
+- [Query storage and packet I/O](memory-io-data-plane-design.md): current layout
+  and the reasons behind it.
+- [ZoneImage status](zone-image-implementation-status.md): implementation map,
+  measured decisions, and remaining work.
+- [Capacity limits](zone-image-capacity-limits.md): wire, storage, ingestion, and
+  memory bounds.
+- [Large-zone design](zone-image-large-zone-design.md) and
+  [snapshot responsibilities](zone-snapshot-narrowing-design.md): storage tradeoffs.
+- [Future optimization work](future-optimization-tracks.md): what would justify
+  further changes.
+- [RR type catalogue](rr-type-catalogue.md): structured validation and opaque types.
+- [Interface compatibility](interface-compatibility-policy.md): public interfaces
+  and versioning.
 
-## Document Ownership Rules
+## Test and measure
 
-Use this ownership map when editing docs. It is meant to prevent status text,
-evidence claims, and requirement wording from being copied into several places
-and slowly diverging.
+- [Test plan](test-plan.md): routine checks, integration tests, and release work.
+- [BoronGun](boron-gun.md): generate query load;
+  [developer notes](boron-gun-mvp-plan.md) cover its implementation and validation.
+- [BoronGen](boron-gen.md): generate synthetic primary zones;
+  [design](boron-gen-design.md) explains determinism and resource use.
+- [Client benchmarks](dns-client-benchmark.md) and
+  [loss matrix](dns-server-loss-matrix-benchmark.md): choose a measurement.
+- [Knot comparison](knot-comparison-benchmark.md): matched setup and retained results.
+- [IXFR scaling](ixfr-scaling-2026-08.md): measured update costs and their limits.
+- [Fuzzing](../fuzz/README.md), [two-host campaigns](two-host-fuzz-soak-campaign.md),
+  and [large-surface soaks](large-surface-soak.md): sustained testing.
+- [BIND interoperability](manual-bind-interop.md): primary/secondary lab checks.
+- [Reference verification profile](reference-verification-profile.md) and
+  [RRL thresholds](rrl-release-thresholds.md): formal measurement conditions.
 
-| Question | Owning document | Other documents should |
-| --- | --- | --- |
-| What is required behavior? | `BoronDNS-Secondary-SRS-v1.0.0.md` | Link to the requirement ID instead of restating normative wording. |
-| What is the current release-candidate boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred from local preflight. |
-| Is the release candidate ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
-| What is still open for SRS acceptance? | `release-acceptance-gap-register.md` | Keep only short active closeout gaps here; put detailed evidence in the ledger or Appendix A. |
-| What evidence exists by requirement family? | `verification-ledger.md` | Keep coarse status here; put per-requirement/range detail in Appendix A. |
-| What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
-| How are RFC traceability rules maintained? | `rfc-traceability-policy.md` | Keep RFC mapping conventions, status vocabulary, and out-of-scope clause handling here; keep current structured compliance rows in `rfc-compliance-assertions.md`. |
-| How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
-| Where is RR catalogue implementation detail kept? | `rr-type-catalogue.md` | Keep code paths, tests, and out-of-catalogue examples here; let the SRS own the normative type list. |
-| Where are deferred optimization tracks detailed? | `future-optimization-tracks.md` | Keep future XDP, packed-store, and response-cache design constraints here; let SRS Appendix C.6 record the formal scope boundary. |
-| Where is the next data-plane design detailed? | `memory-io-data-plane-design.md` | Keep packed `ZoneImage`, packet-I/O, metric, benchmark, and tuning details here; summarize only the deferred-track boundary elsewhere. |
-| Where is ZoneImage implementation status tracked? | `zone-image-implementation-status.md` | Keep checklist state, remaining layout work, and old query-layout retirement status here; keep detailed design rationale in `memory-io-data-plane-design.md`. |
-| What are the exact ZoneImage capacity limits? | `zone-image-capacity-limits.md` | Keep encoded, DNS-format, transfer-ingest, and reload-memory limits here; keep benchmark rationale in `zone-image-large-zone-design.md`. |
-| How were the July 2026 denial, memory, and class-index proposals resolved? | `zone-image-proposal-disposition-2026-07.md` | Keep the measured accepted/rejected/alternative-implemented decisions and reproduction command here. |
-| How will the retained ZoneSnapshot be narrowed? | `zone-snapshot-narrowing-design.md` | Keep responsibility separation, migration stages, and the signed-registry replay gate here; keep current implementation status in the ZoneImage tracker. |
-| How were Tibor's remaining July ZoneImage audit items closed? | `zone-image-action-items-2026-07.md` | Keep the code disposition, matched performance evidence, and remaining non-claims here. |
-| How does the synthetic large-zone primary remain deterministic and bounded? | `boron-gen-design.md` | Keep BoronGen generation, NSEC3, protocol-scope, and resource-safety contracts here. |
-| How is BoronGen run and validated under a cgroup limit? | `boron-gen.md` | Keep CLI examples, profiles, bounded-harness controls, and evidence interpretation here. |
-| What evidence qualified BoronGen for large-scale internal testing? | `boron-gen-validation-2026-07.md` | Keep the July functional, scale, containment, fuzz-disposition, and final 32 GiB results here. |
-| What did the July two-host 750 GiB campaign establish? | `boron-gen-two-host-campaign-2026-07.md` | Keep the frozen campaign triage, accepted size curve, 60M capacity boundary, and rerun requirements here. |
-| What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
-| What is the richer optional JSON observability API? | `observability-api.md` | Keep observability paths, response shapes, reduced-metrics behavior, and config knobs here. |
-| How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
-| Where are operator SLOs published? | `operational-slos.md` | Keep informative SLO targets here and link from the operator guide; do not duplicate the SLO table in the SRS. |
-| How is release evidence captured? | `release-evidence-guide.md` | Keep snapshot options and handoff mechanics here; link from operator docs instead of duplicating the runbook. |
-| What final v0.9.1 fuzz evidence supports the 1.0 public-beta decision? | `fuzz-soak-v0.9.1-2026-08.md` | Keep the collected campaign identity, validation result, execution lower bound, and resource summary here. |
-| What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
-| How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
-| Which extra implemented features are retained? | `implemented-feature-scope.md` | Keep the exact retained slice and nearby non-claims here; summarize or link elsewhere. |
-| Where are project decisions recorded? | `project-decision-register.md` | Keep the decision audit trail here; let SRS Appendix C.5 point to it instead of embedding the full table. |
+## Requirements and release work
 
-## Current Requirements and Design
+The [BoronDNS SRS](BoronDNS-Secondary-SRS-v1.0.0.md) is the requirements baseline.
+Some requirements are future full-acceptance targets. Use the evidence records
+below to establish what has actually been verified. The separate
+[BoronGun SRS](BoronGun-SRS-v0.1.md) covers the support tool.
 
-- `BoronDNS-Secondary-SRS-v1.0.0.md`: current normative Software Requirements
-  Specification, updated through the v0.9.1 requirement set.
-- `architecture.md`: current module map, implementation decisions, deferred
-  acceleration/storage tracks, unsafe-boundary posture, and release-governance
-  posture.
-- `future-optimization-tracks.md`: deferred XDP/eBPF, packed-zone-store, and
-  response-cache tracks referenced by SRS Appendix C.6.
-- `memory-io-data-plane-design.md`: implementation-ready design for the
-  deferred packed `ZoneImage`, response-composition, metric, comparison,
-  tuning, and packet-I/O optimization track.
-- `zone-image-implementation-status.md`: checklist tracker for implemented,
-  partial, and remaining `ZoneImage` work, including retirement of the old
-  query-time memory layout.
-- `zone-image-large-zone-design.md`: measured rationale for selective global
-  `u64` fields and rejection of range sharding.
-- `zone-image-capacity-limits.md`: exact encoded, DNS-format, transfer-ingest,
-  and practical reload limits for one immutable zone image.
-- `zone-image-proposal-disposition-2026-07.md`: measured disposition of indexed
-  denial lookup, compression/interning, and IN-only class-index specialization.
-- `zone-snapshot-narrowing-design.md`: design boundary for separating transfer,
-  catalog, control, builder, and offline-oracle responsibilities before
-  reducing the retained source snapshot.
-- `zone-image-action-items-2026-07.md`: closure report for the July capacity,
-  robustness, observability, documentation, and performance follow-up.
-- `boron-gen-design.md`: deterministic on-the-fly primary design for bounded
-  large-zone, catalog, AXFR, and synthetic ordered-NSEC3 testing.
-- `boron-gen.md`: BoronGen profiles, commands, bounded local load harness,
-  containment outcomes, and validation workflow.
-- `boron-gen-validation-2026-07.md`: retained BoronGen functional, scale,
-  capacity, containment, fuzz-disposition, and final 32 GiB validation results.
-- `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
-  header, gzip, and rate-limit contract for `BDS-IF-HEALTH`.
-- `observability-api.md`: optional in-process JSON observability API for richer
-  read-only runtime, zone, transfer, catalog, resource, time-sync, and
-  certificate status.
-- `rr-type-catalogue.md`: code-aligned RR catalogue implementation notes for
-  known-type validation, response compression, and unknown-RR boundaries.
-- `interface-compatibility-policy.md`: semantic-versioned interface compatibility
-  policy.
-- `interface-stability-baseline.tsv`: current interface baseline checked by
-  `scripts/check-interface-compatibility.py`.
-- `unsafe-boundaries.tsv`: registered first-party unsafe-code boundaries.
-- `unsafe-prone-dependencies.tsv`: dependency gate for low-level crates that
-  would require an active unsafe-boundary row.
+| Document | Use it for |
+| --- | --- |
+| [Release scope](engineering-mvp-scope.md) | Product and verification boundaries |
+| [Readiness checklist](engineering-mvp-readiness.md) | Reviewing a candidate |
+| [Development plan](implementation-plan.md) | Priorities and ownership |
+| [Acceptance register](release-acceptance-gap-register.md) | Open evidence and acceptance decisions |
+| [Verification ledger](verification-ledger.md) | Evidence by requirement family |
+| [Traceability matrix](appendix-a-traceability-matrix.md) | Requirement IDs mapped to evidence |
+| [RFC assertions](rfc-compliance-assertions.md) | Scoped standards claims |
+| [RFC traceability policy](rfc-traceability-policy.md) | How to maintain those claims |
+| [Project decisions](project-decision-register.md) | Accepted and pending policy choices |
+| [SRS review dispositions](srs-review-disposition.md) | Rationale for past review decisions |
+| [Release evidence guide](release-evidence-guide.md) | Capture and publish evidence |
+| [Evidence commands](evidence-command-catalog.md) | Script inventory |
+| [Release notes template](release-notes-template.md) | Detailed acceptance notes when needed |
 
-## Operator and Developer Guides
+The `engineering-mvp-*` filenames remain for existing links and scripts; they
+do not mean the 1.0 product is still a prototype.
 
-- `devops-getting-started.md`: clone, build, validate, and first local run guide.
-- `operator-deployment-guide.md`: practical deployment and operations guide.
-- `debian12-beta-vm-profile.md`: Debian 12 container-in-VM beta handover
-  profile linked from the Operator Deployment Guide.
-- `operational-slos.md`: informative SLO publication linked from the Operator
-  Deployment Guide.
-- `manual-bind-interop.md`: manual BIND interop smoke procedure.
-- `dns-client-benchmark.md`: bounded local client benchmark and large-catalog
-  benchmark guide.
-- `reference-verification-profile.md`: formal release benchmark hardware,
-  query-mix, and artifact-retention profile referenced by SRS Appendix E.
-- `BoronGun-SRS-v0.1.md`: normative requirements for the BoronGun support
-  tool (RRL-focused load generator with AF_XDP backend).
-- `boron-gun-mvp-plan.md`: phased path from the current prototype toward a
-  useful MVP aligned with the SRS.
-- `boron-gun.md`: BoronGun load-generator and XDP lab notes (operational usage).
-- `boron-gen.md`: BoronGen deterministic synthetic-primary usage and safety
-  notes for large catalog, AXFR, and NSEC3 load tests.
-- `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
-  and XDP evidence campaign runbook for the local physical hosts.
-- `fuzz-soak-v0.9.1-2026-08.md`: collected final v0.9.1 two-host 24-hour
-  AddressSanitizer campaign result and resource summary.
-- `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
-  release-candidate boundary, opt-in member-transfer extensions, and E2E test
-  shape.
+Machine-readable companions include the [interface baseline](interface-stability-baseline.tsv),
+[unsafe-code registry](unsafe-boundaries.tsv), [low-level dependency registry](unsafe-prone-dependencies.tsv),
+[DNSSEC matrix](dnssec-conformance-matrix.tsv), and [zone lifecycle matrix](zsm-engineering-mvp-matrix.tsv).
 
-## Release Scope and Evidence
+## Historical evidence
 
-- `engineering-mvp-scope.md`: current release-candidate boundary, including the
-  separation of local preflight from release closeout and the implemented
-  post-Alpha protocol slices that remain in scope.
-- `implemented-feature-scope.md`: code-aligned retained slices, current source
-  ownership, evidence ownership, and nearby non-claims for implemented
-  post-Alpha features.
-- `engineering-mvp-readiness.md`: release-candidate readiness review entry
-  point and stop-condition checklist.
-- `implementation-plan.md`: milestone direction and ownership pointers, without
-  duplicating the detailed feature inventory, current status, or
-  release-acceptance checklist.
-- `release-acceptance-gap-register.md`: short active queue of SRS acceptance blockers and
-  evidence gaps.
-- `evidence-command-catalog.md`: command inventory consumed by release evidence
-  snapshot tooling.
-- `release-evidence-guide.md`: release snapshot options, handoff directories,
-  and release/operations evidence runbook.
-- `verification-ledger.md`: lightweight release-candidate and SRS verification
-  evidence ledger.
-- `test-plan.md`: verification cadence, harness, and regression-policy plan.
-- `appendix-a-traceability-matrix.md`: working traceability matrix.
-- `rfc-traceability-policy.md`: RFC traceability conventions, status
-  vocabulary, and out-of-scope clause handling policy.
-- `dnssec-conformance-matrix.tsv`: passive DNSSEC conformance matrix.
-- `zsm-engineering-mvp-matrix.tsv`: checked short-evidence matrix for Zone State
-  Machine requirements.
-- `rfc-compliance-assertions.md`: BDS-VER-014 structured RFC compliance
-  assertion register.
-- `project-decision-register.md`: project decision audit trail consumed by
-  release handoff for Appendix C.5 decision review.
-- `rrl-release-thresholds.md`: RRL threshold baseline and release-review
-  notes.
-- `srs-review-disposition.md`: disposition register for the external SRS review,
-  including accepted protocol fixes, rejected scope-trim suggestions, and the
-  current rationale for retained post-Alpha features.
+These reports describe specific commits and environments. Check their scope
+before using a result in a release decision.
 
-## Release Templates
+- [Final 0.9.1 fuzz campaign](fuzz-soak-v0.9.1-2026-08.md)
+- [Knot tuning experiments, June 2026](knot-tuning-2026-06.md)
+- [BoronGen validation, July 2026](boron-gen-validation-2026-07.md)
+- [Large-memory campaign, July 2026](boron-gen-two-host-campaign-2026-07.md)
+- [ZoneImage proposal decisions](zone-image-proposal-disposition-2026-07.md) and
+  [follow-up results](zone-image-action-items-2026-07.md)
+- [Rust audit remediation, August 2026](rust-audit-remediation-2026-08.md)
+- v0.2.0: [primary interop](primary-interop-matrix-v0.2.0.md),
+  [XoT evidence](xot-release-evidence-v0.2.0.md),
+  [reproducibility](reproducible-build-v0.2.0.md), and
+  [package/container smoke](package-docker-smoke-v0.2.0.md)
 
-- `release-notes-template.md`: candidate verification-note structure and
-  acceptance checklist shape. These checked notes are a pre-tag evidence
-  artifact; the current tag workflow emits separate concise asset-publication
-  notes.
+## Editing documentation
 
-The planning and evidence documents are companion working artifacts. They remain
-subordinate to the current SRS v1.0.0 requirement set when scope or behavioral
-wording differs.
+Explain current behavior once in its reference guide and link to it elsewhere.
+Keep instructions runnable, name prerequisites, and verify settings against the
+code. Put measurements in dated evidence with the commit, configuration, and
+limitations. Update requirements only when the intended product contract
+changes; an implementation gap needs to be recorded, not written away.
 
-Current implementation and evidence status is recorded in the gap register,
-verification ledger, implemented-feature scope, and traceability matrices. The
-implementation plan stays at milestone level so those owner documents do not
-compete with each other.
-
-## Documentation Growth Control
-
-Before adding a new document or repeating status text in an existing document,
-choose the owning document from the table above. If no owner fits, add the owner
-row here in the same patch as the new document. Avoid copying requirement text,
-evidence status, command inventories, or feature-scope tables into multiple
-documents; link to the owner and keep only the local context needed by the
-reader.
-
-The current large documents are intentionally split by role:
-
-- the SRS owns normative requirements and identifier stability;
-- Appendix A owns detailed requirement-range traceability outside the SRS body;
-- the verification ledger owns coarse evidence state;
-- the gap register owns the short active queue;
-- implemented-feature scope owns code-backed retained feature boundaries;
-- the operator and DevOps guides own executable deployment instructions.
-
-When a review finding exposes drift, edit the owner first, then update any short
-summaries that point to it. A summary that needs more than a short paragraph is a
-sign that the detail belongs in the owner document instead.
+Prefer a short procedure or explanation over a running implementation diary.
+Git history preserves old plans. Keep stable requirement IDs and evidence paths
+when editing registers, and update the documentation checks when their expected
+structure changes. Those checks should protect content and links, not mandate
+particular sentences.

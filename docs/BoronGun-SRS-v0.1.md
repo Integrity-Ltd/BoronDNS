@@ -1,8 +1,15 @@
 # BoronGun Software Requirements Specification
 
-**Version:** v0.1
-**Date:** 2026-05-28
-**Status:** Draft baseline
+**Requirements baseline:** v0.1, 28 May 2026
+
+**Last documentation review:** 6 September 2026
+
+**Status:** Requirements and acceptance targets for the BoronGun test tool.
+
+For commands, configuration, and lab procedures, use the
+[BoronGun guide](boron-gun.md). This SRS defines what the tool should support
+and how to verify it. Its version is independent of the shipped binary version.
+Requirements do not imply that every target has been implemented or measured.
 
 ## Document Control
 
@@ -11,14 +18,16 @@
 | Project | BoronDNS |
 | Component | BoronGun |
 | Document | Software Requirements Specification |
-| Source draft | `~/Downloads/BoronGun-SRS-v0_1_1, May 26, 2026.md` |
-| Related documents | `docs/boron-gun.md`, `docs/boron-gun-mvp-plan.md`, `docs/implemented-feature-scope.md`, `docs/unsafe-boundaries.tsv`, `docs/BoronDNS-Secondary-SRS-v1.0.0.md` |
+| Usage and implementation status | [BoronGun guide](boron-gun.md), [feature scope](implemented-feature-scope.md) |
+| Safety boundaries | [Unsafe-code inventory](unsafe-boundaries.tsv) |
+| Server requirements | [BoronDNS SRS](BoronDNS-Secondary-SRS-v1.0.0.md) |
 
 ## Revision History
 
 | Version | Date | Change |
 |---|---|---|
-| v0.1 | 2026-05-28 | English repo baseline derived from the internal v0.1.1 draft. Tightens protocol references, separates current prototype facts from target requirements, and defines a usable XDP-based MVP. |
+| v0.1 | 2026-05-28 | Initial repository baseline for reproducible source-varied DNS load tests. |
+| Review | 2026-09-06 | Updated implementation summary and acceptance terminology; retained requirement identifiers and unimplemented targets. |
 
 ## 1. Introduction
 
@@ -26,7 +35,10 @@
 
 BoronGun is a DNS-over-UDP load generator for BoronDNS testing. Its main value is controlled source-address and source-port generation for Response Rate Limiting (RRL) scenarios that ordinary socket-based tools cannot model accurately.
 
-BoronGun is support tooling. It is not an BoronDNS server component, resolver, recursive client, fuzzing engine, or production traffic generator.
+BoronGun is a lab load generator. It is not part of the BoronDNS server runtime.
+It sends configured traffic and records results; it does not resolve names or
+validate DNSSEC. Raw-payload fixtures support controlled experiments, not a
+coverage-guided fuzzing engine.
 
 ### 1.2 Scope
 
@@ -74,29 +86,22 @@ Categories are `INV`, `FR`, `NFR`, `IF`, `NEG`, and `VER`. Normative keywords fo
 
 ## 2. Product Overview
 
-### 2.1 Current Prototype Facts
+### 2.1 Current Implementation and Remaining Targets
 
-The current crate already has:
+| Area | Implemented boundary |
+|---|---|
+| Transport | Portable UDP by default; Linux AF_XDP behind the `xdp` feature. |
+| Queries | Single question, text-file pool, generated name templates, or an explicit raw-payload fixture; EDNS0, DO, and RD configuration. |
+| Sources | Fixed, list, and sequential IPv4/IPv6 sources; random IPv4 CIDR; source-port ranges/lists. Arbitrary source addressing requires AF_XDP. |
+| Queues | One queue, contiguous queue ranges, or explicit sparse queue lists; configurable batch size. |
+| Replies | Process mode redirects IPv4/direct-IPv6 UDP replies to AF_XDP; drop mode distinguishes userspace suppression from an optional eBPF IPv4 drop program. |
+| Evidence | TOML/effective configuration, self-test and probe modes, JSON Lines counters and summaries, response classification, and latency for tracked replies. |
 
-- Portable UDP backend.
-- Feature-gated AF_XDP backend through the `xdp` crate.
-- `--self-test`, `--probe`, TOML config, and `--print-config`.
-- Single-query, query-list, and generated-template DNS query pools.
-- EDNS0, DO bit support, RD support, and common QTYPE parsing.
-- Fixed, round-robin list, and sequential source strategies for IPv4 and IPv6 in the XDP packet path.
-- Random IPv4 CIDR source selection.
-- Source port ranges with sequential or random selection.
-- Single-queue, contiguous multi-queue, and explicit sparse-queue AF_XDP sends with configurable `xdp.batch_size` and direct packet-buffer frame construction.
-- Optional Aya-loaded Rust eBPF XDP_DROP object for reply suppression in drop mode.
-- Process-mode XDP reply redirect for IPv4 and direct IPv6 UDP packets.
-- JSON and human summary output with explicit drop implementation status.
-- Basic response classification.
-- Basic latency percentile output for processed responses.
-- Existing unsafe boundary registration in `docs/unsafe-boundaries.tsv`.
-
-The current crate does not yet have random IPv6 prefix selection, IPv6 parity
-for kernel XDP_DROP, ARP-assisted target MAC discovery, embedded eBPF object
-builds, or enough retained evidence to claim general line-rate performance.
+The requirements below also retain targets not implemented in this baseline:
+random IPv6 prefix selection (SRC-002/-003), IPv6 parity for kernel drop,
+ARP-assisted MAC discovery (SEND-004), and step/ramp rate profiles (RATE-004).
+The eBPF object is built separately, not embedded in the binary. General
+line-rate claims require run-specific physical-interface evidence (VER-005).
 
 ### 2.2 Target Product
 
@@ -169,7 +174,7 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 **OXG-FR-QRY-004.** BoronGun MUST support sequential and seeded-random query selection.
 
-**OXG-FR-QRY-005.** Query pool selection MUST be independent from source-address selection unless an explicit post-MVP binding mode is added.
+**OXG-FR-QRY-005.** Query pool selection MUST be independent from source-address selection unless a later requirement explicitly adds a binding mode.
 
 *Verification for QRY.* Parser tests, deterministic sequence tests, and packet distribution checks.
 
@@ -197,11 +202,13 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 **OXG-FR-SEND-003.** XDP mode MUST compute valid IPv4 header checksums and UDP checksums unless a supported hardware offload path is explicitly enabled and recorded.
 
-**OXG-FR-SEND-004.** XDP mode MUST support explicit source MAC, target MAC, interface, and queue configuration before MVP. ARP-assisted target MAC discovery MAY be added after the explicit path is correct.
+**OXG-FR-SEND-004.** XDP mode MUST support explicit source MAC, target MAC, interface, and queue configuration. ARP-assisted target MAC discovery MAY be added after the explicit path is correct.
 
 **OXG-FR-SEND-005.** XDP mode MUST detect or report copy versus zero-copy operation. If zero-copy is requested but unavailable, the tool must either fail or report fallback according to config.
 
-**OXG-FR-SEND-006.** MVP XDP mode MUST support one TX/RX queue pair reliably. Multi-queue scaling is post-MVP unless single-queue evidence shows it is the bottleneck for required RRL scenarios.
+**OXG-FR-SEND-006.** XDP mode MUST support one TX/RX queue pair reliably.
+Multi-queue support is implemented, but throughput claims for it require
+separate scaling evidence and do not replace single-queue correctness checks.
 
 *Verification for SEND.* Feature-gated tests, veth smoke, `strace`/code review for socket-send absence, pcap checksum review, and lab evidence.
 
@@ -237,7 +244,7 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 **OXG-FR-STAT-001.** BoronGun MUST count TX packets/bytes/errors, RX packets/bytes, DNS response classes, truncated responses, unmatched responses, unanswered queries, and drop-mode kernel drops where available.
 
-**OXG-FR-STAT-002.** MVP counters SHOULD use low-contention atomics. High-rate XDP claims require per-CPU or cache-padded sharding.
+**OXG-FR-STAT-002.** Counters SHOULD use low-contention atomics. High-rate XDP claims require per-CPU or cache-padded sharding.
 
 **OXG-FR-LOG-001.** BoronGun MUST emit valid one-record-per-line JSON for interval and summary records.
 
@@ -277,15 +284,15 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 ### 5.2 Performance
 
-**OXG-NFR-PERF-001.** MVP performance target: on a dedicated lab host, XDP mode must be able to drive source-varied RRL tests at rates comfortably above the BoronDNS RRL thresholds being tested. Exact PPS claims require retained hardware evidence, including BoronGun JSONL, extracted summary, and external interface counter deltas.
+**OXG-NFR-PERF-001.** Baseline performance target: on a dedicated lab host, XDP mode must be able to drive source-varied RRL tests at rates comfortably above the BoronDNS RRL thresholds being tested. Exact PPS claims require retained hardware evidence, including BoronGun JSONL, extracted summary, and external interface counter deltas.
 
-**OXG-NFR-PERF-002.** Post-MVP high-rate target: kernel-drop XDP mode SHOULD show a clear sustained TX-rate advantage over process mode on the same host and queue.
+**OXG-NFR-PERF-002.** Further performance target: kernel-drop XDP mode SHOULD show a clear sustained TX-rate advantage over process mode on the same host and queue.
 
 **OXG-NFR-PERF-003.** No line-rate or multi-million-PPS claim may be made from veth, loopback, or generic XDP alone.
 
 ### 5.3 Portability
 
-**OXG-NFR-PORT-001.** MVP support target is Linux x86_64. Other targets are best-effort until evidence exists.
+**OXG-NFR-PORT-001.** The support target is Linux x86_64. Other targets are best-effort until evidence exists.
 
 **OXG-NFR-PORT-002.** Portable UDP mode MUST remain the default and MUST remain usable without root.
 
@@ -295,7 +302,7 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 **OXG-NFR-MAINT-001.** The implementation SHOULD stay small and modular. Source pools, query pools, packet building, rate control, stats, logging, and XDP should not be buried in `main.rs`.
 
-**OXG-NFR-MAINT-002.** `cargo clippy -- -D warnings` SHOULD pass for the crate before declaring MVP.
+**OXG-NFR-MAINT-002.** `cargo clippy -- -D warnings` SHOULD pass for the crate before accepting a release.
 
 **OXG-NFR-MAINT-003.** Code comments must remain disciplined. Large explanatory comments are acceptable for unsafe invariants and protocol layouts; they are not acceptable as a substitute for clear structure.
 
@@ -331,7 +338,8 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 **OXG-NEG-002.** BoronGun MUST NOT implement DNSSEC validation.
 
-**OXG-NEG-003.** BoronGun MUST NOT support TCP, DoT, DoH, or DoQ before MVP.
+**OXG-NEG-003.** TCP, DoT, DoH, and DoQ are outside this baseline. BoronGun
+MUST NOT claim support for them without an explicit scope revision.
 
 **OXG-NEG-004.** BoronGun MUST NOT log per-query events in production builds.
 
@@ -341,7 +349,8 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 ## 8. Verification Strategy
 
-**OXG-VER-001.** Every MVP requirement MUST have an automated test or a documented manual/lab procedure.
+**OXG-VER-001.** Every requirement in the baseline acceptance subset (§9) MUST
+have an automated test or a documented manual/lab procedure.
 
 **OXG-VER-002.** Required default checks for non-XDP work:
 
@@ -371,9 +380,9 @@ These checks are required for the modules they can exercise. They are not substi
 
 **OXG-VER-005.** High-rate claims require retained evidence: command line, effective config, git commit, kernel version, NIC and driver, queue/preflight state, copy/zero-copy status, CPU pinning when used, BoronGun JSONL and summary, external packet counters or captures, and explicit pass/fail thresholds for any claimed TX-rate floor, interface-counter corroboration ratio, and NIC TX error/drop ceiling.
 
-## 9. MVP Requirement Subset
+## 9. Baseline Acceptance Subset
 
-The MVP is the smallest version that is genuinely useful for BoronDNS RRL work:
+The minimum acceptance subset supports reproducible BoronDNS RRL tests:
 
 - Single-query mode retained.
 - Query list file and generated query template support.
@@ -390,5 +399,5 @@ The MVP is the smallest version that is genuinely useful for BoronDNS RRL work:
 
 Kernel XDP_DROP IPv6 parity, random IPv6 prefix selection, ramp/step profiles,
 ARP-assisted target MAC discovery, and general line-rate performance are
-important but may land after the first MVP if the MVP already supports
-reproducible source-varied XDP RRL tests.
+additional targets. They do not block acceptance of the subset above; they must
+remain identified as unimplemented or unverified until evidence supports them.

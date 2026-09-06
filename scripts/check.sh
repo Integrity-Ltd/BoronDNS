@@ -55,6 +55,8 @@ python3 scripts/check-srs-identifier-registry.py
 python3 scripts/check-version-consistency.py
 python3 scripts/check-release-signing-policy.py
 python3 scripts/check-doc-hygiene.py
+python3 scripts/test-doc-hygiene.py
+python3 scripts/test-release-handoff.py
 python3 scripts/check-srs-hygiene.py
 python3 scripts/check-srs-review-disposition.py
 python3 scripts/check-zone-image-evidence-tools.py

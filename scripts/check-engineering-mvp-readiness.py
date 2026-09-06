@@ -16,17 +16,15 @@ REQUIRED_FILES = [
     "config/borondns.example.toml",
 ]
 
-REQUIRED_PHRASES = [
+REQUIRED_REFERENCES = [
     "# Release Candidate Readiness",
-    "not full SRS `BDS-VER-008` release acceptance",
+    "BDS-VER-008",
     "scripts/check.sh",
     "scripts/engineering-mvp-evidence.sh",
-    "bounded local preflight profile",
     "deferred-not-run.txt",
-    "Do not call the release candidate ready",
     "docs/release-acceptance-gap-register.md",
     "docs/evidence-command-catalog.md",
-    "remaining SRS acceptance gaps",
+    "scripts/release-preflight-container.sh",
 ]
 
 FORBIDDEN_PHRASES = [
@@ -55,10 +53,11 @@ def main() -> None:
 
     for path in REQUIRED_FILES:
         require((ROOT / path).exists(), f"{DOC}: references missing path: {path}")
-        require(path in text, f"{DOC}: missing required reference: {path}")
+        reference = Path(path).name if path.startswith("docs/") else path
+        require(reference in text, f"{DOC}: missing required reference: {path}")
 
-    for phrase in REQUIRED_PHRASES:
-        require(phrase in text, f"{DOC}: missing required phrase: {phrase}")
+    for reference in REQUIRED_REFERENCES:
+        require(reference in text, f"{DOC}: missing reference: {reference}")
 
     lowered = text.lower()
     for phrase in FORBIDDEN_PHRASES:

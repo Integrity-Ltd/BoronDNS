@@ -45,5 +45,10 @@ secondary-only architecture and fail-closed behavior for malformed or
 unauthenticated input. Update operator documentation and the SRS only when the
 public contract changes.
 
+For documentation changes, follow the [editing guide](docs/README.md#editing-documentation).
+Keep current instructions separate from dated measurements, verify examples
+against the code, and link to the owning reference instead of repeating it.
+Use `python3 scripts/check-doc-hygiene.py` for navigation and local-link checks.
+
 By contributing, you agree that your contribution is licensed under the
 repository's dual MIT OR Apache-2.0 terms.

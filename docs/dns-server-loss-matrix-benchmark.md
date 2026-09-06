@@ -4,6 +4,12 @@ This benchmark compares BoronDNS, Knot, and NSD on the dedicated two-host
 physical link. It records both ordinary UDP socket rows and AF_XDP rows where
 the server supports them.
 
+This is an invasive lab harness: it starts remote services and adjusts network
+settings. Reserve both hosts and the direct link, verify SSH aliases, NIC names,
+addresses, MACs, and installed server paths, and avoid concurrent campaigns.
+See the [comparison runbook](knot-comparison-benchmark.md) for prerequisites.
+The measurements below belong to dated builds, not the latest release.
+
 Run the forward direction with:
 
 ```sh
@@ -59,7 +65,7 @@ NSD notes:
 - The source-built NSD path is `/home/codex/nsd-xdp-recvmmsg/sbin/nsd`.
 - NSD's bundled XDP object redirects UDP destination port 53, so NSD XDP rows
   use `BORONDNS_PHYSICAL_NSD_XDP_PORT=53`.
-- NSD XDP attach on the current 25G NIC requires MTU 1500. The harness restores
+- NSD XDP attach on the tested 25G NIC required MTU 1500. The harness restores
   the original MTU during cleanup.
 
 ## Retained Tuned UDP Run, 2026-06-12
@@ -128,12 +134,12 @@ Loss-band summary:
 | nsd | 5% | 3,500,000 | 3,418,900 | 97.714480% | 2.285520% |
 | nsd | 10% | 4,000,000 | 3,627,108 | 90.712003% | 9.287997% |
 
-For a report-back headline from this tuned UDP slice: BoronDNS reached
+In this tuned UDP slice, BoronDNS reached
 4.763M replies/s at <=1% requester loss, versus Knot at 4.219M replies/s and
 NSD at 3.234M replies/s. At the <=5% loss band, BoronDNS reached 4.763M
 replies/s, Knot reached 4.573M replies/s, and NSD reached 3.419M replies/s.
 
-## Current-Kernel QPS and Large-Zone Check, 2026-08-15
+## Kernel and large-zone comparison, 2026-08-15
 
 The forward 25 Gbit/s pair was rechecked after the server moved from Linux
 `7.0.0-22-generic` to `7.0.0-28-generic`. The requester remained
@@ -163,21 +169,23 @@ recommended profile.
 | BoronDNS, 9.1M-record static NSEC3 zone | 4,250,000 | 4,245,748 | 99.920916% | 256 | perf-recorded large-zone row |
 | BoronDNS, same zone with active IXFR overlay | 4,250,000 | 4,243,016 | 99.848230% | 256 | 23-generation catch-up plus a live update |
 
-The best small-zone BoronDNS row was 70,966 replies/s (1.70%) above the current
+The best small-zone BoronDNS row was 70,966 replies/s (1.70%) above the matched
 Knot row. Large static QPS was 0.045% below the small row, and the active IXFR
-overlay was 0.109% below it; both differences are below ordinary run variance.
-The data does not justify a separate large-zone lookup structure.
+overlay was 0.109% below it. These small differences do not establish a
+size-related regression without repeated runs and a variability estimate.
+This workload alone did not justify a separate large-zone lookup structure.
 
-A follow-up batch-256/NOTRACK sweep established that the current-kernel knee
-remains near 4.25M offered QPS: the current build returned 3.968M replies/s at
+A follow-up batch-256/NOTRACK sweep put the August 15 setup's knee
+near 4.25M offered QPS: the tested build returned 3.968M replies/s at
 4.50M and 3.822M replies/s at 4.80M. To separate application changes from the
 host regression, historical commit `ae2b1f82` (the exact BoronDNS revision used
 for the retained 4.763M result) was rebuilt and rerun on the same current host.
 It returned 3.979M replies/s at 4.50M and 3.838M replies/s at 4.80M. The
-equivalent saturation and qdisc/receive-buffer loss signatures rule out the
-intervening BoronDNS changes as the cause. Recovering the former 4.763M result
-requires host/kernel packet-path work or an old-kernel control run; application
-hot-path changes are not supported by this evidence.
+similar saturation and qdisc/receive-buffer loss signatures point to the host
+packet path, rather than the intervening application changes, as the main
+limitation. They do not isolate the exact cause. An old-kernel control run or
+further host profiling would be needed to explain the former 4.763M result;
+these measurements alone do not identify an application hot-path fix.
 
 Retained remote artifacts:
 

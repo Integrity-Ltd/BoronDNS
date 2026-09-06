@@ -18,15 +18,13 @@ HANDOFF_SCRIPTS = [
     ROOT / "scripts" / "capture-soak-handoff.sh",
 ]
 
-REQUIRED_SCOPE_PHRASES = [
-    "not the SRS",
-    "must not claim completed long-running evidence unless release artifacts exist",
-    "Implemented post-Alpha protocol slices listed in",
-    "not removed from release-candidate scope merely because they exceed a minimal static-zone secondary-server trim",
-    "Several independent 24-hour fuzz campaigns",
-    "no fixed 30-day campaign is required",
-    "Reference Hardware/Profile benchmark campaigns",
-    "not release-candidate evidence until the generated artifacts are retained and cited",
+REQUIRED_SCOPE_REFERENCES = [
+    "implemented-feature-scope.md",
+    "release-evidence-guide.md",
+    "release-acceptance-gap-register.md",
+    "scripts/check.sh",
+    "scripts/engineering-mvp-evidence.sh",
+    "BDS-VER-008",
 ]
 
 FORBIDDEN_CHECK_COMMANDS = [
@@ -100,43 +98,35 @@ def normalized(path: Path) -> str:
 
 def main() -> None:
     scope = normalized(SCOPE)
-    for phrase in REQUIRED_SCOPE_PHRASES:
-        require(phrase in scope, f"{SCOPE}: missing required phrase: {phrase}")
+    for reference in REQUIRED_SCOPE_REFERENCES:
+        require(reference in scope, f"{SCOPE}: missing reference: {reference}")
 
     plan = normalized(PLAN)
     require(
-        "release-candidate scope is the deployable secondary-authoritative" in plan,
-        f"{PLAN}: missing release-candidate scope statement",
+        "implemented-feature-scope.md" in plan,
+        f"{PLAN}: missing implemented-feature reference",
     )
 
     gaps = normalized(GAPS)
     require(
-        "Acceptance Closeout Still Open" in gaps,
-        f"{GAPS}: missing SRS acceptance closeout table",
+        "BDS-VER-008" in gaps,
+        f"{GAPS}: missing release milestone reference",
     )
 
     ledger = normalized(LEDGER)
     require(
-        "completed long-running evidence is not automatically required by local preflight" in ledger,
-        f"{LEDGER}: missing release-candidate long-running evidence note",
-    )
-    require(
-        "block a release candidate when the missing evidence is explicitly deferred" in ledger,
-        f"{LEDGER}: missing release-candidate interpretation for Partial ledger rows",
+        "release-acceptance-gap-register.md" in ledger,
+        f"{LEDGER}: missing acceptance register reference",
     )
 
     readiness = normalized(READINESS)
     require(
-        "not full SRS `BDS-VER-008` release acceptance" in readiness,
-        f"{READINESS}: missing release-candidate readiness SRS-acceptance boundary",
+        "BDS-VER-008" in readiness,
+        f"{READINESS}: missing release milestone reference",
     )
     require(
-        "code-aligned source of truth for retained implemented slices" in readiness,
-        f"{READINESS}: missing retained implemented slice readiness boundary",
-    )
-    require(
-        "Do not call the release candidate ready" in readiness,
-        f"{READINESS}: missing release-candidate stop conditions",
+        "implemented-feature-scope.md" in readiness,
+        f"{READINESS}: missing implemented-feature reference",
     )
 
     for path in [CHECK, EVIDENCE]:
@@ -178,29 +168,16 @@ def main() -> None:
             )
 
     release_guide = normalized(RELEASE_GUIDE)
-    require(
-        "does not run transitive unsafe dependency enumeration, fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
-        f"{RELEASE_GUIDE}: must not claim the bounded release-candidate profile runs unsafe dependency enumeration, fuzz, invariant, interop, or perf-smoke commands",
-    )
-    for phrase in [
-        "architectural, read-only-runtime, safe-Rust, spoofing, log-field, maintainability, XoT revocation, and passive-DNSSEC audit output",
-        "bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts",
-        "Those focused default smoke scripts are not the broader real-primary interop matrix",
-        "remains opt-in through `BORONDNS_EVIDENCE_RUN_INTEROP=1` or `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`",
+    for reference in [
+        "scripts/engineering-mvp-evidence.sh",
+        "scripts/release-evidence-snapshot.sh",
+        "deferred-not-run.txt",
+        "BORONDNS_EVIDENCE_RUN_INTEROP=1",
+        "BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1",
     ]:
         require(
-            phrase in release_guide,
-            f"{RELEASE_GUIDE}: missing release snapshot default/optional boundary phrase: {phrase}",
-        )
-    for stale_claim in [
-        "parser fuzz compile checks",
-        "invariant audits, portability",
-        "performance smoke, and BIND AXFR",
-        "TSIG AXFR, and NOTIFY refresh interop logs",
-    ]:
-        require(
-            stale_claim not in release_guide,
-            f"{RELEASE_GUIDE}: stale release-candidate evidence claim: {stale_claim}",
+            reference in release_guide,
+            f"{RELEASE_GUIDE}: missing evidence profile reference: {reference}",
         )
 
     for path in HANDOFF_SCRIPTS:

@@ -1,337 +1,178 @@
 #!/usr/bin/env python3
-"""Check current documentation for stale provenance and rename artifacts."""
+"""Check documentation navigation, local links, and known stale identifiers.
+
+Requirements, configuration, source ownership, and release security have their
+own focused checks. This check deliberately does not pin editorial sentences.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
 import sys
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-TOP_LEVEL_NUMBERED_HEADING = re.compile(r"^## ([0-9]+)\. ")
-
-BANNED_PHRASES = [
-    "Tibor's SRS",
-    "GPT-style",
-    "ChatGPT",
-    "Claude",
-    "AI slop",
-    "hallucinat",
-    "RustDNS",
-    "OxydeDNS",
-    "uDNS",
-    "udns",
-    "raw email intentionally",
-    "Per VER-007 deferred",
-    "All C.5 entries remain active release-review risks",
-    "first-pass Engineering MVP",
-    "first-pass family matrix",
-    "preliminary AXFR-backed",
-    "current MVP scaffold",
-    "policy scaffold",
-    "sign-off scaffold",
-    "acceptance scaffold",
-    "handoff scaffolds",
-    "release-campaign scaffold",
-    "Status: new MVP target",
-    "The v0.9 SRS draft used",
-    "The first slice groups",
-    "case inventories will become more granular",
-    "Status: working review register",
-    "Earlier SRS drafts used",
-    "Architecture and Release Governance Scaffold",
-    "release-governance scaffold",
-    "within the BDS-NFR-MAINT-001 target",
-    "RFC 8914 EDE planned for v2",
-    "`BTreeMap`-backed zone store",
-    "Architecture Document will choose the initial implementation",
-    "to be produced in PID Phase 2",
-    "to be produced alongside this SRS",
-    "v0.1–v0.2 design phase",
-    "local project MVP",
-    "project MVP in this repository",
-    "Current MVP choice",
-    "current MVP uses",
-    "The MVP zone store",
-    "The current MVP has",
-    "not hidden MVP requirements",
-    "The MVP profile",
-    "No MVP or public release artifact",
-    "preferred MVP path",
-    "through MVP,",
-    "Catalog Zone MVP based",
-    "catalog-zone-mvp-rfc9432.md",
-    "Implemented MVP behavior:",
-    "Out of MVP scope:",
-    "catalog-zone MVP extension",
-    "Current MVP posture",
-    "(MVP testers)",
-    "as MVP requirement",
-    "the MVP decision",
-    "External operator, MVP only",
-    "| MVP / Partial |",
-    "| MVP / Deferred |",
-    "Alpha subset; MVP full",
-    "Alpha base; MVP expanded catalogue",
-    "MVP acceptance work",
-    "MVP\n  acceptance still needs",
-    "v0.9/v0.9.1",
-    "../gpt-pro-review.md",
-    "DNS wire core and UDP query handling are implemented:",
-    "AXFR acquisition and IXFR refresh/fallback are implemented:",
-    "Health endpoints, metrics, logging, and process interfaces are implemented:",
-    "health.livez_timeout_ms",
-    "BORONDNS_HEALTH_LIVEZ_TIMEOUT_MS",
-    "TSIG secret loading from environment",
-    "TSIG environment-variable loading",
-    "environment-variable secret provisioning",
-    "query.processing_timeout_ms",
-    "borondns_dnssec_nsec3_cap_exceeded_total",
-    "per-zone warning/metric",
-    "0.1.2 Engineering Tuning Goal",
-    "The 0.1.2 performance slice",
-    "Hosted CI is intentionally deferred while the repository remains private",
-    "## Release Scaffolding",
-    "The planned pieces are:",
-    "future work and should cover",
-    "EDNS Refresh",
-    "EDNS Expire",
-    "Prometheus-compatible text metrics",
-]
-
-SOURCE_BANNED_PHRASES = [
-    "rds_environment",
-    "RDS environment",
-    "unrecognised_rds",
-    "unrecognized_rds",
-]
-
-SCRIPT_BANNED_PHRASES = [
-    "did not set response DO bit",
-    "set response DO bit",
-]
-
-REQUIRED_TEXT_BY_PATH = {
-    "README.md": [
-        "The current public-beta scope is wider than a minimal static-zone secondary",
-        "Retained feature slices stay in scope exactly as bounded in",
-        "IXFR with AXFR fallback, outbound XoT transfers",
-        "passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones",
-        "bounded EDE diagnostics, and opt-in CHAOS identification",
-        "Adjacent features are not implied unless that scope document names them.",
-    ],
-    "docs/release-acceptance-gap-register.md": [
-        "kind of blocker",
-        "Non-normative quality candidate",
-        "Formal release evidence target",
-        "Rows marked",
-        "not a release blocker unless promoted to a requirement",
-        "documentation ownership map",
-    ],
-    "docs/catalog-zone-rfc9432.md": [
-        "RFC 9432 §4.1",
-        "IANA Special-Use names",
-        "RFC 9432 §5.2",
-    ],
-    "docs/README.md": [
-        "## Document Ownership Rules",
-        "What is required behavior?",
-        "What is the current release-candidate boundary?",
-        "What is still open for SRS acceptance?",
-        "What evidence exists by requirement family?",
-        "What requirement ranges map to evidence?",
-        "How are RFC traceability rules maintained?",
-        "How is the implementation structured?",
-        "Where is RR catalogue implementation detail kept?",
-        "Where are deferred optimization tracks detailed?",
-        "What is the health and metrics HTTP contract?",
-        "How does an operator run it?",
-        "What is the formal benchmark environment?",
-        "How was the external review handled?",
-        "Where are project decisions recorded?",
-        "implementation plan stays at milestone level",
-        "## Documentation Growth Control",
-        "Before adding a new document or repeating status text",
-        "Avoid copying requirement text,",
-        "evidence status, command inventories",
-        "When a review finding exposes drift, edit the owner first",
-        "## Release Templates",
-    ],
-    "docs/rr-type-catalogue.md": [
-        "# RR Type Catalogue Implementation Notes",
-        "Current Known-Type Set",
-        "Out-Of-Catalogue Behavior",
-        "CAA, HIP, and SPF type 99",
-        "Adding CAA, SSHFP, ZONEMD, CDS, CDNSKEY, or another type",
-        "scripts/interop-bind-packet-torture-docker.sh",
-    ],
-    "docs/dns-client-benchmark.md": [
-        "## Engineering Tuning Boundary",
-        "This benchmark guide owns local measurement and tuning evidence only.",
-        "keep release-build tuning history in `CHANGELOG.md`",
-        "docs/future-optimization-tracks.md",
-    ],
-    "docs/health-metrics-interface.md": [
-        "`BDS-NFR-OBS-003..009`",
-        "current `borondns_dnssec_nsec3_iterations_exceed_cap_total` evidence is",
-        "driven by the lookup-time NSEC3 cap observation",
-        "with `edns.extended_dns_errors = \"off\"",
-        "EDE INFO-CODE 27 is absent",
-    ],
-    "docs/implementation-plan.md": [
-        "This plan deliberately stays at feature-slice granularity.",
-        "it is not the canonical inventory of every evidence script",
-        "At plan level, release-candidate scope is the deployable",
-        "exact retained feature slices, source ownership, representative evidence",
-        "put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v1.0.0.md`",
-        "put evidence state by requirement family in `docs/verification-ledger.md`",
-        "does not duplicate the acceptance",
-        "may require additional retained evidence without narrowing the",
-    ],
-    "docs/test-plan.md": [
-        "Automatic hosted verification runs only for v-prefixed tag pushes",
-        "tag-push/workflow-dispatch release workflow",
-        "artifact publication automation",
-        "it is not the standing Continuous gate",
-    ],
-    "docs/engineering-mvp-scope.md": [
-        "The retained post-Alpha slices are code-backed scope, not planning notes.",
-        "source paths, implementation markers, representative test markers, evidence",
-        "implemented-feature scope, review disposition, gap register, and this boundary",
-    ],
-    "docs/implemented-feature-scope.md": [
-        "The external review's suggested minimal static-zone cut is treated as a floor for code",
-        "not a replacement for the current release candidate",
-        "If code removes one of these slices, update this document",
-        "nearby behavior that is not claimed by the slice",
-    ],
-    "docs/release-notes-template.md": [
-        "pointer aligned with the canonical register and Operator Deployment Guide summary",
-        "docs/rfc-compliance-assertions.md; docs/operator-deployment-guide.md#rfc-compliance-assertions",
-    ],
-}
-
-FORBIDDEN_TEXT_BY_PATH = {
-    "docs/README.md": [
-        "Current implementation and evidence status is recorded in\n`implementation-plan.md`",
-        "Engineering MVP and SRS acceptance implementation\n  plan",
-        "Current Engineering MVP scope** in the scope, readiness, implementation, and",
-        "`implementation-plan.md`: milestone boundary and implementation direction",
-    ],
-    "docs/appendix-a-traceability-matrix.md": [
-        "docs/implementation-plan.md",
-    ],
-    "docs/verification-ledger.md": [
-        "docs/implementation-plan.md",
-    ],
-    "docs/implementation-plan.md": [
-        "This plan records implementation direction and milestone boundaries",
-        "This plan records implementation direction and the current feature boundary",
-        "30-day soak test completed without anomaly",
-        "signed release artifacts produced",
-        "at least one production-representative external operator has independently",
-        "interoperability with NSD, Knot DNS, and BIND 9 primaries",
-        "Engineering MVP scope includes:",
-        "Historically deferred from Alpha to the formal SRS MVP release gate",
-        "IXFR, full TSIG, XoT, DNSSEC serving, RRL,",
-    ],
-    "SECURITY.md": [
-        "MVP and later release artifacts must be signed",
-        "must not be treated as an MVP or public release artifact",
-    ],
+NUMBERED_HEADING = re.compile(r"^## ([0-9]+)\. ")
+INLINE_LINK = re.compile(r"!?(?<!\\)\[[^\]\n]*\]\((<[^>]+>|[^\s)]+)(?:\s+[\"'][^\n]*[\"'])?\)")
+REFERENCE_LINK = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]+>|\S+)", re.MULTILINE)
+STALE_IDENTIFIERS = (
+    "RustDNS", "OxydeDNS", "catalog-zone-mvp-rfc9432.md",
+    "health.livez_timeout_ms", "BORONDNS_HEALTH_LIVEZ_TIMEOUT_MS",
+    "query.processing_timeout_ms", "borondns_dnssec_nsec3_cap_exceeded_total",
+)
+SOURCE_STALE_IDENTIFIERS = ("rds_environment", "RDS environment", "unrecognised_rds", "unrecognized_rds")
+# Preserve the earlier guard against a retired DNSSEC evidence expectation.
+SCRIPT_STALE_CONTRACTS = ("did not set response DO bit", "set response DO bit")
+REQUIRED_REFERENCES = {
+    "README.md": (
+        "docs/operator-deployment-guide.md", "docs/README.md",
+        "docs/implemented-feature-scope.md", "SECURITY.md", "CONTRIBUTING.md",
+    ),
+    "docs/README.md": (
+        "operator-deployment-guide.md", "architecture.md", "test-plan.md",
+        "BoronDNS-Secondary-SRS-v1.0.0.md", "release-evidence-guide.md",
+        "verification-ledger.md", "rfc-compliance-assertions.md",
+        "appendix-a-traceability-matrix.md", "project-decision-register.md",
+    ),
 }
 
 
 def current_doc_paths() -> list[Path]:
-    paths = [ROOT / "README.md"]
-    paths.extend(sorted((ROOT / "docs").glob("*.md")))
-    return [path for path in paths if path.is_file()]
-
-
-def current_source_paths() -> list[Path]:
-    paths: list[Path] = []
-    for directory in [ROOT / "crates", ROOT / "config"]:
-        if directory.exists():
-            paths.extend(
-                path
-                for path in directory.rglob("*")
-                if path.is_file()
-                and path.suffix in {".rs", ".toml", ".md"}
-                and "target" not in path.parts
-            )
-    return sorted(paths)
-
-
-def current_script_paths() -> list[Path]:
-    return sorted(
-        path
-        for path in (ROOT / "scripts").glob("*")
-        if path.is_file() and path.name != "check-doc-hygiene.py"
+    # Include new guides, but not ignored, machine-specific lab notebooks.
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
     )
+    paths = {
+        ROOT / name for name in result.stdout.split("\0")
+        if name.endswith(".md") and (
+            "/" not in name or name.startswith(("docs/", "packaging/", "fuzz/"))
+        )
+    }
+    return sorted(path for path in paths if path.is_file())
+
+
+def prose_only(text: str) -> str:
+    """Ignore fenced examples when inspecting Markdown structure and links."""
+    lines = []
+    fence_char = ""
+    fence_length = 0
+    for line in text.splitlines():
+        match = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if match:
+            marker = match.group(1)
+            if not fence_char:
+                fence_char, fence_length = marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length:
+                fence_char, fence_length = "", 0
+            lines.append("")
+        elif fence_char:
+            lines.append("")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def heading_anchors(text: str) -> set[str]:
+    anchors: set[str] = set()
+    for line in prose_only(text).splitlines():
+        match = re.match(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", line)
+        if match:
+            label = re.sub(r"<[^>]*>", "", match.group(1)).lower()
+            slug = re.sub(r"[^\w\- ]", "", label).replace(" ", "-")
+            candidate = slug
+            occurrence = 0
+            while candidate in anchors:
+                occurrence += 1
+                candidate = f"{slug}-{occurrence}"
+            anchors.add(candidate)
+        for explicit in re.finditer(r'<(?:a|h[1-6])\s+[^>]*(?:id|name)=["\']([^"\']+)["\']', line):
+            anchors.add(explicit.group(1))
+    return anchors
+
+
+def link_errors(path: Path, text: str) -> list[str]:
+    errors = []
+    prose = prose_only(text)
+    # Inline code may deliberately show a non-existent example link.
+    prose = re.sub(r"(`+).*?\1", "", prose)
+    targets = [m.group(1) for m in INLINE_LINK.finditer(prose)]
+    targets.extend(m.group(1) for m in REFERENCE_LINK.finditer(prose))
+    for target in targets:
+        target = target.removeprefix("<").removesuffix(">")
+        parsed = urlsplit(target)
+        if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
+            continue
+        destination = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path
+        if not destination.is_relative_to(ROOT):
+            errors.append(f"link leaves repository: {target}")
+        elif not destination.exists():
+            errors.append(f"broken local link: {target}")
+        elif parsed.fragment and destination.suffix == ".md":
+            anchors = heading_anchors(destination.read_text(encoding="utf-8"))
+            if unquote(parsed.fragment) not in anchors:
+                errors.append(f"unknown heading in link: {target}")
+    return errors
+
+
+def check_doc(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    errors = link_errors(path, text)
+    if not re.search(r"^# ", prose_only(text), re.MULTILINE):
+        errors.append("missing document title")
+    numbered: set[str] = set()
+    for line in prose_only(text).splitlines():
+        match = NUMBERED_HEADING.match(line)
+        if match:
+            if match.group(1) in numbered:
+                errors.append(f"duplicate numbered section: {match.group(1)}")
+            numbered.add(match.group(1))
+    for identifier in STALE_IDENTIFIERS:
+        if identifier in text:
+            errors.append(f"stale identifier: {identifier}")
+    relative = path.relative_to(ROOT).as_posix()
+    for reference in REQUIRED_REFERENCES.get(relative, ()):
+        if reference not in text:
+            errors.append(f"missing navigation reference: {reference}")
+    return errors
 
 
 def main() -> int:
-    violations: list[str] = []
-    for path in current_doc_paths():
+    violations = []
+    paths = current_doc_paths()
+    for path in paths:
+        violations.extend(f"{path.relative_to(ROOT)}: {error}" for error in check_doc(path))
+    # Every top-level guide should be discoverable from the documentation index.
+    index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    for path in paths:
+        if path.parent != ROOT / "docs":
+            continue
+        if path.name != "README.md" and f"({path.name})" not in index:
+            violations.append(f"docs/README.md: missing link to {path.name}")
+    sources = [
+        path for directory in ("crates", "config")
+        for path in (ROOT / directory).rglob("*")
+        if path.is_file() and path.suffix in {".rs", ".toml"} and "target" not in path.parts
+    ]
+    for path in sources:
         text = path.read_text(encoding="utf-8")
-        normalized_text = " ".join(text.split())
-        numbered_headings: dict[str, int] = {}
-        relative = path.relative_to(ROOT)
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            match = TOP_LEVEL_NUMBERED_HEADING.match(line)
-            if match is None:
-                continue
-            heading_number = match.group(1)
-            if heading_number in numbered_headings:
-                violations.append(
-                    f"{relative}: duplicate top-level numbered heading "
-                    f"{heading_number!r} at lines "
-                    f"{numbered_headings[heading_number]} and {line_number}"
-                )
-            else:
-                numbered_headings[heading_number] = line_number
-        banned_phrase_text = text.replace("_udns-xfr", "").replace("_udns-notify", "")
-        for phrase in BANNED_PHRASES:
-            if phrase in banned_phrase_text:
-                violations.append(f"{relative}: stale phrase {phrase!r}")
-        relative_string = path.relative_to(ROOT).as_posix()
-        for phrase in REQUIRED_TEXT_BY_PATH.get(relative_string, []):
-            if phrase not in normalized_text:
-                violations.append(
-                    f"{relative_string}: missing required phrase {phrase!r}"
-                )
-        for phrase in FORBIDDEN_TEXT_BY_PATH.get(relative_string, []):
-            if phrase in normalized_text:
-                violations.append(
-                    f"{relative_string}: duplicated checklist phrase {phrase!r}"
-                )
-
-    for path in current_source_paths():
+        for identifier in SOURCE_STALE_IDENTIFIERS:
+            if identifier in text:
+                violations.append(f"{path.relative_to(ROOT)}: stale identifier: {identifier}")
+    for path in (ROOT / "scripts").iterdir():
+        if path.suffix not in {".py", ".sh"} or path.name == Path(__file__).name:
+            continue
         text = path.read_text(encoding="utf-8")
-        for phrase in SOURCE_BANNED_PHRASES:
+        for phrase in SCRIPT_STALE_CONTRACTS:
             if phrase in text:
-                relative = path.relative_to(ROOT)
-                violations.append(f"{relative}: stale source phrase {phrase!r}")
-
-    for path in current_script_paths():
-        text = path.read_text(encoding="utf-8")
-        for phrase in SCRIPT_BANNED_PHRASES:
-            if phrase in text:
-                relative = path.relative_to(ROOT)
-                violations.append(
-                    f"{relative}: stale evidence-script phrase {phrase!r}"
-                )
-
+                violations.append(f"{path.relative_to(ROOT)}: stale evidence contract: {phrase}")
     if violations:
         for violation in violations:
             print(f"doc_hygiene=failed {violation}", file=sys.stderr)
         return 1
-
-    print(
-        "doc_hygiene=passed "
-        f"docs={len(current_doc_paths())} sources={len(current_source_paths())} "
-        f"scripts={len(current_script_paths())}"
-    )
+    print(f"doc_hygiene=passed docs={len(paths)} sources={len(sources)} links=checked")
     return 0
 
 

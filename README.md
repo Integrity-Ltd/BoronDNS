@@ -2,140 +2,83 @@
 
 # BoronDNS
 
-BoronDNS is a secondary-only authoritative DNS server. It loads zone data from
-configured primary DNS servers over AXFR or IXFR, keeps the active zone state in
-memory, and serves authoritative answers over UDP and TCP.
+BoronDNS is an authoritative secondary DNS server. It transfers zones from
+configured primaries over AXFR or IXFR, keeps the active data in memory, and
+answers DNS queries over UDP and TCP. It does not provide recursion, originate
+zones, or serve transfers to other secondaries.
 
-It is **not** a recursive resolver, forwarder, primary DNS server, or zone-file
-loader. It never originates zone data — it only re-serves what it transfers from
-a primary.
+Version 1.0 is the initial public release, with a public-beta maintenance policy.
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and supported
+versions, and the [acceptance register](docs/release-acceptance-gap-register.md)
+for evidence still needed to claim full SRS acceptance.
 
-Network listeners are split into three roles, configured under `[interfaces]`:
+## What it supports
 
-- `dns` — UDP/TCP query sockets; these also receive authorized inbound NOTIFY.
-- `transfer` — outbound source addresses used when pulling transfers from primaries.
-- `mgmt` — the operator-facing management interface for health and metrics.
-
-BoronDNS accepts authorized NOTIFY on the DNS listeners; there is no separate
-NOTIFY listener role.
-
-## Features
-
-- Incremental zone transfer (IXFR) with automatic full-transfer (AXFR) fallback.
+- IXFR with AXFR fallback, authenticated NOTIFY, and TSIG-protected transfers.
 - Outbound zone transfer over TLS (XoT).
-- Passive DNSSEC serving — serves the RRSIG/NSEC/NSEC3 records received from the
-  primary; BoronDNS never signs.
-- Response Rate Limiting (RRL) and DNS Cookies for UDP abuse mitigation.
-- RFC 9432 catalog zones, with opt-in member-transfer extensions.
-- Reloadable, filesystem-backed TSIG / XoT secret snapshots.
-- Broad EDNS(0) handling with bounded Extended DNS Error (EDE) diagnostics.
-- Opt-in CHAOS-class identification (`version.bind` / `hostname.bind`).
-- UDP / XDP data-plane tuning controls.
+- Passive DNSSEC: serving signatures and denial records received from a primary.
+- RFC 9432 catalog zones and optional member-transfer metadata.
+- DNS Cookies, Response Rate Limiting, EDNS(0), and bounded EDE diagnostics.
+- Reloadable TSIG and XoT credentials through filesystem secret snapshots.
+- Health endpoints, Prometheus metrics, and optional JSON observability.
+- Tunable UDP workers and an experimental Linux AF_XDP backend.
 
-The exact boundaries of each slice are defined in
-[Implemented feature scope](docs/implemented-feature-scope.md); adjacent features
-are not implied unless that document names them.
+The [feature reference](docs/implemented-feature-scope.md) describes the limits
+of each capability. BoronDNS serves DNSSEC records but does not sign zones or
+validate DNSSEC chains. AF_XDP is opt-in; ordinary UDP sockets are the default.
 
-## Project Status
+## Get started
 
-BoronDNS 1.0 is the initial public release with a **public-beta support
-posture**. It is an authoritative secondary DNS server, not a claim that every
-aspirational full-SRS acceptance target is complete. Current verification
-status and explicitly retained limitations are tracked in the
-[SRS acceptance gap register](docs/release-acceptance-gap-register.md).
+For installation, configuration, upgrades, and troubleshooting, use the
+[operator guide](docs/operator-deployment-guide.md). For building from source,
+use [getting started](docs/devops-getting-started.md).
 
-The current public-beta scope is wider than a minimal static-zone
-secondary. Retained feature slices stay in scope exactly as bounded in
-[Implemented feature scope](docs/implemented-feature-scope.md):
-IXFR with AXFR fallback, outbound XoT transfers, passive DNSSEC serving, RRL,
-DNS Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
-identification. Adjacent features are not implied unless that scope document
-names them.
-
-## Start Here
-
-- New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
-- Detailed operations reference: [Operator deployment guide](docs/operator-deployment-guide.md)
-- Current release scope: [Implemented feature scope](docs/implemented-feature-scope.md)
-- Retained implemented feature slices: [Implemented feature scope](docs/implemented-feature-scope.md)
-- Verification status: [Verification ledger](docs/verification-ledger.md)
-- Full requirements: [BoronDNS Secondary SRS v1.0.0](docs/BoronDNS-Secondary-SRS-v1.0.0.md)
-- External SRS review handling: [SRS review disposition](docs/srs-review-disposition.md)
-
-## Quick Local Commands
-
-Requires a Rust toolchain; `rust-toolchain.toml` selects the channel automatically
-via rustup (pinned toolchain `1.96.1`; declared MSRV `1.95`). See
-[DevOps getting started](docs/devops-getting-started.md) for full setup and release
-builds. Each line below is an independent mode, not a sequence:
+With Rust and rustup installed, the repository selects the pinned toolchain
+from [rust-toolchain.toml](rust-toolchain.toml). These are independent commands:
 
 ```bash
-# Validate the config and exit (non-zero on error).
-cargo run -p borondns-cli -- --validate-config config/borondns.example.toml
-# Print the effective config with secrets redacted.
-cargo run -p borondns-cli -- --dump-config config/borondns.example.toml
-# Print a fresh annotated example config to stdout.
-cargo run -p borondns-cli -- --example-config
-# Run the server.
-cargo run -p borondns-cli -- --config config/borondns.example.toml serve
-# Run the local lint + test gate.
-./scripts/check.sh
+# Print an annotated example configuration.
+cargo run --locked -p borondns-cli -- --example-config
+
+# Validate a configuration, or inspect it with secrets redacted.
+cargo run --locked -p borondns-cli -- --validate-config config/borondns.example.toml
+cargo run --locked -p borondns-cli -- --dump-config config/borondns.example.toml
+
+# Start the server with your edited configuration.
+cargo run --locked -p borondns-cli -- --config /path/to/config.toml serve
 ```
 
-The checked-in example uses high DNS ports so it can run without root. For a real
-deployment, copy it and replace the example primary addresses, zone names, TSIG
-keys, XoT files, listener addresses, and management bind address. At least one
-static secondary zone or catalog zone must be configured before service startup.
+The [example configuration](config/borondns.example.toml) uses high DNS ports.
+Replace its sample primaries, zones, credentials, and listener addresses before
+starting a service. At least one static zone or catalog zone is required.
+The default configuration path is `/etc/borondns-secondary/config.toml`;
+`--config` or `BORONDNS_CONFIG` selects another file.
 
-When no config path is supplied, `borondns` reads
-`/etc/borondns-secondary/config.toml`. Top-level `--config` or
-`BORONDNS_CONFIG` can override the path for validation, config dumping,
-`check-config`, and `serve`. Mode-specific paths, such as `serve --config
-path/to/config.toml`, remain supported and take precedence.
+## Development
 
-## Workspace
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. The local
+lint and test gate is `./scripts/check.sh`; the
+[test plan](docs/test-plan.md) explains the additional integration and release
+checks. Hosted release automation runs on version tags, not ordinary pushes.
 
-- `borondns-core`: configuration, DNS wire parsing, AXFR/IXFR parsing, TSIG, and
-  in-memory zone state.
-- `borondns-server`: runtime, listeners, transfers, reloadable secret snapshots,
-  health, metrics, RRL, XoT, packet-I/O adapters, and graceful shutdown.
-- `borondns-cli`: command-line entrypoint.
-- `boron-gun`: BoronDNS test-tool DNS load generator with portable UDP self-tests
-  and an explicit Linux AF_XDP backend for lab hosts.
-- `boron-gen`: deterministic bounded-memory synthetic catalog/primary server for
-  very large AXFR, NSEC3, mixed-record, and RRset tests.
+| Component | Responsibility |
+| --- | --- |
+| `borondns-core` | DNS wire format, configuration, transfers, TSIG, and zone storage |
+| `borondns-server` | Query listeners, refresh scheduling, persistence, and management |
+| `borondns-cli` | The `borondns` command |
+| [BoronGun](docs/boron-gun.md) | UDP/AF_XDP query load generator |
+| [BoronGen](docs/boron-gen.md) | Synthetic primary for large-zone and incremental-transfer tests |
 
-The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
-The crates are implementation components of the binary release and are not
-published as stable crates.io libraries; their Rust APIs and ABI are internal.
+The workspace uses Rust 2024. Its build toolchain and declared minimum Rust
+version are recorded separately in `rust-toolchain.toml` and `Cargo.toml`.
+The internal crates are components of the server product; their Rust APIs and
+ABI are not stable public interfaces.
 
-## Documentation Map
-
-- [Architecture](docs/architecture.md)
-- [Test plan](docs/test-plan.md)
-- [Release evidence guide](docs/release-evidence-guide.md)
-- [Debian 12 beta VM profile](docs/debian12-beta-vm-profile.md)
-- [Operational SLO guide](docs/operational-slos.md)
-- [Manual BIND interop smoke](docs/manual-bind-interop.md)
-- [DNS client benchmark](docs/dns-client-benchmark.md)
-- [BoronGun load generator](docs/boron-gun.md)
-- [BoronGen large-zone primary](docs/boron-gen.md)
-- [BoronGen July 2026 validation](docs/boron-gen-validation-2026-07.md)
-- [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
-- [Implementation plan](docs/implementation-plan.md)
-- [Implemented feature scope](docs/implemented-feature-scope.md)
-- [SRS acceptance gap register](docs/release-acceptance-gap-register.md)
-- [SRS review disposition](docs/srs-review-disposition.md)
-- [Security policy](SECURITY.md)
-- [Changelog](CHANGELOG.md)
-- [Release notes template](docs/release-notes-template.md)
-- [Specification document index](docs/README.md)
+Read the [architecture](docs/architecture.md) for the implementation overview,
+or the [documentation index](docs/README.md) for protocol references,
+benchmarks, requirements, and release evidence.
 
 ## License
 
-BoronDNS is licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+BoronDNS is available under either the [MIT license](LICENSE-MIT) or
+[Apache License 2.0](LICENSE-APACHE), at your option.

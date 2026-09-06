@@ -209,26 +209,18 @@ def runbook_errors(runbook: str, source_names: list[str]) -> list[str]:
         launch_hosts[index % len(launch_hosts)]
         for index in range(expected_repeated_services)
     )
-    expected_first_host_services = distribution.get("borondns-1", 0)
-    expected_second_host_services = distribution.get("oxidegun-1", 0)
     if set(distribution) != {"borondns-1", "oxidegun-1"}:
         errors.append(f"weighted fuzz launch has unexpected hosts: {sorted(distribution)!r}")
-    if f"current {len(source_names)}-target set" not in runbook.replace("nine", "9"):
-        errors.append("two-host runbook target-count prose is stale")
-    if f"launches {expected_repeated_services} fuzz" not in runbook:
+    service_rows = re.findall(
+        r"^\| `([A-Za-z0-9_.-]+)` \| ([0-9]+) \| [0-9]+ \|$", runbook, re.M
+    )
+    if duplicate_values([host for host, _ in service_rows]):
+        errors.append("two-host runbook service distribution repeats a host")
+    documented_distribution = {host: int(count) for host, count in service_rows}
+    if documented_distribution != dict(distribution):
         errors.append(
-            "two-host runbook repeated-service count is stale: "
-            f"expected={expected_repeated_services}"
-        )
-    if f"about {expected_first_host_services} instances on the 48-core" not in runbook:
-        errors.append(
-            "two-host runbook first-host service distribution is stale: "
-            f"expected={expected_first_host_services}"
-        )
-    if f"and {expected_second_host_services}\ninstances on the 72-core" not in runbook:
-        errors.append(
-            "two-host runbook second-host service distribution is stale: "
-            f"expected={expected_second_host_services}"
+            "two-host runbook service distribution differs from launch: "
+            f"documented={documented_distribution!r} expected={dict(distribution)!r}"
         )
     return errors
 
@@ -240,14 +232,12 @@ def check_runbook_mutation_regressions(runbook: str, source_names: list[str]) ->
     if not any("preflight targets differ" in error for error in runbook_errors(preflight_mutation, source_names)):
         fail("runbook parity self-test did not reject a missing fuzz preflight target")
 
-    expected_repeated_services = len(source_names) * 15
-    expected_first_host_services = expected_repeated_services * 2 // 5
-    distribution_mutation = runbook.replace(
-        f"about {expected_first_host_services} instances on the 48-core",
-        f"about {expected_first_host_services + 1} instances on the 48-core",
-        1,
+    distribution_mutation = re.sub(
+        r"(\| `borondns-1` \| )([0-9]+)( \|)",
+        lambda match: f"{match[1]}{int(match[2]) + 1}{match[3]}",
+        runbook, count=1,
     )
-    if not any("first-host service distribution" in error for error in runbook_errors(distribution_mutation, source_names)):
+    if not any("service distribution" in error for error in runbook_errors(distribution_mutation, source_names)):
         fail("runbook parity self-test did not reject a stale host distribution")
 
     host_weight_mutation = runbook.replace("  --host oxidegun-1 \\\n", "", 1)

@@ -1,79 +1,13 @@
-# Catalog Zone Support Based on RFC 9432
+# Catalog zones
 
-Status: implemented Engineering MVP scope with explicit release-acceptance gaps
+BoronDNS uses RFC 9432 version 2 catalogs to discover secondary zones. You
+configure which catalogs to trust; a successful catalog transfer adds or removes
+member zones without editing `[[zones]]` or restarting the server. Members
+become available for queries after their own transfers succeed.
 
-BoronDNS supports a bounded subset of DNS Catalog Zones as described
-by RFC 9432. A configured catalog zone is transferred from trusted primaries in
-the same way as ordinary secondary zones. BoronDNS then reads member-zone PTR
-records under `zones.<catalog-zone>` and creates in-memory secondary service for
-those member zones.
+## Configure a catalog
 
-This feature has moved beyond the earlier static-zone-only scope: `[[zones]]`
-remains supported for explicit zones, and `[[catalog_zones]]` is the supported
-way to let a trusted primary publish the served zone set. The remaining work is
-broader retained release evidence against production catalog producers and
-deployment profiles.
-
-## RFC 9432 Scope
-
-Implemented behavior in the current Engineering MVP:
-
-- Catalog zones are configured explicitly by the operator.
-- Catalog zones are fetched over AXFR/IXFR from configured transfer primaries.
-- The catalog schema version must be the RFC 9432 value `2`.
-- Member zones are discovered from single-PTR member nodes directly below
-  `zones.<catalog-zone>`.
-- Unsupported catalog RRs and unsupported properties are ignored.
-- Member zones inherit the catalog zone transfer primaries, transfer transport,
-  TSIG key, NOTIFY source policy, transfer source binding, and transfer limits
-  by default.
-- Operators can split catalog-transfer and member-transfer policy with
-  `catalog_primaries`/`catalog_transfer_primaries`, `catalog_tsig_key`,
-  `member_primaries`/`member_transfer_primaries`, and `member_tsig_key`. This
-  lets BoronDNS transfer the RFC 9432 catalog from a managed PowerDNS publisher
-  while transferring member zones from BIND, Knot, NSD, PowerDNS, or customer
-  primaries selected by the catalog group.
-- Operators can opt in to per-member transfer metadata with
-  `member_transfer_extensions = true`. BoronDNS then accepts BIND-compatible
-  `primaries.ext.<member-node>` A/AAAA records, a common
-  `primaries.ext.<member-node>` TXT TSIG key-name reference, and
-  BoronDNS-specific extension TXT records for transfer transport and NOTIFY
-  source policy. Every custom property is below the RFC 9432 `ext` label;
-  legacy `_udns-xfr.<member-node>` and `_udns-notify.<member-node>` owners
-  outside `ext` are ignored.
-- Adding a member PTR schedules transfer of the new member zone.
-- Removing a member PTR removes catalog-managed in-memory service for that
-  member zone.
-- Duplicate member zones or malformed required catalog data cause BoronDNS to
-  leave the previous applied catalog membership unchanged.
-- Malformed member PTR RRsets and malformed member PTR RDATA make the candidate
-  catalog version broken under RFC 9432; BoronDNS does not partially apply the
-  remaining member list from that candidate version.
-- BoronDNS accepts structurally valid catalog member names by RFC 9432 §4.1,
-  including the RFC example names `example.com.`, `example.net.`, and
-  `example.org.` and other IANA Special-Use names. These names are not
-  malformed merely because they are special-use names.
-- Incoming member zones that clash with existing configured catalog zones,
-  already-applied catalog members, or static zones are ignored and logged per
-  RFC 9432 §5.2.
-
-Outside this Engineering MVP catalog slice:
-
-- Catalog migration state beyond replacing the previous in-memory membership
-  set for the configured catalog.
-- Persistent catalog policy outside the validated RFC 5936 last-good catalog
-  and member-zone snapshots.
-- Optional product-specific member-name allow-list or deny-list policy. The
-  default catalog profile follows RFC 9432 member-name semantics rather than
-  silently rejecting IANA Special-Use names or wildcard labels.
-- Carrying plaintext TSIG secrets, XoT trust anchors, client certificates, or
-  client keys inside the catalog. Catalog data carries references only. TSIG
-  secrets and TLS trust/client material remain local startup configuration or
-  reloadable filesystem secret-store snapshots.
-
-## Configuration
-
-Catalog zones use the same primary and TSIG wiring as ordinary zones:
+For a primary that publishes both the catalog and its member zones:
 
 ```toml
 [[catalog_zones]]
@@ -85,32 +19,75 @@ tsig_key = "transfer-key."
 serve_catalog_zone = false
 ```
 
-`serve_catalog_zone` controls whether the catalog zone itself is visible on the
-DNS query interface. The default is `false`, because RFC 9432 treats catalog
-zones as management data for authoritative-server farms, not as data intended
-for recursive lookup. With the default, BoronDNS still transfers and processes
-the catalog zone but does not answer authoritative DNS queries for that catalog
-apex or names below it.
+The TSIG key must exist in the local key configuration or secret-store snapshot.
+Catalog transfers always require TSIG: the catalog controls which zones this
+server will serve. TSIG authenticates data but does not encrypt it; use XoT when
+the transfer also needs confidentiality.
 
-Catalog member zones are served on the DNS query interface after they transfer
-successfully. They do not need `[[zones]]` entries.
+`serve_catalog_zone` defaults to `false`. BoronDNS transfers and processes the
+catalog but hides its management records from ordinary DNS queries. Its member
+zones remain independently visible. Set this option to `true` only if the
+catalog itself should be served.
 
-Per-member transfer metadata is disabled by default. Enable it only for catalog
-profiles whose producer is allowed to choose member-zone transfer targets:
+If the catalog publisher and content primaries differ, use separate policies:
 
 ```toml
 [[catalog_zones]]
 name = "catalog.example."
 catalog_primaries = ["192.0.2.10:53"]
-member_primaries = ["203.0.113.53:53"] # fallback if a member has no override
+member_primaries = ["203.0.113.53:53"]
 catalog_tsig_key = "catalog-transfer-key."
-member_tsig_key = "fallback-member-key."
-member_transfer_extensions = true
+member_tsig_key = "member-transfer-key."
 ```
 
-With that switch enabled, a member node such as
-`a.zones.catalog.example.` can override the fallback member transfer policy
-with records like:
+Use `catalog_transfer_primaries` and `member_transfer_primaries` for structured
+transfer targets, including XoT. Do not mix shared `primaries`/`transfer_primaries`
+with the split catalog/member primary fields.
+
+Member transfers use `member_tsig_key` when set, otherwise the shared
+`tsig_key`. `catalog_tsig_key` applies only to the catalog; it is not a member
+key fallback. The configured transfer, source binding, NOTIFY policy, and limits
+apply unless a supported member override changes them.
+
+## Catalog updates and errors
+
+BoronDNS reads one PTR per member node directly below `zones.<catalog>` and
+requires schema version `2`. Unknown records and unsupported properties are
+ignored. The following rules determine whether an update changes service:
+
+| Catalog change | Result |
+| --- | --- |
+| Add a valid member PTR | Schedule the member's initial transfer |
+| Remove a member PTR | Remove that catalog-managed zone from service |
+| Invalid version, malformed member PTR, or duplicate member target | Reject the candidate membership; retain the previously applied membership |
+| Member conflicts with a static zone, configured catalog, or already-applied catalog member | Ignore and log the incoming member |
+| Change a member's unique node identifier but keep its PTR target | Remove/reset the old instance and load a new one |
+| Exceed `max_member_zones` | Keep the deterministic first eligible members in canonical order and log the excess |
+
+Member-name validation follows RFC 9432 §4.1. IANA Special-Use names such as
+`example.com.` are valid member names; they are not rejected merely because
+they are reserved for a particular use. Name clashes follow RFC 9432 §5.2:
+an existing instance keeps its ownership and transfer policy.
+
+If an owning catalog removes a member, another catalog's previously ignored
+listing does not automatically take ownership. That other catalog must publish
+a new change or be retransferred. Changing the unique identifier follows the
+reset behavior in RFC 9432 §5.4, including discarding the old snapshot and
+refresh/NOTIFY state.
+
+`max_member_zones` defaults to 10,000 per catalog and must be positive. Choose
+it for the deployment's memory capacity. Excess entries produce
+`event=catalog_member_limit_exceeded` with the limit, observed member count,
+and dropped count.
+
+## Optional member transfer overrides
+
+`member_transfer_extensions = true` lets the trusted catalog producer choose
+member transfer targets. It is disabled by default. Enable it only where that
+producer is permitted to direct outbound transfers.
+
+For member node `a.zones.catalog.example.`, these records override the
+configured member policy:
 
 ```text
 a.zones.catalog.example. PTR member.example.
@@ -120,129 +97,65 @@ _udns-xfr.ext.a.zones.catalog.example. TXT "transport=tcp;port=5300"
 _udns-notify.ext.a.zones.catalog.example. TXT "source=198.51.100.54"
 ```
 
-Malformed extension data rejects only the member transfer override. The member
-PTR remains an RFC 9432 catalog member, and BoronDNS falls back to static member
-policy for newly added members or retains the last valid plan for already
-managed members. Multiple distinct TSIG key-name TXT values for one member are
-treated as unsafe because BoronDNS uses one TSIG key per transferred zone.
+The `primaries.ext` A/AAAA records and TXT key-name reference use the
+BIND-compatible form. The transfer/NOTIFY TXT properties are BoronDNS
+extensions. All custom properties belong below `ext`; legacy extension owners
+outside `ext` are ignored.
 
-For XoT member overrides, the catalog TXT can set `transport=xot`, `port`, and
-`server_name`, but the TLS trust/client material still has to be available
-through inherited static configuration or a named XoT profile from
-`[secret_store]`.
+Malformed extensions do not invalidate the member PTR. For a new member,
+BoronDNS uses its configured fallback policy; an existing member retains its
+last valid transfer plan. Several distinct TSIG names for one member are
+rejected as an override because one transfer uses one key. An explicit key
+reference with unavailable secret material fails closed.
 
-## Operational Model
+An XoT override may specify `transport=xot`, `port`, and `server_name`. TLS
+trust and client credentials must still come from inherited local configuration
+or a named XoT profile in `[secret_store]`. Catalogs carry references, never
+plaintext TSIG secrets or TLS key material.
 
-On startup BoronDNS inserts configured catalog zones into the zone-state
-machine and starts transfer attempts. Once a catalog transfer succeeds,
-member-zone refresh requests are queued. Member zones start in LOADING, become
-ACTIVE after a successful transfer, and follow the same SOA-driven refresh and
-expiry rules as statically configured zones.
+## Legacy unsigned member transfers
 
-Catalog transfers must be TSIG-authenticated. A catalog producer controls the
-set of zones an BoronDNS instance serves, so BoronDNS rejects `[[catalog_zones]]`
-entries without `tsig_key` or `catalog_tsig_key`. XoT plus tight
-source-address allowlisting should be used where catalog confidentiality is also
-required; TSIG authenticates the transfer but does not encrypt the catalog
-contents.
+For private-network primaries that cannot authenticate AXFR, local policy can
+allow unsigned member transfers:
 
-Catalog member transfers inherit `member_tsig_key` when set, otherwise
-`tsig_key`, and are therefore TSIG-authenticated by default. For legacy customer
-primary deployments that can only serve private-network AXFR without TSIG/XoT,
-operators may set
-`catalog_zones.member_transfer_policy.unsigned_axfr = "allow-legacy-private"`.
-That local policy disables the catalog-key fallback for member transfers when
-`member_tsig_key` is unset. BoronDNS rejects unsigned member AXFR plans whose
-primary address is not private, including catalog-advertised primary overrides.
-The policy does not relax the mandatory TSIG requirement for the catalog
-transfer itself. If a member advertises an explicit TSIG key name in the
-extension records, BoronDNS still treats that as an authenticated transfer
-reference and fails closed if the key material is unavailable.
+```toml
+[catalog_zones.member_transfer_policy]
+unsigned_axfr = "allow-legacy-private"
+```
 
-For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
-startup validation for missing `tsig_key` references. The unsupported
-illustrative name `zones.require_tsig` is intentionally not part of the schema;
-the implemented schema keeps this as process-wide transfer policy under
-`[transfer]` because TOML reserves `[[zones]]` for the zone array itself.
+Place this subtable under the relevant `[[catalog_zones]]` entry. When
+`member_tsig_key` is unset, this option disables the shared `tsig_key` fallback
+for members. Unsigned TCP member plans must use private primary addresses,
+including addresses supplied through member overrides. An explicitly configured
+member key still requires authentication.
 
-Configuration remains static for the catalog zone definitions themselves.
-Changing the set of configured catalogs, their catalog/member primaries, TSIG
-reference fields, or the `serve_catalog_zone` policy requires a process restart.
-The member-zone set inside a catalog is dynamic and follows successful catalog
-transfers. When `[secret_store]` is configured, new or rotated TSIG keys and
-named XoT profiles can be loaded from the filesystem snapshot and then used by
-catalog member references without restarting BoronDNS.
+The catalog transfer remains TSIG-authenticated. For static zones,
+`[transfer].require_tsig = true` is the separate process-wide option that
+rejects missing zone TSIG references at startup.
 
-When several configured catalogs list the same member zone, the already-applied
-instance keeps its transfer and NOTIFY policy. A later clashing instance is
-ignored and logged, as required by RFC 9432 section 5.2; catalog-name ordering
-does not replace an existing instance. If the owning catalog removes the
-member, BoronDNS removes that instance. A catalog whose earlier listing was
-ignored must subsequently publish a new change (or be retransferred) before its
-instance can be accepted; ownership does not move automatically from stale
-clash state.
+## Restarts and observation
 
-Changing the member-node Unique identifier while retaining the same PTR target
-is a remove/reset/re-add operation under RFC 9432 section 5.4. BoronDNS discards
-the old transfer plan, refresh/NOTIFY state, and active snapshot, then starts the
-renamed member in LOADING with a new plan generation. This prevents state tied
-to the old member node from leaking into the replacement instance.
+Catalog definitions and their configured transfer policy are startup settings.
+Changing them requires a restart. Catalog membership changes dynamically through
+successful transfers. A configured filesystem secret store can load rotated
+TSIG keys and XoT profiles without restarting. Validated last-good snapshots
+support restart recovery; arbitrary catalog policy and cross-catalog migration
+state are not a separate persistent database.
 
-The useful mental model is:
-
-- TOML says which catalogs this process trusts and what local policy applies.
-- The transferred catalog says which member zones should exist.
-- Optional extension records can name where those members transfer from.
-- The local secret store supplies the actual TSIG and XoT secret material by
-  reference.
-
-Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
-10,000 per `BDS-NFR-SEC-013`. If a catalog lists more member zones than the
-configured cap, BoronDNS accepts the deterministic first `N` members after
-canonical ordering, drops the excess, and emits
-`event=catalog_member_limit_exceeded` with the configured limit, observed member
-count, and dropped count. Operators should size this cap with the memory and
-capacity limits of the deployment.
-
-## Observability
-
-Catalog membership changes are visible through structured logs and metrics.
-When a newly observed member PTR is accepted for catalog-managed service,
-BoronDNS emits `category=transfer`, `event=catalog_member_added`,
-`catalog_zone=<catalog>`, and `zone=<member>`. Removed member zones emit
-`event=catalog_member_removed`.
-
-The `/metrics` endpoint exposes
+Watch `event=catalog_member_added`, `event=catalog_member_removed`, and
+`event=catalog_member_name_clash` in transfer logs. The metric
 `borondns_catalog_member_info{catalog_zone="...",zone="...",managed="..."} 1`
-for the current catalog membership known to the process. `managed="true"`
-means BoronDNS created dynamic secondary service for the member. `managed="false"`
-means the catalog listed the zone, but a static `[[zones]]` entry already owns
-that zone and the static configuration remains authoritative.
+lists known membership. `managed="true"` means the catalog created the dynamic
+secondary; `managed="false"` identifies a listing owned by static configuration.
 
-Member zones also appear in the normal per-zone metrics after they are inserted
-into the zone-state machine. Use `borondns_secondary_zone_state`,
-`borondns_secondary_zone_loading_seconds`,
-`borondns_secondary_zone_soa_serial`, and the transfer counters to confirm that
-a catalog member was discovered, transferred, and became ACTIVE.
+Use `borondns_secondary_zone_state`,
+`borondns_secondary_zone_loading_seconds`, and
+`borondns_secondary_zone_soa_serial` with transfer counters to distinguish
+discovery, loading, active service, and expiry. A member listed in a catalog is
+not necessarily ready to answer.
 
-## PowerDNS Primary Pattern
-
-For an internal PowerDNS plus PostgreSQL primary, publish one RFC 9432 catalog
-zone from PowerDNS and configure BoronDNS as a secondary for that catalog. If
-PowerDNS is also the content primary, the legacy inherited `primaries`/`tsig_key`
-shape is enough. If PowerDNS is only the management/catalog publisher, configure
-the catalog with split transfer policy so catalog transfers point to PowerDNS
-and member transfers point to the content primary group.
-
-Zone creation then becomes:
-
-1. Create or update the real authoritative zone in PowerDNS.
-2. Add or remove the matching member PTR in the catalog zone for the relevant
-   transfer-policy group.
-3. Allow PowerDNS to notify BoronDNS for the catalog zone, or wait for the next
-   SOA-driven catalog refresh.
-4. BoronDNS transfers the catalog, schedules member transfers, and begins
-   serving successfully transferred member zones externally.
-
-The catalog zone itself can remain internal management data by leaving
-`serve_catalog_zone = false`.
+For a PowerDNS catalog publisher, create/update the member zone on its content
+primary, update the corresponding catalog PTR, then notify BoronDNS for the
+catalog or wait for its SOA refresh. BoronDNS discovers the change and schedules
+member transfers. The publisher and content primary may be the same server or
+separate groups using the split configuration above.

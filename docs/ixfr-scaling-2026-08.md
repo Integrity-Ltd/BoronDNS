@@ -1,6 +1,12 @@
-# Large-zone IXFR scaling — August 2026
+# IXFR scaling measurements — August–September 2026
 
-## Conclusion
+These are engineering measurements from the August 2026 incremental-publication
+work and the September durable-journal follow-up. They describe the recorded
+workloads, not a throughput guarantee or a benchmark of today's full binary.
+In particular, the two-host QPS figures below use a DNSSEC-heavy trace; they are
+not comparable to the lab's multi-million-QPS direct-answer profile.
+
+## What the runs established
 
 BoronDNS no longer rebuilds a complete installed zone for every small IXFR.
 Validated RRset deltas now update copy-on-write shards, shape counters, and
@@ -8,8 +14,8 @@ NSEC/NSEC3 order indexes. Large zones publish the result as an atomic overlay
 over their compact query image; response plans whose dependencies are unchanged
 remain reusable.
 
-This changes large-zone catch-up from a zone-size problem into primarily a
-delta-size problem. A BoronGen primary advanced 1,000 RRsets every 100 ms. The
+For the tested small updates, this removed most whole-zone work from IXFR.
+A BoronGen primary advanced 1,000 RRsets every 100 ms. The
 secondary polled every two seconds, received about 20 generations (20,000 RRset
 replacements) per IXFR, and completed 77 consecutive transfers in 0.262–1.014 s
 (mean 0.353 s) against a 9,101,008-record DNSSEC registry-shaped zone. It
@@ -17,37 +23,29 @@ recorded no failed IXFR and no post-load AXFR fallback. The secondary therefore
 caught up faster than the tested change cadence, including during two-host UDP
 saturation load.
 
-The remaining limitation is query throughput while a very large signed overlay
-is active. Reusing clean compact response plans raised median remote QPS from
+The August run also showed a query-throughput cost while a very large signed
+overlay was active. Reusing clean compact response plans raised median remote QPS from
 33,328 to 44,814, but the static compact image reached 70,639 QPS. DNSSEC
 negative answers still need the current SOA serial together with current denial
-proofs and therefore fall back to snapshot composition. A future hybrid
-composer could reuse clean immutable proof chunks while taking only the dirty
-SOA from the overlay; that optimization is not required for IXFR catch-up
-correctness.
+proofs and therefore fell back to snapshot composition. These measurements
+suggested reusing unchanged proof data while reading the updated SOA from the
+overlay as a possible optimization; they do not establish its performance.
 
 ## Implemented path
 
-1. RFC 1995 delete/add sequences are validated and reduced to exact affected
-   RRsets rather than flattened into a complete record vector.
-2. `ZoneSnapshot` stores large zones in copy-on-write RRset shards, with exact
-   dirty-RRset tracking bounded independently of record count.
-3. Owner/record/RRset counts and shape histograms are adjusted from the delta.
-4. NSEC canonical-name and NSEC3 hash order indexes are structurally shared and
-   updated only for affected denial records.
-5. `compact`, `sharded`, and `auto` publication strategies preserve the compact
-   hot path for ordinary zones and select overlays for large zones.
-6. The published overlay holds one immutable generation and atomically replaces
-   the previous generation; queries never observe partially applied deltas.
-7. Exact dependency checks reuse old compact response plans when every
-   referenced RRset is clean. Owner topology, DNAME, and denial-index changes
-   conservatively disable reuse.
-8. A dirty-owner threshold schedules bounded background compaction so overlay
-   state does not grow without limit.
-9. Differential tests compare compact and sharded answers, snapshots, and zone
-   images across add, replace, delete, multi-generation, and DNSSEC changes.
-10. BoronGen generates deterministic changed IXFR on the fly, including missed
-    generations and bounded AXFR fallback, without materializing zone history.
+RFC 1995 delete/add sequences are validated and reduced to affected RRsets.
+Copy-on-write shards share the unchanged snapshot data; counters and
+NSEC/NSEC3 order indexes are updated from the delta.
+
+Publication strategies are `compact`, `sharded`, and `auto`. Sharded
+publication atomically replaces an immutable overlay over the compact query
+image. A query can reuse an old response plan when its RRset dependencies are
+unchanged. Owner topology, DNAME, and denial-index changes disable reuse
+conservatively. A dirty-owner threshold schedules background compaction.
+
+BoronGen derives changed generations on demand, including missed generations
+and bounded AXFR fallback. See the [BoronGen guide](boron-gen.md) for running
+the generator and configuring its update cadence.
 
 ## Focused in-process measurements
 
@@ -56,13 +54,13 @@ to 50,000,000 base records spent 475.721 s in IXFR processing and 504.468 s in
 publication, or 980.190 s total, with a 90.455 GiB peak. The delta size had
 little effect because both phases walked or rebuilt the whole zone.
 
-Current measurements use replace-only deltas, which exercise deletion
+The improved-path measurements use replace-only deltas, which exercise deletion
 validation and addition without changing owner count. `publication` is the
 atomic overlay publication after the updated snapshot has been constructed.
 
 | Base records | Changed RRsets | IXFR process | Publication | Combined | Peak HWM | Notes |
 | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1,000,000 | 1,000 | 0.237 s median | 0.0024 s median | 0.239 s | 1.12 GiB | Five latest sharded runs with eight lookup workers |
+| 1,000,000 | 1,000 | 0.237 s median | 0.0024 s median | 0.239 s | 1.12 GiB | Five sharded runs with eight lookup workers |
 | 10,000,000 | 1,000 | 0.162 s | 0.018 s | 0.180 s | 10.46 GiB | Eight lookup workers; one focused row |
 | 50,000,000 | 1,000 | 0.211 s | 0.077 s | 0.288 s | 49.64 GiB | Isolated cgroup row |
 
@@ -133,8 +131,9 @@ compares the incremental snapshot and compiled image with an independent fresh
 rebuild. A 300-second remote diagnostic campaign completed 59,096 executions
 with no crash artifact (coverage 3,285; feature count 16,335). Because the
 campaign ran before the implementation commit, the evidence is correctly
-labelled non-release diagnostic; a clean-source release campaign remains part
-of the release gate.
+labelled non-release diagnostic. It is not release fuzz evidence for a later
+commit; see the [release evidence guide](release-evidence-guide.md) for release
+validation.
 
 A follow-up `zone_image_datagram` campaign exposed two stale assumptions in its
 test oracle: it compared pre-DNSSEC plans with DO=1 production responses and
@@ -169,20 +168,22 @@ IXFR work above. Before this follow-up, every small IXFR serialized and fsynced
 the complete zone checkpoint. On the 1,000,000-name profile that checkpoint was
 959,152,383 bytes and otherwise-small IXFRs took 15.03–15.53 seconds.
 
-The durable format now keeps that validated checkpoint and atomically replaces
+The durable format keeps that validated checkpoint and atomically replaces
 a bounded, checksummed RRset journal. After 14 measured generations the journal
 was 18,857 bytes, about 50,864 times smaller than the checkpoint. Over the
 physical 25 Gbit/s path, the first post-AXFR IXFR completed in 64.9 ms and the
 following samples in 51–53 ms. This removes zone-size-proportional checkpoint
-serialization from normal small IXFR publication.
+serialization from normal small IXFR publication. Journal size and entry-count
+limits still trigger a full checkpoint, as do updates unsuitable for the
+incremental path; the measured small-update timings do not cover those cases.
 
 Filesystem tracing also measured the lock-held publication boundary. The old
 large-checkpoint promotion took about 156 ms at the 1M profile. Journal renames
 took 0.065–0.176 ms and their following directory fsyncs took 0.422–0.509 ms.
 The journal file fsync (0.75–1.81 ms in these samples) completed before the
 transfer-plan, secret-generation, and zone-publication locks were acquired.
-Thus crash durability remains strict while lock hold time is bounded by compact
-metadata promotion rather than checkpoint size.
+The small journal reduced lock-held filesystem work in these samples. Rename
+and directory-fsync latency still depends on the storage system.
 
 On restart, the complete checkpoint is still read and compiled once because
 query serving remains memory-resident. Journal entries are individually

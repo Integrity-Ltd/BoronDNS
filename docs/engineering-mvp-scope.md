@@ -1,61 +1,40 @@
-# Release Candidate Scope
+# Release Scope
 
-This document defines the current release-candidate scope for BoronDNS. It is
-not the SRS `BDS-VER-008` release-acceptance gate.
+BoronDNS 1.0 is a secondary-authoritative DNS server. The current feature list,
+with source and test references, is in
+[Implemented Feature Scope](implemented-feature-scope.md). This file keeps its
+older `engineering-mvp` name so existing scripts and links continue to work.
 
-## In Scope
+The server includes UDP/TCP queries, AXFR/IXFR acquisition, NOTIFY, TSIG,
+outbound XoT, catalog zones, passive DNSSEC, DNS Cookies, RRL, and operational
+interfaces. AF_XDP is included in the official binary as an experimental,
+opt-in backend. Recursion, primary-server operation, UPDATE, DNSSEC signing,
+and encrypted client-query listeners are outside the server's scope.
 
-- A deployable secondary-authoritative DNS server for the core operational path.
-- Deterministic unit and integration tests that run in the normal local check
-  profile.
-- Short runtime smoke and interop captures that prove the implemented behavior
-  is wired through the binary.
-- Configuration, CLI, logging, health, metrics, shutdown, dependency, unused
-  code, unsafe-boundary, and traceability checks.
-- Documentation that records current implementation evidence and the remaining
-  release-acceptance gaps without claiming final SRS acceptance.
-- Implemented post-Alpha protocol slices listed in
-  `docs/implemented-feature-scope.md`. These are not removed from
-  release-candidate scope merely because they exceed a minimal static-zone
-  secondary-server trim.
+## Local Verification
 
-The retained post-Alpha slices are code-backed scope, not planning notes.
-`scripts/check-srs-review-disposition.py` verifies those slices against current
-source paths, implementation markers, representative test markers, evidence
-paths, and SRS owner identifiers. If a retained slice is removed from code, the
-implemented-feature scope, review disposition, gap register, and this boundary
-must change in the same patch.
+Run `scripts/check.sh` for the regular quality gate. It covers deterministic
+tests, static analysis, documentation checks, short runtime checks, and fuzz
+build/dry-run wiring. It does not launch long campaigns.
 
-## Release Closeout
+`scripts/engineering-mvp-evidence.sh` collects a smaller evidence set with
+per-command timeouts. It records omitted work in `deferred-not-run.txt`.
+[Evidence Command Catalog](evidence-command-catalog.md) lists both profiles.
 
-The bounded local preflight must not claim completed long-running evidence
-unless release artifacts exist. The following are release closeout or formal
-SRS acceptance activities tracked in `docs/release-acceptance-gap-register.md`:
+## Release Evidence
 
-- Several independent 24-hour fuzz campaigns across the release-selected
-  parser and untrusted-input targets.
-- Risk-based extended-runtime/resource evidence; no fixed 30-day campaign is
-  required.
-- Reference Hardware/Profile benchmark campaigns.
-- Production-depth `info` verbosity profiling under release traffic.
-- External operator acceptance.
-- External independent-builder sign-off, package/image reproducibility evidence,
-  and signed release artifact production beyond the completed v0.2.0
-  static-binary comparison in `docs/reproducible-build-v0.2.0.md`.
+Local verification is not the SRS `BDS-VER-008` release-acceptance decision.
+Use the [release evidence guide](release-evidence-guide.md) to collect the
+checks relevant to the candidate and review the
+[acceptance register](release-acceptance-gap-register.md) before tagging.
 
-Setup scripts, schemas, runbooks, and handoff directories for those activities
-may exist in this repository for release/operations use. They are not
-release-candidate evidence until the generated artifacts are retained and cited
-by the gap register, release notes, or verification ledger.
+Several independent 24-hour fuzz campaigns formed part of the 1.0 validation
+plan. Later releases select fuzz, interoperability, performance, and extended
+runtime checks according to what changed. No fixed 30-day campaign is required.
+Reference Hardware/Profile benchmark claims need measurements from that profile;
+optional external reviews need an actual review record.
 
-## Check Profile
-
-`scripts/check.sh` is the local release-candidate quality gate. It may validate
-script syntax and dry-run campaign wiring, but it must not execute the
-long-running activities or generate long-running handoff evidence listed above.
-
-`scripts/engineering-mvp-evidence.sh` is the legacy-named bounded local
-evidence snapshot for the release-candidate preflight profile. By default it
-runs only the narrow local evidence commands listed in
-`docs/evidence-command-catalog.md`, applies a per-command timeout, and records
-broader release/operations commands as deferred rather than executing them.
+Record the tested commit, tools, command, result, and artifact location. A
+generated runbook or empty report template is preparation, not a completed run.
+Older results can support a release when their relevance and intervening changes
+are explained; they do not establish a result for untested code or hardware.

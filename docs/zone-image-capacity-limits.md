@@ -1,130 +1,118 @@
-# BoronDNS ZoneImage Capacity Limits
+# Zone and transfer capacity limits
 
-Status: normative implementation limits for the current immutable zone image,
-2026-07-18.
+A large image, a large RRset, and a large transfer have different limits.
+This reference describes the implementation in September 2026. Encoded
+capacity is not a promise that the allocator, persistence format, or host can
+hold that much data.
 
-This document distinguishes encoded limits from deployment limits. `u64`
-removes the former 4 GiB global-arena and 4.29-billion-record ceilings, but it
-does not make memory or transfer ingestion unlimited.
+The source owners are [`zone_image.rs`](../crates/borondns-core/src/zone_image.rs),
+[`config.rs`](../crates/borondns-core/src/config.rs),
+[`transfer.rs`](../crates/borondns-server/src/transfer.rs), and
+[`zone_persistence.rs`](../crates/borondns-server/src/zone_persistence.rs).
 
-## Global Capacity
+## Image-wide limits
 
-| Resource | Representation | Encoded limit | Effective limit |
-|---|---|---:|---|
-| Offset in each label/name/RDATA/wire arena | `u64` | `u64::MAX` | Platform address space, Rust `Vec` capacity, allocator, and available RAM |
-| Total records in one zone image | `u64` ordinal | `u64::MAX` | Platform `usize`, `Vec<ImageRecord>` capacity, and RAM |
-| Total precomputed RRset relations | `u64` ordinal | `u64::MAX` | Platform `usize`, vector capacity, and RAM |
-| RRsets | compact `u32` ID with `u32::MAX` reserved | 4,294,967,295 RRsets | RAM; valid IDs are 0 through 4,294,967,294 |
-| Name-trie nodes | compact `u32` ID with `u32::MAX` reserved | 4,294,967,295 nodes | RAM; includes empty non-terminals and the origin node |
-| Name-trie edges | `u32` start/count | 4,294,967,295 edges | RAM |
-| Relation-span descriptors | compact `u32` ID with sentinel reserved | 4,294,967,295 spans | At most one populated span per RRset |
-| Node low-RRtype bitmaps | compact `u32` ID with sentinel reserved | 4,294,967,295 bitmaps | At most one per qualifying node |
-| Child-hash descriptors | compact `u32` ID with sentinel reserved | 4,294,967,295 hashes | At most one per indexed node |
-| Narrow or wide child-hash slot arena | `u32` start/count | 4,294,967,295 slots per arena | RAM |
+| Resource | Representation and encoded bound |
+| --- | --- |
+| Label/name/RDATA/wire arena offset | `u64`; bounded in practice by address space and allocation |
+| Stored blob or full RRset wire-range length | `u64`; no 4 GiB range-length ceiling |
+| Total record ordinals and relation ordinals | `u64`; vectors and available RAM constrain usable capacity |
+| RRset and name-node IDs | `u32`, reserving `u32::MAX`; at most 4,294,967,295 entries |
+| Name-trie edge starts/counts | `u32`; at most 4,294,967,295 edges |
+| Relation-span, low-RRtype bitmap, and child-hash descriptor IDs | `u32`, reserving `u32::MAX` |
+| Narrow/wide child-hash slot arena starts/counts | `u32`; at most 4,294,967,295 slots in each arena |
 
-The builder uses checked conversions and reserves every `u32::MAX` “none”
-sentinel. Crossing one of these compact limits returns `ZoneImageBuildError`
-instead of wrapping or aliasing a valid object.
+The builder checks conversions and start-plus-count bounds. IDs never alias
+the reserved “none” sentinel: valid compact IDs end at 4,294,967,294.
 
-### 16-bit audit cross-check
+`NameNode.first_edge`, `edge_count`, and `low_rrtype_bitmap` are `u32`.
+They do not impose a zone-wide 65,535-name limit. Child-hash slots are narrow
+only when the individual node's fanout fits; larger nodes use `u32` offsets.
 
-The July 2026 capacity audit's two shape-dependent findings are covered by the
-global table above:
+The generated child hash uses at least twice the number of children, rounded
+to a power of two. With `u32` slot bounds, the largest representable hashed
+fanout is therefore `2^30` children, requiring `2^31` slots. This is an
+encoding boundary, far beyond a realistic allocation.
 
-- F-01: `NameNode.first_edge` and `NameNode.edge_count` are `u32`, with a
-  checked start-plus-count bound. Child-hash descriptors and slot-arena starts
-  are also `u32`. Per-node hash slots retain `u16` edge offsets only while the
-  fanout fits; larger sibling sets select the `u32` slot arena.
-- F-02: `NameNode.low_rrtype_bitmap` is a `u32` bitmap-table handle with
-  `u32::MAX` reserved for “none”. It does not cap multi-RRset owner names at
-  65,535 across a zone.
+## RRset and DNS-format limits
 
-Consequently, the 161-million-name projection is not restricted to
-single-RRset shapes by either finding. RRset membership uses a `u32` count and
-does not inherit the DNS message header's 16-bit section-count width.
+| Resource | Limit |
+| --- | ---: |
+| RDATA in one record | 65,535 bytes (`u16` RDLENGTH) |
+| Records in one RRset | 4,294,967,295 (`u32` record count), subject to memory and ingestion limits |
+| RRsets attached to one image node | 65,535 (`u16`) |
+| Precomputed relations for one RRset | 65,535; local relation positions end at 65,534 |
+| Distinct NSEC3 parameter sets | 65,536 (`u16` IDs 0–65,535) |
+| Prebuilt direct-answer body | At most 4,294,967,294 bytes; `u32::MAX` is a fallback sentinel |
+| DNS label | 63 bytes |
+| Uncompressed wire name | 255 bytes including label lengths and root |
+| Records counted by one DNS section header | 65,535 |
+| Classic DNS-over-TCP message | 65,535 bytes, excluding the two-byte frame length |
 
-## Local And DNS-Format Limits
+The stored RRset and the DNS response are separate objects. An RRset may have
+more than 65,535 records even though one response cannot carry them all.
+Response sizing and truncation still apply. The image's `ownerless_wire_len`
+is a saturating `u32` sizing hint, not a limit on the stored wire range.
 
-| Resource | Exact limit | Reason |
-|---|---:|---|
-| RDATA in one record | 65,535 bytes | DNS RDLENGTH is `u16` |
-| Records in one RRset | 4,294,967,295 encoded; lower effective limit | `ImageRrset.record_count` is `u32`; the RRset's `u32` wire-range length, platform memory, and transfer policy are reached first |
-| RRsets attached to one owner | 65,535 | `NameNode.rrset_count` is `u16` |
-| Precomputed relations for one RRset | 65,535 | Relation count and local offsets are `u16`; `u16::MAX` is reserved as a missing-kind offset, so valid relation positions end at 65,534 |
-| Distinct NSEC3 parameter sets in one image | 65,536 | Parameter-set IDs use all `u16` values 0 through 65,535 |
-| One stored blob or RRset wire range | 4,294,967,295 bytes | Range length is `u32`; its global starting offset is `u64` |
-| Prebuilt direct-answer body | 4,294,967,294 bytes | `u32::MAX` is the direct-body fallback sentinel |
-| DNS label | 63 bytes | DNS wire format |
-| Uncompressed domain name | 255 bytes including length octets and root | DNS wire format |
-| Labels in a valid name | 127 maximum | Follows from the 255-byte name and non-empty labels |
-| Records represented in one DNS section header | 65,535 | DNS ANCOUNT/NSCOUNT/ARCOUNT fields are `u16`; normal response size limits are reached first |
+The direct-answer body is only a fast-path representation. Singleton RRsets
+and RRsets above the section-count limit use record views instead. It does not
+change the `u32` RRset membership limit.
 
-The RRset count is deliberately distinct from DNS response capacity. RFC 1035
-uses 16-bit section counts, RDLENGTH values, and TCP message lengths, but does
-not define a 65,535-member RRset limit. BoronGen therefore exercises publication
-and AXFR above the former boundary. An RRset that cannot fit in one DNS response
-still cannot be returned whole: UDP reports truncation, while classic DNS over
-TCP cannot carry a message beyond 65,535 octets. This wire limitation does not
-justify rejecting the zone during transfer or publication.
+## Transfer admission
 
-A child hash maintains at most a 0.5 load factor and rounds its slot count to a
-power of two. Consequently, the exact representable fanout for one hashed node
-is at most 1,073,741,824 children (`2^30`), requiring `2^31` wide slots. This is
-far beyond a physically realistic allocation but is still checked.
+| Configuration under `[limits]` | Default | Meaning |
+| --- | ---: | --- |
+| `max_transfer_ingest_bytes` | 4 GiB | Wire-byte bound for each AXFR/IXFR session |
+| `max_transfer_ingest_messages` | 4,096 | Independent DNS-message bound per session; configuration maximum 1,048,576 |
+| `max_transfer_resident_bytes` | 64 GiB | Global reservation envelope for concurrent transfer work |
 
-## Transfer And Reload Limits
+All three are independent. Raising the byte allowance does not raise the
+message allowance. The two per-session limits have environment overrides:
+`BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES` and
+`BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES`. Set the resident envelope in
+TOML; it has no environment override.
 
-`[limits].max_transfer_ingest_bytes` is a per-AXFR/IXFR-session protocol guard,
-not a ZoneImage offset limit. It is a `u64`, defaults to 4,294,967,296 bytes
-(4 GiB), and must be raised explicitly for larger transfers. The equivalent
-environment override is `BORONDNS_LIMITS_MAX_TRANSFER_INGEST_BYTES`.
+Each retained wire byte reserves 256 bytes of the resident envelope. This is
+a conservative admission estimate for compressed-name expansion, decoded
+records, indexes, build workspace, and generation overlap. It is not a live
+measurement of actual process memory and does not account for every unrelated
+allocation.
 
-`[limits].max_transfer_ingest_messages` is the independent per-session DNS
-response-message guard. It is a `u64`, defaults to 4,096, and must also be
-raised for a transfer requiring more frames even when the byte allowance is
-sufficient. The equivalent environment override is
-`BORONDNS_LIMITS_MAX_TRANSFER_INGEST_MESSAGES`. Keeping separate byte and
-message bounds prevents a hostile primary from evading the byte-oriented
-resource policy with an unbounded stream of tiny messages. Configuration also
-rejects values above 1,048,576 messages so per-message allocation metadata has
-a finite upper bound.
+## Persistence limits
 
-`[limits].max_transfer_resident_bytes` is the independent global admission
-envelope for concurrent transfer work and defaults to 64 GiB. Each retained
-wire byte consumes 256 bytes of this budget. The deliberately conservative
-factor covers maximum DNS name-compression expansion plus owned decoded labels
-and records, indexes, publication workspace, the new image, and overlap with
-the currently served generation. Synthetic TLD-scale tests must raise this
-limit deliberately while keeping it below the service cgroup memory ceiling.
+The full last-good checkpoint independently rejects more than
+4,294,967,295 records across the entire zone (`MAX_RECORDS = u32::MAX`).
+An image with wider global ordinals does not remove this current checkpoint
+limit. Durable publication must fit both representations.
 
-The usable zone size is bounded by peak reload memory, not merely the final
-image size. Capacity planning must include:
+The server derives its maximum checkpoint file size as
+`max_transfer_ingest_bytes × 128`, with saturating arithmetic, to allow for
+uncompressed names. This is a file-size guard, not preallocated disk space.
+The incremental journal is limited to 1,024 entries and the lesser of 64 MiB
+or that file-size bound. Reaching a journal limit causes a full checkpoint;
+it does not permit unbounded journal growth.
 
-1. the decoded source `ZoneSnapshot`;
-2. `ZoneImageBuilder` maps, vectors, sorting, and relation workspace;
-3. the newly compiled immutable `ZoneImage`; and
-4. any previous published generation still held by in-flight queries.
+## Memory planning
 
-Allocation failure is not converted into a recoverable zone-build error by the
-Rust global allocator. The resident envelope rejects candidates before its
-conservative estimate exhausts configured headroom, but it cannot measure
-unrelated process or kernel allocations. Operators must therefore leave room
-between this budget and the actual cgroup ceiling.
+Steady image size understates peak load and reload memory. Include the current
+source snapshot, builder maps and sorting workspace, a new image, and old
+generations held by readers. IXFR overlays share unchanged snapshot shards but
+can retain a compact base snapshot and newer changed shards; compaction again
+needs a complete image build.
 
-## Deployment Interpretation
+Rust's global allocator does not generally turn exhaustion into a recoverable
+zone-build error. Leave headroom between transfer admission and the service
+cgroup limit. Large tests should record cgroup pressure/OOM events as well as
+RSS; a process that was contained by the cgroup has not necessarily passed its
+capacity target.
 
-On a 64-bit target, the selective layout supports root, TLD, enterprise,
-reverse, DNSSEC-heavy, and unusually dense zones without the former global
-`u32` arena/record constraint, provided the zone stays within the compact table
-above and the machine can hold the reload working set.
+The July synthetic projection of 161 million names, 644 million RRsets, and
+4.83 billion records estimated about 646.7 GB for the selectively widened
+image. It fits the image's compact node/RRset ID space, but exceeds the current
+full-checkpoint record limit. It was a measured-shape projection, not a load
+test or a claim about the real `.com` corpus. See the
+[dated layout measurements](zone-image-large-zone-design.md) and
+[two-host capacity campaign](boron-gen-two-host-campaign-2026-07.md).
 
-The retained 161-million-name stress projection contains 644 million RRsets and
-4.83 billion records. It fits the compact RRset/node limits and requires `u64`
-record ordinals and arena offsets. Its measured-shape memory projection is
-approximately 646.7 GB after selective widening; that number is a synthetic
-capacity bound, not a claim about the real `.com` corpus.
-
-For zones whose image or transfer can exceed 4 GiB or 4,096 transfer messages,
-deploy a 64-bit BoronDNS build and raise the applicable guards explicitly. A
-32-bit process cannot exploit the `u64` encoded range because all arenas and
-record tables are backed by address-space-sized Rust vectors.
+Use a 64-bit build for large deployments. A 32-bit process cannot exploit
+`u64` arena offsets when the backing vectors must fit its address space.

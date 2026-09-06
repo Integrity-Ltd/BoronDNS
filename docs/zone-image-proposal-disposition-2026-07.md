@@ -1,21 +1,22 @@
 # ZoneImage Proposal Disposition: Denial Lookup, Memory, And Class Indexes
 
-Status: measured and implemented decision, 2026-07-18.
+Decision and measurements: July 18, 2026.
 
-This note closes the three optimization proposals reviewed in July 2026. It is
-an implementation decision record, not a DNS behavior specification. The
-normative behavior remains in `BoronDNS-Secondary-SRS-v1.0.0.md`, and exact
-capacity limits remain in `zone-image-capacity-limits.md`.
+This note preserves the results of the July optimization review. It describes
+the tested revision; the [data-plane reference](memory-io-data-plane-design.md)
+and [capacity limits](zone-image-capacity-limits.md) describe current code.
+The IN-only index representation later changed to counted, sharded maps for
+incremental updates, as noted below.
 
-## Final Disposition
+## July decisions
 
 | Proposal | Disposition | Result |
 | --- | --- | --- |
 | Indexed NSEC/NSEC3 denial lookup | **Accepted and implemented** | Valid closed denial rings use sorted range groups and binary predecessor/exact lookup. Malformed or incomplete groups retain the former linear scan as a correctness fallback. |
-| Generic compression of retained names/RDATA/wire | **Rejected** | LZ4/Zstd-style storage would put decode work on query composition and threaten the small physical-link lead over Knot. The measured arenas also do not support the suggested 40-60% process-RSS saving. |
+| Generic compression of retained names/RDATA/wire | **Rejected** | LZ4/Zstd-style storage would add decode work to query composition without a demonstrated service-level benefit. The measured arenas also do not support the suggested 40-60% process-RSS saving. |
 | Owner/RDATA blob interning | **Prototyped and rejected** | It saved 1,037 bytes, or 0.15% of cold image bytes, on the 10k fixture and added build-time hashing. The prototype was removed. |
 | Remove DNS class everywhere | **Rejected** | Class remains part of DNS records, keys, proof groups, and pre-encoded wire fixed fields. Removing two bytes does not shrink the measured `RrsetKey`, `Rrset`, or 72-byte `ImageRrset` layouts and would weaken non-IN oracle coverage or add reconstruction work. |
-| Compact IN-only name-class indexes | **Alternative implemented** | Production IN-only snapshots use membership sets instead of a 24-byte `SmallVec` class value per known name. Snapshots containing another class automatically retain the general multi-class map. |
+| Compact IN-only name-class indexes | **Alternative implemented** | The July implementation used membership sets instead of a 24-byte `SmallVec` class value per known name, retaining a general map for other classes. This exact representation was later superseded. |
 | NSEC proof-path fuzz coverage | **Accepted and implemented** | The ZoneImage differential target now contains valid NSEC and NSEC3 rings in separate zones, while retaining malformed RDATA and offline-oracle comparisons. |
 
 ## Denial Lookup Measurement
@@ -49,7 +50,7 @@ cargo run --profile profiling -p borondns-core \
 
 ## Memory Measurement
 
-The current 10,000-record prototype fixture reported:
+The July 10,000-record prototype fixture reported:
 
 | Arena/layout | Bytes |
 | --- | ---: |
@@ -81,17 +82,17 @@ is more promising than compressing bytes that every response needs.
 
 ## IN-Only Class Index Measurement
 
-The production input contract is IN-only, but generic class representation is
-still useful in records, wire output, transfer validation, and differential
-tests. The implemented compromise specializes only name-existence indexes:
+The production input contract is IN-only, but generic class representation
+remains useful in records, wire output, transfer validation, and differential
+tests. The July implementation specialized name-existence indexes:
 
-- an all-IN snapshot stores `HashSet<NameKey>` membership;
-- a snapshot containing any other class stores the former
+- an all-IN snapshot stored `HashSet<NameKey>` membership;
+- a snapshot containing any other class stored the former
   `HashMap<NameKey, SmallVec<[u16; 1]>>`; and
-- QCLASS IN/ANY behavior is unchanged, while unusual-class oracle tests keep
+- QCLASS IN/ANY behavior was unchanged, and unusual-class oracle tests retained
   their exact class membership.
 
-At 10,000 records this removes 240,384 bytes of class-value payload from the
+At 10,000 records this removed 240,384 bytes of class-value payload from the
 retained snapshot indexes. Core layout probes confirm that deleting `class`
 from `RrsetKey` or `Rrset` would save zero bytes because of alignment; the
 removed per-name `ClassSet` value is 24 bytes. The ZoneImage query path is not
@@ -100,7 +101,14 @@ changed. Three 200,000-iteration runs produced mixed-packet timings of 478.034,
 217.611 ns/query; that spread is treated as benchmark noise, not a query-speed
 claim.
 
-## Validation Boundary
+The current `NameClassIndex` in
+[zone.rs](../crates/borondns-core/src/zone.rs) uses sharded reference counts:
+`HashMap<NameKey, u32>` for IN-only data and per-class counts for mixed data.
+Counts let incremental deletion distinguish the last RRset at a name from
+one of several remaining RRsets. The July 240,384-byte saving therefore
+must not be reused as a measurement of the current snapshot layout.
+
+## Validation boundary
 
 The implementation is covered by focused valid-ring, predecessor, wrap,
 exact-match, malformed-fallback, class-specialization, and multi-class tests.

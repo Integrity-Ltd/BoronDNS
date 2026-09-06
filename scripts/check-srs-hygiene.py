@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check the current SRS for review-derived hygiene regressions."""
+"""Check SRS contracts, identifier hygiene, and companion-document boundaries.
+
+Keep checks tied to protocol/safety contracts and stable section ownership.
+Revision-history narration and editorial wording are not interfaces.
+"""
 
 from __future__ import annotations
 
@@ -158,8 +162,8 @@ FORBIDDEN_TEXT = {
     "soft ceiling recommended by RFC 9276": "RFC 9276 recommends zero NSEC3 iterations; 100 is an BoronDNS compatibility default informed by Appendix A measurements",
     "default is the RFC 9276 ceiling": "RFC 9276 recommends zero NSEC3 iterations; 100 is an BoronDNS compatibility default",
     "tipical": "typo in normative SRS text",
-    "Each process restart MUST generate a fresh secret.": "process-local DNS Cookie secrets are Engineering MVP behavior, not the full RFC 9018 shared-secret target",
-    "DNS Cookie secrets replaced with `<redacted>`": "current configuration has no DNS Cookie secret field; future configured Server Secret material must be described conditionally",
+    "Each process restart MUST generate a fresh secret.": "configured DNS Cookie shared secrets survive restart; only process-local secrets are regenerated",
+    "current configuration has no DNS Cookie secret field": "cookie.server_secret and cookie.previous_server_secret are implemented",
     "MUST compile the kernel-side eBPF program at server build time and embed it in the server binary as compiled bytecode": "future eBPF packaging detail belongs in future optimization and architecture docs, not the current invariant",
     "No \"scriptable response transformation\" feature is or will be added": "SRS must describe the current invariant and revision path, not make unchangeable future product promises",
     "excluded from consideration unless they are the only types present at the QNAME": "ANY selection must align with implementation: DNSSEC support records are not selected merely by QTYPE=ANY",
@@ -228,10 +232,7 @@ REQUIRED_TEXT = [
     "It does not by itself prove scratch or distroless image compatibility",
     "including binary inspection for runtime shared-library dependencies",
     "The active verification automation for the current project stage MUST enact the Continuous classification",
-    "Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled",
     "Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per BDS-NFR-SEC-002, scheduled at least weekly during release acceptance)",
-    "periodic weekly/monthly cadences are release-acceptance-cycle obligations rather than standing private-repo calendar commitments",
-    "the requirement is coverage by retained verification artifacts, not a claim that current private-repository CI already verifies every individual requirement",
     "MUST be captured by the active verification and release-evidence system for each release",
     "hosted CI or an equivalent retained release-gate automation record for the accepted commit",
     "The active continuous gate for the project stage MUST verify that every functional requirement identifier in §4 appears as a code-level reference",
@@ -280,22 +281,6 @@ REQUIRED_TEXT = [
     "docs/reference-verification-profile.md#reference-hardware-profile",
     "docs/reference-verification-profile.md#reference-query-mix",
     "docs/reference-verification-profile.md#verification-recordkeeping",
-    "The v0.7 audit pass is historical evidence, not a prohibition on later corrective review.",
-    "The requirement identifier and category framework remains stable for traceability",
-    "Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope",
-    "New formal SRS MVP scope: DNS Cookies",
-    "supported in current scope",
-    "brought into formal SRS MVP scope",
-    "formal SRS MVP, post-MVP",
-    "formal SRS MVP configuration MUST NOT expose a fourth active **NOTIFY interface** role",
-    "active formal SRS MVP configuration MUST NOT expose a fourth `notify` role",
-    "This endpoint is supported in the formal SRS MVP.",
-    "new formal SRS MVP scope §4.19 DNS Cookies",
-    "explicit rejection of a fourth active NOTIFY interface role for the formal SRS MVP",
-    "Engineering MVP benchmarking shows",
-    "deferred to formal SRS MVP",
-    "formal SRS MVP release",
-    "Formal SRS MVP interface-scope decision",
     "borondns_catalog_member_info{catalog_zone=\"<catalog-apex>\",zone=\"<member-apex>\",managed=\"<true|false>\"} 1",
     "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
     "BDS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics)",
@@ -305,7 +290,6 @@ REQUIRED_TEXT = [
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
     "BoronDNS does not expose a server-side liveness timeout parameter.",
     "Client, reverse proxy, and orchestrator timeout configuration is outside the BoronDNS configuration model.",
-    "Aligns BDS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model",
     "Production operator documentation (per BDS-NFR-MAINT-009) MUST recommend file-backed secret provisioning",
     "BoronDNS does not define a separate per-query CPU-processing timeout parameter.",
     "The formal RFC 9103 XoT profile MUST use TLS 1.3 (RFC 8446) or later.",
@@ -313,9 +297,6 @@ REQUIRED_TEXT = [
     "The production XoT client pins TLS 1.3. TLS 1.2 exists only in isolated test-peer support",
     "Compatibility-mode tests, if retained, must be separated from formal RFC 9103 evidence.",
     "This counter intentionally has no `zone` label in the current profile",
-    "runtime loading of operator-supplied or configuration-specified eBPF programs is forbidden",
-    "The exact packaging and adapter constraints for any project-supplied kernel-side program are owned by `docs/future-optimization-tracks.md` and the Architecture Document",
-    "adding one would require an explicit SRS revision that changes this invariant",
     "for QTYPE = 255 (ANY) queries against a name with at least one first-class, non-DNSSEC-support RRset present",
     "DNSSEC supporting material is added only by the DNSSEC response rules of §4.13",
     "RRSIG, NSEC, and NSEC3 records are DNSSEC supporting data and are excluded from the ANY selection set",
@@ -325,9 +306,7 @@ REQUIRED_TEXT = [
     "RFC 9432 §4.1 uses PTR RDATA so all valid domain names can be represented",
     "A malformed member PTR RRset or malformed PTR RDATA makes the candidate catalog version broken",
     "previously applied catalog membership MUST remain unchanged per BDS-FR-PROV-010 and RFC 9432 §5.1",
-    "The gap register records any current implementation gap between this formal SRS MVP policy and the Engineering MVP code evidence.",
     "Capitalized requirement keywords in C.6.1 apply whenever the experimental",
-    "The later zone-store and response-cache tracks remain",
     "Earlier May 2026 planning material informed the business case",
     "it is not an operative requirements authority for this repository",
     "The checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities",
@@ -340,17 +319,38 @@ REQUIRED_TEXT = [
     "## 7.4 Acceptance Criteria for Release Milestones",
     "For each RFC listed in Appendix A and the companion traceability matrix",
     "alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`.",
-    "reviews do not remove a type from the Engineering MVP scope unless the code,",
     "It does not reproduce the §4.14 table",
     "**Status:** Requirements baseline for the BoronDNS 1.0.0 public beta. Requirements identified as future full-acceptance targets are not claims of completed 1.0 release evidence.",
     "only the rule that keeps those documents synchronized.",
     "Appendix C.5 does not duplicate the decision table.",
     "The current pending subset is summarized in `docs/release-acceptance-gap-register.md`",
+    "the tag workflow does not execute the complete validation gate",
+    "scheduled at least weekly during release acceptance",
+    "scheduled at least monthly during release acceptance",
+    "standing calendar commitments between release-acceptance cycles",
+    "Preserve requirement identifiers and update affected tests",
+    "MUST NOT expose a fourth active **NOTIFY interface** role",
+    "MUST NOT expose a fourth `notify` role",
+    "`secret` and filesystem `secret_file`",
+    "`cookie.server_secret` and `cookie.previous_server_secret`",
+    "Revalidation and restore of its own last-good state",
+    "secret-store reload remain bounded runtime actions",
+    "MUST NOT provide userspace plugins, embedded interpreters, JIT compilation",
+    "`xdp.redirect_object`",
+    "absolute path without following symbolic or magic links",
+    "same open file descriptor",
+    "do not authenticate its build or cryptographically pin its contents",
+    "Compact and sharded zone images are current runtime features",
+    "unimplemented requirements from missing verification evidence",
+    "legacy `server.health` socket",
+    "there is no implicit localhost listener",
 ]
 
 REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [
     "# RFC Traceability Policy",
-    "The purpose of this split is to keep the SRS from becoming an unchecked",
+    "BDS-VER-005",
+    "BDS-VER-006",
+    "BDS-VER-014",
     "Scope Categories",
     "Target resolution milestone",
     "Current Feature Guardrail",
@@ -372,7 +372,7 @@ def main() -> int:
     errors: list[str] = []
 
     for needle, reason in FORBIDDEN_TEXT.items():
-        if needle in text:
+        if " ".join(needle.split()) in normalized_text:
             errors.append(f"forbidden SRS text {needle!r}: {reason}")
 
     for needle in REQUIRED_TEXT:
@@ -380,7 +380,7 @@ def main() -> int:
             errors.append(f"missing required SRS hygiene text: {needle!r}")
 
     for needle in REQUIRED_RFC_TRACEABILITY_POLICY_TEXT:
-        if needle not in rfc_traceability_policy:
+        if " ".join(needle.split()) not in " ".join(rfc_traceability_policy.split()):
             errors.append(
                 f"missing required RFC traceability policy text: {needle!r}"
             )
@@ -392,23 +392,23 @@ def main() -> int:
         "## Verification Recordkeeping",
         "Dual Intel Xeon Gold 6230R",
         "100,000 records",
-        "formal SRS MVP conformance",
         "not use XDP",
     ]:
-        if needle not in reference_profile:
+        if " ".join(needle.split()) not in " ".join(reference_profile.split()):
             errors.append(
                 f"missing reference verification profile text: {needle!r}"
             )
 
     for needle in [
-        "not hidden Engineering MVP requirements",
+        "## Implemented foundations",
+        "## AF_XDP deployment and trust",
+        "## Complete-response caching",
         "test-tool scope only",
-        "Entry condition for re-evaluation: Engineering MVP benchmarking shows",
         "First-party unsafe code and unsafe-prone dependencies must remain confined",
         "Keep the zone store behind a documented lookup/publish boundary",
         "Key cached responses on the DO-bit value",
     ]:
-        if needle not in future_optimization_tracks:
+        if " ".join(needle.split()) not in " ".join(future_optimization_tracks.split()):
             errors.append(
                 f"missing future optimization track text: {needle!r}"
             )
@@ -420,10 +420,14 @@ def main() -> int:
             + ", ".join(suffixed_ids)
         )
 
-    cross_reference_index = text.split("## A.5 Cross-Reference Index", 1)[1].split(
-        "# Appendix B",
-        1,
-    )[0]
+    index_heading = "## A.5 Cross-Reference Index"
+    if index_heading not in text:
+        errors.append("missing Appendix A cross-reference index")
+        cross_reference_index = ""
+    else:
+        cross_reference_index = text.split(index_heading, 1)[1].split(
+            "# Appendix B", 1
+        )[0]
     for section in SECTION_4_RE.findall(text):
         if f"| {section} " not in cross_reference_index:
             errors.append(

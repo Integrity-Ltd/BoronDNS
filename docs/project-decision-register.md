@@ -1,19 +1,27 @@
 # Project Decision Register
 
-This register owns project decisions that were previously embedded in SRS
-Appendix C.5. The current SRS owns normative requirements; this document owns
-the decision audit trail, release-review status, and handoff table consumed by
-`scripts/capture-release-handoff.sh`.
+This is the decision history formerly kept in SRS Appendix C.5. The
+[current SRS](BoronDNS-Secondary-SRS-v1.0.0.md) defines the requirements;
+historical version labels below describe when a decision was made, not a
+release still to come. `scripts/capture-release-handoff.sh` exports the table
+for a detailed acceptance review.
 
-Resolved rows are retained because they explain why implemented behavior remains
-in scope even when an external review suggested a smaller static-secondary
-boundary. Pending rows remain release-review items until a later SRS revision or
-release decision resolves or explicitly defers them.
+Two decisions remain pending:
+
+- Additional property-based testing: a non-normative quality candidate.
+- The 1% idle-CPU bound: a full Reference Hardware/Profile acceptance target
+  still needing measured confirmation or an SRS revision.
+
+Neither is a newly discovered 1.0 release blocker. The
+[acceptance register](release-acceptance-gap-register.md) records the current
+evidence boundary.
 
 ## Decision Register
 
-The following items were specifically flagged during SRS drafting or review for
-explicit team decision rather than implicit endorsement.
+Resolved choices and their rationale are retained for traceability.
+
+<details>
+<summary>Decision history and current dispositions</summary>
 
 | Item | Flagged at | Recommendation | Decision |
 |---|---|---|---|
@@ -34,7 +42,7 @@ explicit team decision rather than implicit endorsement.
 | Reference Query Mix (Zipf 80/5; A/AAAA/MX/NS/TXT/SRV distribution) | §5.1, Appendix E | Confirm Mix | **Resolved (v0.4): confirmed; Appendix E.3** |
 | `interface.xot` rename to `interface.transfer` | §6.1, BDS-IF-NET-005 | Rename for accurate scope | **Resolved (v0.5): renamed; BDS-IF-NET-005** |
 | Separate inbound NOTIFY interface | §6.1, BDS-IF-NET-008 | Decide whether to expose a fourth NOTIFY role | **Resolved for formal SRS MVP: not exposed; BDS-IF-NET-008 requires rejection of `interface.notify` / `interfaces.notify` and receives NOTIFY on `interfaces.dns`** |
-| Health endpoint default bind precedence (explicit > `interface.mgmt` > localhost) | §6.4, BDS-IF-HEALTH-001 | Layered default | **Resolved (v0.5): specified; BDS-IF-HEALTH-001** |
+| Health endpoint bind precedence | §6.4, BDS-IF-HEALTH-001 | Explicit configuration; no implicit listener | **Resolved (v0.5; corrected September 2026): explicit `[health]` pair > legacy `server.health` > `interfaces.mgmt` with `health.default_port`; no addresses means no listener. Earlier localhost-fallback wording did not match the implementation.** |
 | Exit code convention (sysexits.h-style) | §6.6, BDS-IF-PROC-001 | Adopt BSD sysexits convention | **Resolved (v0.5): adopted; BDS-IF-PROC-001** |
 | SIGPIPE ignore disposition exception | §6.5, BDS-IF-SIG-004 | Permit SIG_IGN for SIGPIPE | **Resolved (v0.5): permitted; BDS-IF-SIG-004** |
 | `--dump-config` and `--validate-config` CLI modes | §6.2, BDS-IF-CONF-009, BDS-IF-CONF-010 | Add both | **Resolved (v0.5): added; BDS-IF-CONF-009 / -010** |
@@ -66,7 +74,7 @@ explicit team decision rather than implicit endorsement.
 | Panic discipline in query path | §3.6, BDS-INV-006 | Panic-free on untrusted input | **Resolved (v0.6): specified; BDS-INV-006** |
 | Authoritative-only response composition as invariant | §3.7, BDS-INV-007 | Elevate from NEG-007/-008 | **Resolved (v0.6): elevated; BDS-INV-007** |
 | Single-process architecture as invariant | §3.8, BDS-INV-008 | New invariant | **Resolved (v0.6): introduced; BDS-INV-008** |
-| Static composition / no runtime code loading | §3.9, BDS-INV-009 | New invariant | **Resolved (v0.6): introduced; BDS-INV-009** |
+| Static composition / no runtime code loading | §3.9, BDS-INV-009 | No userspace plugins or executable configuration | **Resolved (v0.6; clarified September 2026): BDS-INV-009 retains static userspace composition and documents the implemented AF_XDP redirect-object exception, filesystem trust checks, and operator provenance responsibility.** |
 | Two-invariant conflict resolution policy | §3 intro | Specify | **Resolved (v0.6): specified; §3 intro** |
 | VER category formal registration in §1.4.3 + D.5.1 | §7 intro | Register | **Resolved (v0.7): note in §7 intro updated; §1.4.3 and D.5.1 already had VER** |
 | BDS-VER-001 tautological wording | §7.1 | Reformulate as coherence requirement | **Resolved (v0.7): reformulated; BDS-VER-001** |
@@ -128,3 +136,5 @@ explicit team decision rather than implicit endorsement.
 | Combined `/metrics` + health endpoint host vs separate | §6.4 | Confirm combined host (paths split) | **Resolved (v0.9.1): management listener exposes `/livez`, `/readyz`, `/healthz`, and `/metrics` as separate paths on the same management host** |
 | Verification category VER prefix (extends §1.4.3) | §7 | Confirm | **Resolved (v0.9.1): VER is registered in §1.4.3 and Appendix D.5.1 and checked by the identifier-registry audit** |
 | SLO publication as informative content in Operator Deployment Guide | BDS-NFR-MAINT-009 | Add SLO section to Deployment Guide | **Resolved (v0.9.1): informative SLO section added to the Operator Deployment Guide** |
+
+</details>

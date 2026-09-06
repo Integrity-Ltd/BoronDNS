@@ -1,12 +1,10 @@
 # BoronDNS Interface Compatibility Policy
 
-Status: 1.0 public-beta policy for `BDS-NFR-MAINT-006` and
-`BDS-IF-CONF-002`.
-
-BoronDNS treats externally observable interfaces as stable under semantic
-versioning. The current baseline is recorded in
-`docs/interface-stability-baseline.tsv` and checked by
-`scripts/check-interface-compatibility.py`.
+BoronDNS uses semantic versioning for its documented product interfaces
+(`BDS-NFR-MAINT-006`, `BDS-IF-CONF-002`). The
+[interface baseline](interface-stability-baseline.tsv) records their stability
+and change policy. `scripts/check-interface-compatibility.py` checks that
+inventory and can compare it with a previous release baseline.
 
 This product-interface policy does not make the internal Rust crates, Rust ABI,
 or private implementation modules stable public interfaces.
@@ -41,16 +39,13 @@ The stability commitment covers:
 - The release notes for every release must distinguish interface additions,
   deprecations, and breaking changes.
 
-## Release Evidence
+## Reviewing a Release
 
-For each release candidate, release/operations records:
+Retain the current and previous accepted baselines, the comparison result, and
+the release notes describing changes. For a breaking change, record the major
+version decision and migration path. With no previous baseline, record an
+initial baseline rather than a passed release comparison.
 
-- the current interface baseline or generated evidence directory;
-- the previous accepted release baseline, if one exists;
-- the compatibility diff result;
-- all additions, deprecations, and breaking changes in release notes;
-- the major version approval rationale for any breaking change.
-
-When no previous accepted release baseline exists, the release may record the
-current baseline as the initial compatibility baseline. That is setup evidence,
-not proof that a release-to-release diff has passed.
+The checker catches inventory changes; it cannot prove unchanged semantics.
+Review configuration defaults, error behavior, metric meaning, and wire behavior
+when the corresponding code changes.

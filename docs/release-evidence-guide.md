@@ -1,411 +1,252 @@
 # Release Evidence Guide
 
-Status: release and operations evidence runbook for the 1.0 public-beta gate.
+This guide explains how to collect release evidence, rehearse packaging, and
+verify published artifacts. For installation, use the
+[operator guide](operator-deployment-guide.md). For deciding which checks a
+candidate needs, use the [test plan](test-plan.md) and
+[readiness checklist](engineering-mvp-readiness.md).
 
-This guide owns the mechanics of `scripts/release-evidence-snapshot.sh` and the
-handoff directories used by later release/operations runs. It is separate from
-the Operator Deployment Guide so day-one deployment instructions stay focused on
-running BoronDNS.
+A release record should identify the tested commit, commands, tool versions,
+results, and retained artifacts. A runbook or generated report template is
+preparation; a completed log or measurement establishes what was tested.
+Historical evidence can support a later release when its relevance is explained.
 
-The release candidate does not claim completed long-running evidence unless the
-release artifacts exist. A generated handoff directory proves that the setup and
-artifact shape exist; it does not prove that the benchmark, soak,
-reproducible-build comparison, production-depth logging profile, release-signing
-review has been completed. Optional external operator review is recorded when
-available but is not a release prerequisite.
+## Choose an Evidence Profile
 
-## Snapshot Profiles
+| Profile | Command | What it does |
+| --- | --- | --- |
+| Regular quality gate | `scripts/check.sh` | Runs the maintained local static checks, tests, and short runtime checks. |
+| Bounded evidence snapshot | `scripts/engineering-mvp-evidence.sh` | Captures selected CLI, logging, signal, health, malformed-query, resource, portability, coverage, interface, security-policy, and source-reference checks with per-command timeouts. |
+| Broad release snapshot | `scripts/release-evidence-snapshot.sh` | Runs the quality gate, captures additional audits and smoke tests, and creates report templates for selected release work. |
+| Packaging rehearsal | `scripts/release-preflight-container.sh` | Builds and tests release packages from a clean commit in a tool container. |
 
-`scripts/engineering-mvp-evidence.sh` writes the legacy-named bounded local
-preflight evidence profile under `target/evidence/engineering-mvp/<timestamp>/`.
-It runs
-security-policy, CLI, log, signal, health/metrics, malformed-query,
-portability, resource, coverage, interface-compatibility, unused-code, and
-functional-requirement-reference checks. It does not run transitive unsafe
-dependency enumeration, fuzz build/campaign commands, invariant audits,
-real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded
-profile; those commands are recorded as deferred release/operations work.
+The bounded snapshot uses the legacy-named
+`target/evidence/engineering-mvp/<timestamp>/` directory. It does not run
+transitive unsafe dependency enumeration, fuzz build/campaign commands, invariant
+audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default
+bounded profile. Omitted commands are recorded in `deferred-not-run.txt`.
 
-`scripts/release-evidence-snapshot.sh` writes release-candidate command logs
-under `target/evidence/<timestamp>/`. By default it captures:
+The broad snapshot writes to `target/evidence/<timestamp>/`, or under
+`BORONDNS_EVIDENCE_DIR`. Its default run includes:
 
-- repository check output;
-- fuzz compile check output;
-- cargo-deny output;
-- tool versions;
-- git state;
-- the current verification command list;
-- Test Plan shape check output;
+- the repository gate, fuzz compilation, dependency checks, and tool/git state;
 - architectural, read-only-runtime, safe-Rust, spoofing, log-field,
   maintainability, XoT revocation, and passive-DNSSEC audit output;
-- portability evidence under `portability-evidence/`;
-- unused/dead-code audit artifacts under `unused-code-audit/`;
-- resource smoke artifacts under `resource-evidence/`;
-- `cargo-llvm-cov` threshold artifacts under `coverage-evidence/`;
-- `cargo geiger` unsafe dependency enumeration under
-  `unsafe-dependency-evidence/`;
-- production-depth info verbosity setup under `info-verbosity-handoff/`;
-- interface compatibility baseline and optional release-diff output under
-  `interface-compatibility/`;
-- Reference Hardware/Profile benchmark setup/report files under
-  `benchmark-handoff/`;
-- long-run soak setup/report files under `soak-handoff/`;
-- reproducible-build setup files under `reproducible-build-handoff/`;
-- release-governance setup files under `release-handoff/`.
-- CycloneDX release SBOM evidence under `sbom-evidence/`.
+- CLI, logs, signals, health/metrics, malformed-query, portability, resource,
+  coverage, interface-compatibility, and unused-code evidence;
+- `cargo geiger` output, including scanner caveats that need review;
+- binary CycloneDX SBOMs;
 - bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts
-  for negative responses, NOTIFY rejection, TCP truncation retry, EDNS behavior,
-  DNS Cookies, IXFR NOTIMP fallback, passive DNSSEC/NSEC3 serving, and RRL UDP
-  limiting.
+  for negative responses, NOTIFY rejection, TCP retry, EDNS, DNS Cookies,
+  IXFR fallback, passive DNSSEC/NSEC3, and UDP RRL;
+- handoff templates for benchmarks, info-verbosity profiling, extended runtime,
+  reproducible builds, and release review.
 
 Those focused default smoke scripts are not the broader real-primary interop
-matrix. The broad BIND, NSD, Knot, PowerDNS/PostgreSQL, packet-torture, XoT,
-and long RRL campaign command set remains opt-in through
-`BORONDNS_EVIDENCE_RUN_INTEROP=1` or `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`.
+matrix. The full command inventory is in
+[Evidence Command Catalog](evidence-command-catalog.md). Additional interop and
+RRL campaign execution remains opt-in through
+`BORONDNS_EVIDENCE_RUN_INTEROP=1` or
+`BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`.
 
-The unsafe dependency evidence records scanner caveats and must be reviewed
-before it is treated as complete. The info-verbosity, interface-compatibility,
-benchmark, soak, reproducible-build, and release-governance handoffs are
-release/operations template sets for delegated runs unless their
-release-specific inputs are supplied.
+## Select Additional Runs
 
-## Optional Evidence Runs
+| Setting | Effect |
+| --- | --- |
+| `BORONDNS_EVIDENCE_RUN_INTEROP=1` | Runs the broader primary/interoperability command set. |
+| `BORONDNS_EVIDENCE_RUN_FUZZ=1` | Runs the fuzz helper and retains `campaign-summary.tsv`. |
+| `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` | Runs the RRL evidence campaign. |
+| `BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` | Selects RRL iteration count; the default is 3. |
+| `BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` | Selects wall-clock seconds instead of iteration count. |
+| `BORONDNS_PERF_BASELINE` | Compares smoke metrics with a history file containing `release metric value` rows. |
+| `BORONDNS_PERF_REGRESSION_THRESHOLD_PCT` | Overrides the default 10 percent smoke-regression threshold. |
+| `BORONDNS_RELEASE_NOTES` | Checks a detailed release-evidence dossier against the snapshot. |
 
-Set `BORONDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the
-snapshot and retain its `campaign-summary.tsv`.
+The detailed dossier is optional in the current public release process. The
+tagged workflow generates shorter artifact notes and verification instructions.
+See [Release Notes Template](release-notes-template.md) for the fuller format.
 
-Set `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
-campaign under the snapshot. Use `BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
-`BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
-duration mode.
+For primary interoperability, retain `primary-version.txt`, redacted
+configuration, logs, packets where collected, and traceability output. The
+snapshot indexes newly collected primary-version files under
+`interop-primary-versions/`. Skipped scripts are missing evidence, not passes.
+Use `scripts/interop-primary-matrix.sh` for an aggregate BIND, NSD, Knot, and
+PowerDNS/PostgreSQL run; its default output is
+`target/evidence/primary-matrix-...`, overridable with
+`BORONDNS_PRIMARY_MATRIX_ARTIFACT_DIR`.
 
-Set `BORONDNS_EVIDENCE_RUN_INTEROP=1` to run the broader interop commands listed
-in `docs/evidence-command-catalog.md` as part of the snapshot. Successful
-real-primary interop runs write `primary-version.txt` under their
-`target/interop/...` workdir. The snapshot copies new files into
-`interop-primary-versions/` with an index so each pass/fail result can be tied
-to the tested primary implementation version, OS or container package context,
-configuration artifacts, transport, and security mode. A skipped script is
-missing evidence, not passing evidence.
+For extended testing, see the [two-host fuzz campaign](two-host-fuzz-soak-campaign.md)
+and [large-surface soak guide](large-surface-soak.md).
+`scripts/large-surface-soak-campaign.sh` cycles through transfer, catalog,
+DNSSEC, EDNS, cookie, RRL, and failure scenarios while sampling host resources.
+Choose its duration explicitly. It complements resident-process RSS/file-descriptor
+sampling; no fixed 30-day run is required.
 
-Use `scripts/interop-primary-matrix.sh` for a retained aggregate pass across the
-selected BIND, NSD, Knot, and PowerDNS/PostgreSQL primary scenarios. It writes
-`primary-matrix-summary.tsv` and per-primary artifact subdirectories under
-`target/evidence/primary-matrix-...` by default, or under
-`BORONDNS_PRIMARY_MATRIX_ARTIFACT_DIR` when set.
+## Prepare a Single Evidence Package
 
-`BORONDNS_RELEASE_NOTES` remains available for a future formal-acceptance
-dossier. It is not required for the 1.0 public-beta tag: detailed primary-version
-and requirement evidence remains in the canonical repository records, while the
-tagged workflow generates concise public artifact notes and verification
-instructions.
+These scripts create runbooks and report formats without running the campaign.
 
-Set `BORONDNS_PERF_BASELINE` to a whitespace-delimited history file with rows
-shaped as `release metric value` to compare retained `perf-smoke-metrics.env`
-values against the rolling baseline.
-`BORONDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the default 10 percent
-regression threshold.
+| Subject | Script |
+| --- | --- |
+| Reference Hardware/Profile benchmark | `scripts/capture-benchmark-handoff.sh` |
+| Production-depth `info` log profiling | `scripts/capture-info-verbosity-handoff.sh` |
+| Extended-runtime resource sampling | `scripts/capture-soak-handoff.sh` |
+| Independent build comparison | `scripts/capture-reproducible-build-handoff.sh` |
+| Release review, decisions, signing, and optional external review | `scripts/capture-release-handoff.sh` |
 
-## Handoff Directories
+`scripts/capture-interface-compatibility-evidence.sh` also captures the current
+interface baseline. It runs a release-to-release comparison only when a previous
+baseline is supplied. Inspect the result before describing it as a passed
+compatibility comparison.
 
-Use the standalone handoff scripts when a release/operations owner needs only
-one evidence package instead of a full snapshot.
+## Rehearse Packaging Before Tagging
 
-| Handoff | Command | Purpose |
-| --- | --- | --- |
-| Benchmark | `scripts/capture-benchmark-handoff.sh` | Creates the Reference Hardware/Profile benchmark runbook, report template, metric/resource TSV schemas, baseline-history template, requirement traceability map, release-note snippet, and operator sign-off template. |
-| Info verbosity | `scripts/capture-info-verbosity-handoff.sh` | Creates the production-depth `info` verbosity profile runbook, report template, log-volume/structured-field/metrics TSV schemas, requirement traceability map, release-note snippet, and operator sign-off template. |
-| Extended runtime | `scripts/capture-soak-handoff.sh` | Creates a duration-neutral extended-runtime report template, RSS/file-descriptor/metrics/event TSV schemas, summary template, requirement traceability map, and operator sign-off template. |
-| Release governance | `scripts/capture-release-handoff.sh` | Creates the evidence attachment map, role ownership TSV, scheduled CI/manual-run plan, signing runbook, release-note fill plan, external-operator acceptance template, and release-readiness checklist. |
-
-## Large-Surface Soak Evidence
-
-Use `scripts/large-surface-soak-campaign.sh` to run the broad scenario-cycle
-soak on the two SSH hosts. The runner repeatedly executes retained BIND, NSD,
-Knot, PowerDNS/PostgreSQL, XoT, TSIG, catalog-zone, extended-catalog,
-DNSSEC/EDNS/DNS-Cookie/RRL, bad-transfer, and negative-query scenarios while
-sampling host resources and retaining per-scenario artifacts.
-
-The campaign duration is selected explicitly for each run. The 1.0 plan uses
-several independent 24-hour fuzz/resource rounds; a longer large-surface run is
-optional and does not become a release requirement merely because the tooling
-supports it. Its evidence complements the single resident-process
-RSS/file-descriptor lane represented by `scripts/capture-soak-handoff.sh`.
-
-See `docs/large-surface-soak.md` for launch, status, collection, and evidence
-schema details.
-
-## Reproducible Build Evidence
-
-Use `scripts/reproducible-build-compare.sh` to run the local static-binary
-comparison. The script builds `borondns` and `boron-gun` twice in separate clean
-target directories for `x86_64-unknown-linux-musl`, fixes the embedded
-`BORONDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
-`artifact-manifest.tsv`, `comparison.tsv`, and `reproducible-build-summary.env`
-under `target/evidence/reproducible-build-...`.
-The comparison refuses modified or untracked source by default. The explicit
-`BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1` escape hatch exists only
-for diagnostics: such a run exits nonzero and records
-`reproducible_build_status=false` plus `release_eligible=false`, even when its two
-artifact digests match. Dirty-source output is never release evidence.
-The source commit and the complete non-ignored worktree status are captured at
-preflight and must remain identical before and after locked metadata capture,
-each build, artifact capture, and terminal evidence publication. Any boundary
-drift fails the comparison before it can publish passing release evidence.
-The tagged release workflow runs this comparison again for its exact checked-out
-commit before preparing the signing handoff. It validates the two matching
-binary pairs with `scripts/verify-release-reproducibility.py`; a missing,
-ineligible, commit-mismatched, size-mismatched, or digest-mismatched record is a
-hard failure before the privileged signing job can start. The independently
-packaged raw `borondns` and `boron-gun` binaries must then compare byte-for-byte
-with both retained builds, so the result authenticates the bytes sent for
-signing rather than an unrelated successful comparison.
-
-The comparison intentionally uses the concrete rustup Cargo and rustc binaries
-instead of the local `cargo` shim so build-script environment values reach the
-compiled binary. A passing comparison verifies the raw static binaries only; it
-does not sign artifacts or claim installer archive or Docker image archive
-reproducibility.
-
-## Package and Docker Smoke Evidence
-
-Before creating a release tag, run the complete clean-container rehearsal:
+Run this from a clean, committed checkout:
 
 ```sh
 scripts/release-preflight-container.sh
 ```
 
-The launcher refuses modified or untracked source, builds a cached digest-pinned
-Ubuntu 24.04 tool image, and clones the selected commit from a read-only Git bundle into an
-otherwise clean container. The trusted container mounts the host Docker socket
-and an identically named temporary workspace so installer bind mounts and
-resource-constrained image smokes have the same cgroup-v2 behavior as the tagged
-runner. It uses host networking so loopback ports published by that daemon are
-visible to the smoke client. Docker-socket access is root-equivalent host
-authority; only reviewed
-committed source may be run through this operator gate. The packaging locks and
-rollback tests preserve pre-existing image tags. The tool container itself is
-limited to 32 GiB of memory and swap by default; set
-`BORONDNS_RELEASE_PREFLIGHT_MEMORY` to another explicit Docker memory value when
-needed.
+The launcher bundles the selected commit into a digest-pinned Ubuntu 24.04 tool
+container. It uses a 32 GiB memory/swap limit by default; override it with
+`BORONDNS_RELEASE_PREFLIGHT_MEMORY` when needed. The container uses host
+networking and mounts the Docker socket plus a temporary workspace for nested
+package tests. Docker-socket access carries host root authority, so this
+rehearsal is for reviewed source.
 
-The rehearsal runs version and release-policy checks, publication recovery
-fault injection, two-build binary reproducibility, installer construction,
-Ubuntu and Alpine installer smokes, Docker-image construction and runtime
-smoke, required binary and Docker SBOM generation, static-link checks, and the
-final unsigned handoff/34-asset publication-plan validation. It deliberately
-does not create a tag, request an OIDC identity, sign an artifact, call the
-GitHub API, or publish anything. OIDC signing and GitHub upload therefore remain
-the only release operations that cannot be completed locally.
+The rehearsal covers release/version policy, publication recovery fault
+injection, static-binary reproducibility, installer construction, Ubuntu/Alpine
+installer smoke tests, DEB and RPM lifecycle tests, Docker image smoke testing,
+SBOM generation, static-link checks, and handoff validation. The current plan
+contains 12 unsigned files and 13 published assets after the manifest's Sigstore
+bundle is added. It does not request OIDC credentials or publish to GitHub.
 
-Use `scripts/package-installer.sh` to build the release installer archive,
-standalone `borondns` and `boron-gun` binaries, package manifest, static-link
-reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the
-installer in Ubuntu, including install, update, config validation,
-`boron-gun --self-test`, and startup.
+The individual commands are useful when a change affects only one part:
 
-Both installer and Docker packaging fail closed when Git reports any modified
-or untracked, non-ignored source. They revalidate the exact commit and complete
-worktree status across build and publication boundaries. The
-`BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` override exists only for local
-development diagnostics: affected manifests record `source_clean=0`,
-`release_eligible=0`, and `dirty_source_override=1`, and Docker images carry
-matching source-clean and release-eligibility labels. The override is rejected
-under GitHub Actions and must never appear in the tagged release workflow.
-Likewise, `BORONDNS_PACKAGE_ALLOW_DYNAMIC=1` is a local diagnostic override:
-even on a clean tree it forces `release_eligible=0`, records
-`dynamic_link_override=1`, and publishes only in the `-nonrelease-dynamic`
-artifact and image-tag namespace. It is also rejected under GitHub Actions.
+| Output or check | Commands |
+| --- | --- |
+| Installer and raw static binaries | `scripts/package-installer.sh`; `scripts/test-installer-docker.sh` |
+| Debian/Ubuntu amd64 package | `scripts/package-deb.sh`; `scripts/test-deb-package-docker.sh` |
+| Fedora/RHEL-compatible x86_64 package | `scripts/package-rpm.sh`; `scripts/test-rpm-package-docker.sh` |
+| Alpine Docker image archive | `scripts/package-docker-image.sh`; `scripts/test-docker-image.sh` |
+| Binary CycloneDX SBOMs | `scripts/package-sbom.sh` |
+| Binary and Docker SBOMs | `BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh` |
 
-Installer, SBOM, and Docker package builders capture the device, inode, owner,
-and directory type of every private run/staging root that may later be removed
-recursively. Normal completion and failure rollback both revalidate that exact
-identity immediately before cleanup. In a packaging-UID-writable namespace,
-logical cleanup ends with an exact no-replace rename to a unique
-`*.borondns-remove.*` quarantine. The builder reports that retained path and
-its captured `device:inode:owner:type`, plus the immediate parent path and parent
-identity. Recovery journals persist those four values in the indexed
-`retained_removal_quarantine_N*` fields. The journal parent directory is bound
-to `publication_recovery_root_identity`; retained objects beneath it also carry
-root-relative object and parent paths. If a same-process retry later quarantines
-that whole root, the diagnostic path is identity-revalidated and rebased while
-the immutable journal remains resolvable through its current parent directory.
-The original absolute fields remain historical evidence. The builder never
-performs a later pathname `unlink` or `rmdir`; remove it only during
-privileged or dedicated-UID reconciliation where the packaging UID cannot swap
-the victim. If a same-UID process replaces either the private path or its
-quarantine, packaging exits nonzero and preserves the replacement and displaced
-recovery state for inspection; a failed post-move revalidation reports only the
-unverified parent namespace and does not claim an exact retained identity.
-Unique quarantine names and removal of the
-obsolete source binding from live package state let later staging runs proceed
-without adopting or overwriting retained objects.
-An interrupted recovery-diagnostic write likewise retains its uniquely named
-`.publication-recovery-incomplete-*` inode instead of attempting a raceable
-cleanup unlink; stderr identifies the exact path, object identity, parent path,
-and parent identity when post-write revalidation succeeds, or only the
-unverified parent namespace when it does not.
-Cargo-cyclonedx's fixed worktree outputs are identity-bound renamed into unique
-`*.borondns-remove.*` paths under the already locked Git metadata root. This
-keeps retained evidence outside Git source-status accounting without using a
-copy-and-unlink fallback; an unsupported cross-filesystem layout fails closed
-and retains the source pathname with the same object/parent identity evidence
-when it can still be revalidated. A later invocation never imports a prior
-stderr or journal record as mutation authority.
-Transactional artifact publication applies the same object-identity binding to
-regular-file backups and promoted files immediately before rollback removal,
-restore, or committed backup cleanup. Docker packaging creates private run
-roots only after preflight and gives one EXIT cleanup path sole ownership of
-both its run root and installer-publication staging root on success, failure,
-and signals.
+Release binaries use `x86_64-unknown-linux-musl` with
+`borondns-cli/af-xdp,boron-gun/xdp`. The server's AF_XDP backend remains
+experimental and opt-in. Docker packaging builds its inputs separately under
+`target/docker-installer-input/` so it does not overwrite the installer assets
+already tested in `target/dist/`.
 
-Use `scripts/package-docker-image.sh` to build and export the Docker image
-archive, image manifest, inspect JSON, and SHA-256 file. Use
-`scripts/test-docker-image.sh` to smoke the image with a read-only root
-filesystem, dropped capabilities, `no-new-privileges`, health endpoints, and
-metrics.
-Docker packaging rebuilds its image input in the isolated
-`target/docker-installer-input/` directory. It must not reuse or overwrite the
-installer archive and raw binaries in `target/dist/`, because those exact
-publishable files have already passed the installer smoke test.
-The image manifest records both the reviewed digest-pinned Alpine base reference
-and its resolved `sha256` digest; retain those fields with the other release
-evidence so the published image can be traced to the exact platform manifest.
-The build also captures Docker's immutable image ID through `--iidfile`; inspect,
-archive export, archive reload verification, and the required Syft scan all use
-that ID. A mutable tag is checked against it before and after packaging, and tag
-drift aborts publication rather than mixing evidence from two images.
-Before an exported archive reaches the Docker daemon,
-`scripts/verify-docker-archive.py` streams it under a single absolute
-`CLOCK_BOOTTIME` deadline and hard upper bounds for member count, individual and
-total expanded bytes, and retained JSON. Callers may lower those bounds through
-the `BORONDNS_DOCKER_ARCHIVE_*` environment variables, but cannot raise the
-compiled maxima. Links, special files, duplicate or non-canonical members,
-digest mismatches, and archives exceeding any bound fail closed.
+## Reproducibility and Recovery
 
-Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
-files for the two shipped release binaries. The Cargo SBOM pass uses
-`cargo-cyclonedx` against the workspace lockfile, the musl release target, and
-the shipped feature set `borondns-cli/af-xdp,boron-gun/xdp`. Server AF_XDP is
-present as a separately qualified, experimental, opt-in backend; the standard
-UDP backend remains the supported default. The script also writes
-`target/dist/borondns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
-with the source, feature set, tool version, path, and hash for each SBOM.
+`scripts/reproducible-build-compare.sh` builds the two static binaries twice in
+separate target directories with fixed build metadata and `SOURCE_DATE_EPOCH`.
+It retains manifests, digest comparisons, and a summary under
+`target/evidence/reproducible-build-...`. It rejects modified or untracked
+source and checks that the source state stays unchanged across the run.
 
-Set `BORONDNS_SBOM_DOCKER=1` after `scripts/package-docker-image.sh` to require
-Syft and add a CycloneDX JSON SBOM for the release Docker image. Tagged GitHub
-release builds run this required Docker SBOM mode and attach the binary SBOMs,
-Docker image SBOM, their SHA-256 files, and the SBOM manifest to the release.
-The tagged workflow uses three exact GitHub-hosted jobs. A `contents: read`
-verification runner executes Continuous and emits only its verified commit. A
-new `contents: read` packaging runner checks out that exact commit and therefore
-inherits no environment, background process, or mutable tool state from
-Continuous. It passes the publishable files plus a public SHA-256 handoff
-manifest and a separate internal manifest covering the reproducibility records
-and their two validators. Both manifest SHA-256 values are carried as
-authenticated job outputs and checked before any signing. The internal records
-are signing inputs only; they do not expand the published release-asset surface
-or the public handoff manifest.
-The workflow relies on the pinned download action's transport integrity plus
-that independent manifest, rather than exposing an artifact-digest output that
-the download action cannot compare against an expected value.
-Every automatic release begins from an annotated `v*` tag signed by Tibor
-Dravecz's repository-trusted OpenPGP key, fingerprint
-`E72382CD34A6DBC21070BAB1A0F90CBE53C07CA9`. The verification job imports only
-the checked-in public key, requires `git verify-tag` to report exactly that
-fingerprint, and checks that the tag peels to `GITHUB_SHA`. The private key is
-never stored in GitHub Actions. This signature records human authorization of
-the exact release commit; the independent keyless Sigstore bundles below bind
-the generated artifacts to the GitHub build identity.
-The release binaries are built on that fresh packaging runner in a freshly
-recreated, release-only Cargo target directory, so ignored fingerprints or
-executables from verification cannot be reused for packaging. The signing job installs the
-commit-pinned Cosign action before downloading and fully verifying the handoff;
-no executable or action step is allowed between verification and signing.
-Only that short signing/publishing job receives `contents: write` and
-`id-token: write`, and it neither checks out nor executes repository or built
-code. The workflow publishes one checksum manifest covering every released
-artifact, keylessly signs that manifest with Cosign, and attaches
-`release-handoff.sha256.sigstore.json`. Generated release notes include a
-`cosign verify-blob` command constrained to the GitHub Actions
-OIDC issuer and this repository's tagged `release-installer.yml` workflow
-identity. Release acceptance must verify that manifest once, verify every
-downloaded artifact against it, and retain the verification output; the existence of workflow
-YAML alone does not close the signing evidence gap.
-GitHub release API mutations run through `scripts/release-api-supervisor.py`.
-Each call receives one absolute operation deadline, blocks cancellation signals
-before spawning a new process group, and waits for an explicit parent-authority
-token before it may start `gh`. Cancellation or timeout terminates and reaps the
-whole group; an API leader that exits while descendants remain is a failed
-operation. This closes the shell's spawn-to-PID window for release mutations.
-Release tags are an immutable provenance boundary: create them with
-`git tag -s vVERSION COMMIT -m "BoronDNS VERSION"`, and repository rules must
-protect `v*` tags from force-update and deletion after creation. The publishing job peels
-the remote tag to its commit immediately before release creation and again
-immediately afterward. If the second lookup fails or differs from the event
-commit, it deletes the just-created release and fails. That rollback is a final
-race detector, not a substitute for protected immutable tags; an environment
-that permits tag rewrites is not release-eligible.
-The verification and packaging jobs resolve Cargo and rustc through the pinned
-rustup toolchain, record their SHA-256 identities, and invoke the resolved
-absolute paths. The package manifest records stable executable names plus those
-digests; a competing PATH `cargo` cannot proxy a release build, and absolute
-host paths do not make otherwise identical archives differ.
-For installer acceptance, run verification before extraction or privilege:
+The tagged workflow repeats this comparison for its checked-out commit, validates
+it with `scripts/verify-release-reproducibility.py`, and compares both retained
+builds byte-for-byte with the packaged raw binaries before signing. It also
+compares repeated DEB and RPM builds. These results do not establish identical
+installer or Docker archives, or independent-builder agreement.
+
+Packaging requires clean source. The diagnostic overrides
+`BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1`,
+`BORONDNS_PACKAGE_ALLOW_DYNAMIC=1`, and
+`BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1` produce explicitly
+ineligible results. The packaging overrides are rejected under GitHub Actions.
+
+Packaging tracks the identity of staging objects and retains uncertain recovery
+state instead of deleting through a changed pathname. If a command reports a
+`*.borondns-remove.*` quarantine or `.publication-recovery-incomplete-*` file,
+retain the reported object/parent identities and logs. Reconcile it under
+privileged or dedicated-UID control; a stale journal or path alone is not
+authorization to remove files. See `scripts/package-common.sh` and
+`scripts/test-package-publication-recovery.sh` for the implementation and tests.
+
+Docker evidence binds the digest-pinned Alpine base and immutable image ID to
+the exported archive and Syft scan. `scripts/verify-docker-archive.py` validates
+archive contents, digests, size limits, and an absolute deadline before daemon
+loading. The image smoke checks read-only root operation, dropped capabilities,
+no-new-privileges, health, and metrics.
+
+## What the Tag Workflow Executes
+
+The [release workflow](../.github/workflows/release-installer.yml) runs
+automatically for `v*` tag pushes. Manual dispatch is also available. Branch
+pushes and pull requests do not trigger it.
+
+| Job | Checks and authority |
+| --- | --- |
+| Verify source | Checks clean source, commit and toolchain identity; for tags, checks the Cargo version and trusted annotated-tag signature. Read-only repository access. |
+| Package release | Uses a fresh checkout of that commit; builds reproducible static binaries and packages, runs package smoke/lifecycle checks, and creates SBOMs plus checksum manifests. Read-only repository access. |
+| Sign and publish | Verifies the handoff, signs its public checksum manifest with Cosign, and publishes the release. This job alone has repository write and OIDC permissions. |
+
+The workflow does **not** run `scripts/check.sh` or
+`scripts/check-release-notes.sh`. Retain the local quality-gate result before
+tagging. A green workflow proves its source, packaging, signing, and publication
+checks passed; it does not establish complete SRS acceptance.
+
+Automatic releases require an annotated tag signed by Tibor Dravecz's trusted
+OpenPGP key:
+
+```text
+E72382CD34A6DBC21070BAB1A0F90CBE53C07CA9
+```
+
+The checked-in public key verifies the tag and its target commit. The private
+key is not stored in Actions. Create a tag with
+`git tag -s vVERSION COMMIT -m "BoronDNS VERSION"`; protect `v*` tags against
+updates and deletion. The publisher checks the remote tag before and after
+release creation and rolls back a newly created release if the second check
+fails or the target changed.
+
+Packaging passes a public checksum manifest and a separate internal manifest
+for reproducibility evidence and validators. Their hashes are authenticated job
+outputs. The signing job verifies both and signs only
+`release-handoff.sha256`. The public release includes its bundle,
+`release-handoff.sha256.sigstore.json`; individual artifact sidecars and
+per-artifact signatures are not published. Local package scripts still generate
+SHA-256 sidecars for direct checks.
+
+The signing job does not check out the repository or run the shipped binaries.
+It executes the authenticated validation and publishing helpers from the handoff,
+along with the signing and GitHub tools. API mutations use the deadline
+supervisor to stop and reap command descendants on timeout or cancellation.
+These controls and their fault-injection coverage are checked by
+`scripts/check-release-signing-policy.py`.
+
+## Verify Published Artifacts
+
+Download the release's checksum manifest, its Sigstore bundle, and all files
+listed by the manifest into one directory. Verify before extracting or
+installing anything:
 
 ```sh
-tag=v0.2.0
-asset="borondns-${tag#v}-x86_64-unknown-linux-musl.tar.xz"
+tag=v1.0.0
 cosign verify-blob \
   --bundle release-handoff.sha256.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/Integrity-Ltd/BoronDNS/.github/workflows/release-installer.yml@refs/tags/$tag" \
   release-handoff.sha256
-sha256sum --ignore-missing -c release-handoff.sha256
+sha256sum -c release-handoff.sha256
 ```
 
-The recorded tag, identity, bundle, asset digest, Cosign output, and time of
-verification belong in the release evidence. A failed or cross-tag identity
-must stop acceptance before `tar` or `sudo` is run.
-Local release snapshots use `BORONDNS_SBOM_DOCKER=0` by default so they retain
-binary SBOM evidence without requiring a local Docker daemon.
+Use the tag whose artifacts you downloaded. Retain the tag, expected workflow
+identity, verification output, artifact digests, and verification time. A failed
+signature, wrong tag identity, or checksum mismatch blocks acceptance.
 
-The v0.2.0 retained package/image smoke bundle is recorded in
-`docs/package-docker-smoke-v0.2.0.md` and lives under
-`target/evidence/package-docker-smoke-20260616T173146Z`. A passing smoke bundle
-verifies package/image creation and runtime smoke behavior only; archive
-reproducibility, Docker image archive reproducibility, public artifact signing,
-and independent-builder sign-off remain separate release-governance work.
+## Historical Evidence
 
-For the 1.0 public-beta gate, release authorization and review scope are retained
-in canonical release evidence. If an external operator review is available, its
-scope and conclusions may be retained as supporting evidence; `BDS-VER-008` and
-`BDS-VER-015` do not require one or require it to be copied into public notes.
+Older reports describe their recorded versions and environments:
 
-## Primary Interop Evidence
+- [v0.2.0 reproducible static binaries](reproducible-build-v0.2.0.md)
+- [v0.2.0 package and Docker smoke tests](package-docker-smoke-v0.2.0.md)
+- [v0.2.0 XoT interoperability](xot-release-evidence-v0.2.0.md)
 
-The Operator Deployment Guide lists the day-one primary interoperability scripts
-operators are most likely to run directly. The full command inventory consumed
-by the release snapshot is `docs/evidence-command-catalog.md`; that file is the
-source for the broader `BORONDNS_EVIDENCE_RUN_INTEROP=1` command set.
-
-Retain each successful real-primary run's `primary-version.txt`, redacted
-configuration, relevant packet/log artifacts, and traceability TSVs when the
-script produces them. Release notes must publish the primary versions and
-configuration modes used for accepted interop evidence.
-
-## XoT Release Evidence
-
-For the selected v0.2.0 XoT breadth run, retain the outputs from:
-
-- `scripts/interop-knot-xot-docker.sh`
-- `scripts/interop-knot-xot-tsig-docker.sh`
-- `scripts/interop-bind-xot-catalog-zone-docker.sh`
-
-The current retained bundle is recorded in `docs/xot-release-evidence-v0.2.0.md`
-and lives under `target/evidence/xot-release-20260614T014700Z`. The bundle
-keeps per-case status/log files, `primary-version.txt`, ALPN probes,
-certificate summaries, readiness/metrics/query artifacts, and per-case
-traceability TSVs. TSIG and RNDC-bearing artifacts must be retained only in
-redacted form, and the retained bundle should pass a direct scan for fixture
-secret values before it is cited in release notes.
+The XoT report covers Knot XoT, Knot XoT with TSIG, and BIND XoT catalog
+scenarios. Retain certificates, ALPN results, primary versions, logs, and query
+results with secrets redacted. Check fixture TSIG/RNDC secrets are absent before
+sharing any bundle.

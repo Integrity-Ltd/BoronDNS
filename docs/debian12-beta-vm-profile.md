@@ -1,77 +1,87 @@
-# Debian 12 Beta VM Container Profile
+# Debian 12 VM: container with host networking
 
-Status: deployment-profile note for beta-test VM handover.
+This profile runs the release Docker image inside an operator-managed Debian 12
+VM. The repository does not supply a VM image. The VM owner maintains Docker
+CE, SSH access, time synchronization, and host firewall rules; `fail2ban` may
+be useful for SSH policy but is not a BoronDNS dependency.
 
-The repository does not ship a VM image, but the release Docker image archive is
-usable as the BoronDNS payload inside a Debian 12 beta-test VM. In this profile,
-the VM owner prepares the operating system, Docker CE, `nftables`, `fail2ban`,
-time synchronization, SSH access, and three interface roles outside this
-repository:
+Use host networking when BoronDNS must bind role-specific VM addresses
+directly. For ordinary port publishing, use the
+[bridge-network example](operator-deployment-guide.md#run-the-docker-image).
 
-- DNS query interface: inbound UDP/TCP 53.
-- Zone-transfer interface: outbound TCP 853 for XoT, or TCP 53 for cleartext
-  fallback when explicitly configured.
-- Management interface: SSH and local-only health/metrics access, usually
-  through an SSH tunnel.
+## Network and primary
 
-This VM is the secondary DNS server under test. It requires at least one
-configured primary authoritative DNS server, such as a BIND 9 host, that serves
-the master copy of the test zone and allows AXFR/IXFR from the BoronDNS VM. The
-primary should be authoritative-only for this test role: it should not provide
-recursive resolution, and it should be reachable only from the test BoronDNS
-addresses. Allow UDP/TCP 53 to the BoronDNS DNS interface, outbound TCP 53 or
-853 from BoronDNS to the primary, authorized NOTIFY from the primary, and ICMP
-Path MTU messages, including IPv4 Destination Unreachable / Fragmentation
-Needed (Type 3, Code 4) and ICMPv6 Packet Too Big.
+Prepare three roles, whether on separate interfaces or explicitly routed
+addresses:
 
-For this profile, prefer loading the release asset locally instead of relying on
-a registry during beta handover:
+| Role | Example | Access |
+| --- | --- | --- |
+| DNS | `192.0.2.10` | Inbound UDP/TCP 53 and authorized primary NOTIFY. |
+| Transfer | `192.0.2.11` | Outbound TCP to configured primaries, usually 53 or XoT 853. |
+| Management | `127.0.0.1:9080` | Host-local HTTP probes; remote operators use SSH tunneling. |
+
+Replace all example addresses with addresses actually assigned to the VM.
+The primary must host the zone and authorize AXFR/IXFR from the selected
+transfer source. Restrict transfer and NOTIFY paths to the intended peers.
+Permit ICMPv4 Fragmentation Needed and ICMPv6 Packet Too Big for Path MTU
+Discovery.
+
+Host-network containers share the host's network namespace. Docker `-p`
+publishing does not apply in this mode. Maintain the VM's `nftables` policy
+accordingly; do not expose management HTTP publicly. Changing Docker's global
+iptables/forwarding settings is not required by this profile and can break
+other containers on the host.
+
+## Load and configure
+
+[Verify the release manifest and artifact](operator-deployment-guide.md#verify-before-installation)
+before loading the image from the protected directory:
 
 ```sh
-# First verify release-handoff.sha256 and this archive against it as described
-# in docs/release-evidence-guide.md.
-xz -dc borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
-docker tag borondns:<version> borondns:beta
+sudo /bin/sh -c 'xz -dc "$1" | docker load' sh \
+  "$install_root/borondns-1.0.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+docker volume create borondns-state
 ```
 
-Use host networking only when the container must bind the VM's role-specific
-interface addresses directly. Keep Docker from altering the host firewall rules
-when `nftables` owns policy:
+Keep the versioned image name in the service definition so a mutable local
+alias cannot accidentally change the deployed version.
 
-```json
-{
-  "iptables": false,
-  "ip-forward": false,
-  "log-driver": "journald"
-}
-```
-
-Because the published image defaults to an unprivileged user, a host-network
-deployment that binds port 53 can either keep the default high-port container
-configuration and publish host port 53, or grant only `CAP_NET_BIND_SERVICE`
-and run the container as root only long enough for BoronDNS to bind privileged
-sockets and then drop privileges through `[process].run_as_user = "borondns"`.
-The second form matches a
-three-interface beta VM where Docker port publishing is not used:
+In the complete configuration, set:
 
 ```toml
+[server]
+zone_cache_directory = "/var/lib/borondns/zones"
+
 [process]
 run_as_user = "borondns"
 disable_core_dumps = true
 no_new_privileges = true
 
 [interfaces]
-dns = [{ address = "192.0.2.10:53", name = "eth0" }]
-mgmt = ["127.0.0.1:9080"]
+dns = ["192.0.2.10:53"]
 transfer = ["192.0.2.11:0"]
+
+[health]
+bind_address = "127.0.0.1"
+bind_port = 9080
 ```
 
-A systemd-managed container unit for that beta profile should be shaped like
-this:
+Add the actual zones, primaries, and credentials. Ensure the mounted
+configuration and secret files are readable by the image's `borondns` account
+(UID/GID 53053), with appropriate secret-file permissions.
+
+The process below starts as root only to bind port 53 and then drops to
+`borondns` before serving. It needs `CAP_NET_BIND_SERVICE` for binding and
+`SETUID`/`SETGID` for that drop. Supplying only the bind capability while
+requesting a UID/GID change would fail startup.
+
+## Supervise the container
+
+Use a systemd unit such as `/etc/systemd/system/borondns-container.service`:
 
 ```ini
 [Unit]
-Description=BoronDNS secondary DNS server beta container
+Description=BoronDNS container
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -82,34 +92,39 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
 TimeoutStopSec=35s
-ExecStartPre=-/usr/bin/docker rm -f borondns
 ExecStart=/usr/bin/docker run \
   --name borondns \
   --rm \
   --network host \
   --read-only \
   --ulimit nofile=65536:65536 \
-  --tmpfs /tmp:rw,size=32m \
-  --tmpfs /run:rw,size=8m \
   --cap-drop ALL \
   --cap-add NET_BIND_SERVICE \
+  --cap-add SETUID \
+  --cap-add SETGID \
   --security-opt no-new-privileges \
   --pids-limit 128 \
   --user 0:0 \
-  -v /etc/borondns-secondary:/etc/borondns-secondary:ro \
-  borondns:beta \
-  serve --config /etc/borondns-secondary/config.toml
-ExecStop=/usr/bin/docker stop borondns
+  --mount type=volume,src=borondns-state,dst=/var/lib/borondns \
+  --mount type=bind,src=/etc/borondns-secondary,dst=/etc/borondns-secondary,readonly \
+  borondns:1.0.0 serve --config /etc/borondns-secondary/config.toml
+ExecStop=/usr/bin/docker stop --time 30 borondns
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-This beta profile intentionally keeps the Alpine-based image inspectable with
-`docker exec` for troubleshooting. Release packaging pins the image base to the
-reviewed platform manifest
-`alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6`.
-`BORONDNS_DOCKER_ALPINE_BASE_IMAGE` is accepted only when it equals that exact
-reference, and the retained image manifest records both `base_image` and
-`base_image_digest`; do not treat the Alpine choice as part of the BoronDNS
-runtime compatibility contract.
+The named volume persists across `--rm` container removal. Keep the supervisor
+timeout longer than BoronDNS's configured shutdown grace period, and adjust
+Docker's stop timeout if that period changes. Confirm no unrelated container
+already uses the name `borondns` before starting this unit.
+
+After starting, check `curl -fsS http://127.0.0.1:9080/readyz`, served SOA
+serials on both UDP and TCP, and the next primary refresh. Readiness alone does
+not establish that every expected zone is loaded.
+
+The image's pinned Alpine base and UID/GID setup live in
+[the Dockerfile](../packaging/docker/Dockerfile). Package metadata records
+`base_image` and `base_image_digest`; the current builder rejects
+`BORONDNS_DOCKER_ALPINE_BASE_IMAGE` values other than its reviewed pin.
+Update images through the release verification process.

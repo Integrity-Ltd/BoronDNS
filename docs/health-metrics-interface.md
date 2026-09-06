@@ -1,235 +1,176 @@
-# Health and Metrics Interface
+# Health and metrics
 
-Status: current interface contract for `BDS-IF-HEALTH-001..006` and
-`BDS-NFR-OBS-003..009`.
+BoronDNS exposes HTTP probes and Prometheus metrics on its management
+listeners. Keep those listeners on loopback or a private management network;
+these endpoints are plain HTTP and unauthenticated. The optional
+[observability API](observability-api.md) has separate bearer-token support.
 
-This document owns the concrete HTTP shape of the BoronDNS health and metrics
-endpoint. The SRS owns the normative requirement IDs; this document keeps the
-path, body, header, rate-limit, and evidence details in one place so the SRS and
-operator guide do not duplicate them.
+## Listener configuration
 
-## Scope
+```toml
+[health]
+bind_address = "127.0.0.1"
+bind_port = 8080
+metrics_rate_limit_per_minute = 60
+metrics_rate_limit_idle_seconds = 300
+max_connections = 128
+```
 
-The endpoint is plain HTTP/1.1, unauthenticated, and intended for private
-management networks, local probes, or an orchestrator-side proxy. It is enabled
-only when configured. When enabled, bind precedence is:
+An explicit bind address and port must be set together. They override legacy
+`server.health`, which in turn overrides `interfaces.mgmt`. Management
+interface IPs use `health.default_port` (8080 by default), not the port written
+in those interface entries. With no configured source, no management listener
+is opened.
 
-1. Explicit `[health].bind_address` and `[health].bind_port`.
-2. `interfaces.mgmt` with `[health].default_port`.
-3. Localhost addresses with `[health].default_port`.
+## Probes
 
-`/livez`, `/readyz`, and `/healthz` are probe endpoints and are never
-rate-limited. `/metrics` is rate-limited per source IP.
+| GET path | Meaning | Response |
+| --- | --- | --- |
+| `/livez` | The process can answer a probe, including during initial loading and drain. | 200 |
+| `/readyz` | At least one served zone is ACTIVE and the runtime is running. | 200 if ready; otherwise 503 |
+| `/healthz` | Alias for `/readyz`. | Same as readiness |
+| `/metrics` | Prometheus scrape. | 200, or 429 when rate-limited |
 
-## Paths
+Readiness is not an all-zones check. A secondary serving one active zone can
+return 200 while other zones are loading or expired. Use per-zone metrics and
+external DNS probes for complete coverage.
 
-| Path | Method | Success status | Failure status | Body type | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `/livez` | `GET` | `200` | no response or HTTP 5xx only when the endpoint task cannot answer | JSON | Liveness only. It remains live while zones are loading and while shutdown is draining. |
-| `/readyz` | `GET` | `200` when at least one explicit or catalog-derived zone is ACTIVE and the process is not draining | `503` for not-ready, draining, or unhealthy | JSON | Readiness for receiving authoritative DNS traffic. |
-| `/healthz` | `GET` | Same as `/readyz` | Same as `/readyz` | JSON | Readiness alias kept for compatibility. |
-| `/metrics` | `GET` | `200` | `429` when per-source scrape limit is exceeded | Prometheus text or JSON error | Emits uncompressed text by default and gzip when requested. |
-| all other paths | `GET` or other methods | none | `404` | JSON | Unknown path. |
-| known paths with non-`GET` methods | non-`GET` | none | `405` | JSON | `HEAD` is intentionally rejected like other non-`GET` methods. |
-
-## Probe Bodies
-
-`/livez` returns:
+All probe bodies use `Content-Type: application/json`. Typical responses:
 
 ```json
 {"status":"alive","version":"<version>","uptime_seconds":12345}
 ```
 
-`/readyz` and `/healthz` return one of the following bodies.
-
-Ready:
-
 ```json
-{"status":"ready","version":"<version>","zones_active":1234,"zones_loading":12,"zones_expired":0}
+{"status":"ready","version":"<version>","zones_active":12,"zones_loading":0,"zones_expired":0}
 ```
 
-Not ready:
-
 ```json
-{"status":"not-ready","reason":"loading","version":"<version>","zones_active":0,"zones_loading":42,"zones_expired":0}
+{"status":"not-ready","reason":"loading","version":"<version>","zones_active":0,"zones_loading":12,"zones_expired":0}
 ```
 
-The stable `reason` values currently include `loading`, `expired`, and
-`no_active_zones`.
-
-Draining:
+The not-ready reasons are `loading`, `expired`, and `no_active_zones`.
+During shutdown:
 
 ```json
 {"status":"draining","version":"<version>","grace_period_remaining_seconds":15}
 ```
 
-Unhealthy:
+An unhealthy runtime returns:
 
 ```json
 {"status":"unhealthy","version":"<version>"}
 ```
 
-All probe responses use `Content-Type: application/json`.
-
-Every accepted management connection is subject to fixed five-second absolute
-request-read and response-write deadlines. Read progress does not extend the
-absolute request deadline, and write progress does not extend the response
-deadline. A stalled client is disconnected and releases its globally bounded
-connection slot; these defensive deadlines are not operator-configurable.
+Use liveness to detect a non-responsive process and readiness to decide whether
+it should receive traffic. Do not restart a healthy process merely because its
+primary is temporarily unavailable and readiness is false.
 
 ## Metrics
 
-`/metrics` emits Prometheus text exposition with
-`Content-Type: text/plain; version=0.0.4; charset=utf-8`. If the request
-contains an `Accept-Encoding` value that allows `gzip`, the response includes
-`Content-Encoding: gzip` and `Vary: accept-encoding`. A request that sets
-`gzip;q=0` receives uncompressed text.
+A scrape returns Prometheus text with
+`Content-Type: text/plain; version=0.0.4; charset=utf-8`. An explicit
+`Accept-Encoding: gzip` request enables gzip and adds
+`Content-Encoding: gzip` and `Vary: accept-encoding`; `gzip;q=0` leaves the
+body uncompressed.
 
-The metrics endpoint exposes these implemented metric families:
+Start with these metric families:
 
-- configured and active zone gauges;
-- first-party metrics use the `borondns_` prefix; selected stable
-  SRS-facing compatibility families retain the `borondns_secondary_` prefix
-  where named below;
-- SRS v1.0.0 per-zone status series:
-  `borondns_secondary_zone_state`,
-  `borondns_secondary_zone_loading_seconds` (seconds the zone has been in
-  LOADING state during this process uptime),
-  `borondns_secondary_zone_soa_serial`,
-  `borondns_secondary_zone_last_refresh_seconds`,
-  `borondns_secondary_zone_next_refresh_seconds`,
-  `borondns_secondary_zone_refresh_failures`, and
-  `borondns_secondary_queries_total{zone="..."}`;
-- catalog membership gauges:
-  `borondns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`;
-- transfer counters (`borondns_transfer_sessions_started_total`,
-  `borondns_transfer_sessions_completed_total`,
-  `borondns_transfer_sessions_failed_total`), query counters, truncation
-  counters, CNAME limit/loop counters, global and per-zone RCODE counters
-  (`borondns_query_responses_total`,
-  `borondns_zone_query_responses_total`,
-  `borondns_secondary_query_responses_total`), NOTIFY counters, TSIG
-  verification counters for authorized NOTIFY, DNS Cookie counters, RRL
-  counters, the `borondns_secondary_build_info` gauge, the
-  `borondns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and
-  the `borondns_chaos_queries_total` outcome counter for CH-class diagnostics;
-- standard UDP packet I/O counters:
-  `borondns_udp_receive_batches_total`,
-  `borondns_udp_received_datagrams_total`, `borondns_udp_send_batches_total`,
-  and `borondns_udp_sent_datagrams_total`;
-- `borondns_secondary_query_duration_seconds` query latency histogram, with
-  up to 64 strictly increasing buckets configured by
-  `[metrics].latency_histogram_buckets`;
-- opt-in active-zone shape gauges and fixed-bucket layout histograms under
-  `borondns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
-  RDATA records per RRset, and RDATA payload bytes per RRset;
-- opt-in per-zone DNSSEC denial lookup-mode gauges under
-  `borondns_zone_image_denial_range_groups{proof,mode}`, where `proof` is
-  `nsec` or `nsec3` and `mode` is `indexed` or `fallback`; a non-zero fallback
-  value makes a conservatively scanned malformed or incomplete ring visible;
-- immutable-zone-image serving counters under `borondns_zone_image_serve_*`;
-- opt-in query-pipeline histograms and response-cache candidate counters.
+| What to monitor | Metrics |
+| --- | --- |
+| Zone counts | `borondns_zones_total`, `borondns_zones_active` |
+| Per-zone availability | `borondns_secondary_zone_state`, `borondns_secondary_zone_loading_seconds` |
+| Serial and freshness | `borondns_secondary_zone_soa_serial`, `borondns_secondary_zone_last_refresh_seconds`, `borondns_secondary_zone_next_refresh_seconds`, `borondns_secondary_zone_refresh_failures` |
+| Transfer outcomes | `borondns_transfer_sessions_started_total`, `borondns_transfer_sessions_completed_total`, `borondns_transfer_sessions_failed_total`, with AXFR/IXFR protocol labels |
+| Query volume | `borondns_queries_received_total`, `borondns_secondary_queries_total{zone="..."}` |
+| Response codes | `borondns_query_responses_total`, `borondns_zone_query_responses_total`, `borondns_secondary_query_responses_total` |
+| Latency | `borondns_secondary_query_duration_seconds` |
+| RRL outcomes | `borondns_rrl_responses_subject_total`, `borondns_rrl_responses_dropped_total`, `borondns_rrl_responses_truncated_total` |
+| Catalog membership | `borondns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}` |
+| Configuration/build | `borondns_secondary_configuration_warnings_total`, `borondns_secondary_build_info` |
 
-`[metrics].hot_path_detail = "full"` is the default and preserves all detailed
-query, RCODE, latency, zone, and DNS Cookie prefix metric series. For high-rate
-benchmark or packet-I/O experiments, `[metrics].hot_path_detail = "reduced"`
-keeps coarse process-wide counters such as received queries, truncation,
-DNS Cookie case totals, UDP batch/datagram totals, and ZoneImage serve
-counters, but suppresses mutex-backed hot-path detail: per-zone query maps,
-global and per-zone RCODE maps, query latency histograms, DNS Cookie
-source-prefix maps, and pipeline/cache-planning histograms. Reduced mode is an
-observability/performance tradeoff and does not change DNS answer behavior.
-`[metrics].hot_path_detail = "off"` also suppresses coarse query, UDP packet-I/O,
-and ZoneImage serve counters and is reserved for saturation profiling where
-counter contention would distort packet-path results. Use external benchmark
-logs and kernel packet-drop counters as the packet-loss source of truth in this
-profile.
+The scrape's HELP and TYPE lines describe the remaining counters, including
+NOTIFY authorization, TSIG outcomes, DNS Cookies, truncation, CNAME loops,
+UDP batch/datagram I/O, and query-image serving. Metrics are process-local;
+restart resets counters and does not restore monitoring history.
 
-The current `borondns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
-driven by the lookup-time NSEC3 cap observation rather than serialized EDE
-options. Over-cap fail-closed SERVFAIL responses remain counted with
-`edns.extended_dns_errors = "off"` even when EDE INFO-CODE 27 is absent from
-the response.
+`borondns_secondary_zone_loading_seconds` reports process uptime for a zone
+still LOADING, and zero for ACTIVE or EXPIRED zones. It is useful for initial
+loading alerts, not a durable duration across restarts. The scheduler also logs
+`zone_loading_threshold_exceeded` at
+`limits.zsm_loading_warning_threshold_secs` (default 3600 seconds).
 
-The opt-in metric families may walk active zone snapshots or collect extra
-pipeline timing. Keep `[metrics].zone_shape_enabled` and
-`[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
-captures, and use `[metrics].hot_path_detail = "reduced"` only when the loss of
-detailed hot-path series is acceptable. These metrics do not enable a response
-cache or change the served answer path. Supported query shapes are served from
-immutable `ZoneImage` wire
-sections; plan, DNSSEC-plan, or response-build failures return an explicit
-ZoneImage SERVFAIL instead of falling back to the ordinary active-snapshot
-response path, while oversized supported UDP responses are truncated directly by
-the `ZoneImage` composer.
-Full-ANY response mode now serves supported QTYPE ANY queries through
-`ZoneImage`; non-ANY queries remain eligible for `ZoneImage`. The served-hit
-and failure counters
-make retained benchmark artifacts auditable: a ZoneImage-enabled run must show
-hits to prove it exercised the optimized path. Direct-answer and semantic-hit
-sub-counters distinguish the guarded hot direct-answer emitter from the generic
-semantic ZoneImage planner. Failures are also split by fixed reasons, so any
-remaining serve-error dependence can be ordered without adding per-query dynamic
-metric labels. Rollback responses are counted separately and should stay zero
-for ZoneImage-enabled retirement evidence.
+Latency buckets are configured in `metrics.latency_histogram_buckets`:
+at most 64 strictly increasing boundaries, in seconds. Measurements are server
+processing observations, not a substitute for client end-to-end latency.
 
-## Rate Limiting
+`borondns_dnssec_nsec3_iterations_exceed_cap_total` counts lookup-time NSEC3
+iteration-cap failures even when `edns.extended_dns_errors = "off"`.
+It does not require an emitted EDE option.
 
-`/metrics` uses `[health].metrics_rate_limit_per_minute` and
-`[health].metrics_rate_limit_idle_seconds`. Over-limit responses are:
+### Metrics detail
 
-- status `429`;
-- `Content-Type: application/json`;
-- `Retry-After: <seconds>`;
-- body:
+`metrics.hot_path_detail` controls the cost and completeness of query-path
+instrumentation:
+
+| Mode | Use and effect |
+| --- | --- |
+| `full` (default) | Detailed query, RCODE, latency, per-zone, and DNS Cookie prefix series. |
+| `reduced` | Coarse counters remain; per-zone query maps, RCODE maps, latency histograms, Cookie prefix maps, and pipeline detail are suppressed. |
+| `off` | Also suppresses coarse hot-path updates. Intended for saturation profiling, not operational monitoring. |
+
+Reduced/off series must not be interpreted as complete traffic counts. In
+saturation tests, retain generator results and kernel/NIC drop counters.
+
+Leave `metrics.zone_shape_enabled` and `metrics.pipeline_timing_enabled`
+disabled unless investigating a specific problem. Zone-shape metrics walk
+active snapshots; pipeline timing adds query-path work. The opt-in families
+include `borondns_zone_shape_*` and
+`borondns_zone_image_denial_range_groups{proof,mode}`. The latter distinguishes
+indexed denial rings from conservative fallback lookup. Response-cache
+candidate metrics are diagnostic; enabling them does not enable a response
+cache.
+
+`borondns_zone_image_serve_*` counters distinguish image hits, direct and
+semantic paths, and failures. Investigate internal plan/build failures that
+produce SERVFAIL. See [architecture](architecture.md) for compact images and
+large-zone overlay behavior.
+
+## Limits and errors
+
+Probe endpoints are never rate-limited. `/metrics` is limited per source IP
+using the two settings above. A proxy may therefore share one budget across
+many downstream scrapers. An over-limit scrape returns HTTP 429 with
+`Retry-After: <seconds>` and:
 
 ```json
 {"error":"rate_limited","retry_after_seconds":60}
 ```
 
-The limiter is per source IP address, not per RRL source prefix.
+`health.max_connections` bounds accepted connections across all management
+listeners. Excess connections close immediately. Fixed five-second absolute
+request-read and response-write deadlines disconnect stalled clients; progress
+does not extend either deadline.
 
-## Error Bodies
-
-Unknown paths return:
-
-```json
-{"error":"not_found","path":"<requested_path>"}
-```
-
-Known paths requested with a non-`GET` method return:
+Unknown paths return HTTP 404:
 
 ```json
-{"error":"method_not_allowed","path":"<requested_path>"}
+{"error":"not_found","path":"/unknown"}
 ```
 
-The `path` field is the current implemented body contract. The response status
-is intentionally specified by the SRS; generic HTTP compatibility details beyond
-the headers listed in this document are handled as interface hardening work when
-they are promoted into a requirement.
+Known paths with a non-GET method, including HEAD, return HTTP 405:
 
-## Evidence
+```json
+{"error":"method_not_allowed","path":"/readyz"}
+```
 
-Current code and local tests for this interface live in
-`crates/borondns-server/src/` (the module is declared in `lib.rs`):
+Error bodies also use `application/json`.
 
-- production symbols in `crates/borondns-server/src/health_metrics.rs`:
-  `health_router`, `livez`, `readyz`, `healthz`, `metrics`,
-  `rate_limited_response`, and `readiness_response`;
-- tests in `crates/borondns-server/src/tests/health_observability_runtime.rs`:
-  - `health_endpoint_reports_starting_until_zone_active`;
-  - `health_endpoint_handles_readyz_metrics_404_and_405`;
-  - `metrics_endpoint_rate_limits_per_source_without_limiting_health`;
-  - `health_endpoint_reports_draining_and_unready_during_shutdown`.
+## Implementation and checks
 
-Retained script evidence is captured by
-`scripts/capture-health-metrics-evidence.sh` and release snapshots.
-
-## References
-
-- Kubernetes liveness/readiness/startup probe documentation:
-  <https://kubernetes.io/docs/concepts/workloads/pods/probes/>
-- Prometheus exposition formats:
-  <https://prometheus.io/docs/instrumenting/exposition_formats/>
-- Prometheus scrape protocol content negotiation:
-  <https://prometheus.io/docs/instrumenting/content_negotiation/>
+The handlers and metric emission are in
+[health_metrics.rs](../crates/borondns-server/src/health_metrics.rs).
+[Runtime tests](../crates/borondns-server/src/tests/health_observability_runtime.rs)
+cover startup readiness, drain, HTTP errors, gzip, connection deadlines, and
+scrape rate limiting. `scripts/capture-health-metrics-evidence.sh` captures
+the interface from a running test deployment.

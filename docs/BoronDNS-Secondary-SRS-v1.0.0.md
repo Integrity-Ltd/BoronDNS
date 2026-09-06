@@ -1,112 +1,59 @@
-# Software Requirements Specification
+# BoronDNS Secondary — Software Requirements Specification
 
-## BoronDNS-Secondary
+**Baseline:** v1.0.0, 22 August 2026
 
-**Document Version:** v1.0.0
-**Date:** 22 August 2026
+**Last documentation review:** 6 September 2026
+
 **Status:** Requirements baseline for the BoronDNS 1.0.0 public beta. Requirements identified as future full-acceptance targets are not claims of completed 1.0 release evidence.
 
----
+This is the reference for required behaviour, protocol scope, and acceptance
+criteria. For installation and operation, start with the
+[operator guide](operator-deployment-guide.md). For what is implemented and
+verified, use the [feature scope](implemented-feature-scope.md),
+[verification ledger](verification-ledger.md), and
+[acceptance gaps](release-acceptance-gap-register.md).
 
-### Document Control
+The stable `BDS-*` identifiers let code, tests, and review findings refer to
+requirements without depending on prose or line numbers. A requirement in this
+document is a contract or acceptance target; its presence is not proof that
+every release has met it.
 
-| Field | Value |
+## Document control
+
+| Responsibility | Owner |
 |---|---|
-| Project | BoronDNS-Secondary |
-| Document | Software Requirements Specification (SRS) |
-| Version | v1.0.0 |
-| Date | 22 August 2026 |
-| Author | DT (Architect, Lead Developer) |
-| Reviewer | DTK (Sponsor, Reviewer) |
-| Tester | SzI (Alpha Tester) |
-| Related documents | Architecture Document; Test Plan; Operator Deployment Guide (per BDS-NFR-MAINT-009); verification ledger; gap register |
+| Architecture and implementation | DT |
+| Sponsor and review | DTK |
+| Testing | SzI and the DNS operations team |
+| Design decisions | [Architecture](architecture.md) and [decision register](project-decision-register.md) |
+| Verification procedures | [Test plan](test-plan.md) |
 
-### Revision History
+## Baseline history
 
-| Version | Date | Author | Changes |
-|---|---|---|---|
-| v0.1 | 23 May 2026 | DT | Initial draft assembled from working sessions. |
-| v0.2 | 24 May 2026 | DT | Added three-interface segregation as a formal SRS MVP requirement (BDS-IF-NET-005, -006, -007; BDS-IF-CONF-003 extended). Added post-MVP / v2 scope section (Appendix C.6) covering XDP/eBPF kernel bypass, optimised packed-binary zone store, and pre-baked response cache. |
-| v0.3 | 24 May 2026 | DT | Functional audit closure. Cross-reference fix in BDS-FR-QRY-002. Specification gaps: non-EDNS UDP ceiling, AA bit completeness, CNAME chain limit/loop semantics, TCP per-connection in-flight cap, AXFR/IXFR zone-size cap, pseudo-RR rejection. Design decisions: UDP IXFR removed; minimal-ANY deterministic selection; XoT revocation posture explicit; NOTIFY discard log rate-limiting; max effective REFRESH; long-LOADING warning; multi-primary randomized initial selection. New formal SRS MVP scope: DNS Cookies (§4.19), NSID (BDS-FR-EDNS-016), per-zone counters. |
-| v0.4 | 24 May 2026 | DT | Non-functional audit closure. Reference Hardware Profile (Dual Xeon Gold 6230R) and Reference Query Mix introduced (Appendix E); all PERF/RES targets now reference it. New NFRs: PERF-006/-007/-008, REL-006/-007, SEC-007, MAINT-006/-007/-008/-009, OBS-006/-007, RES-006. SEC-004 elevated SHOULD→MUST. MAINT-004 elevated SHOULD→MUST with CI enforcement. OBS-004 split into `/livez` and `/readyz`. |
-| v0.5 | 24 May 2026 | DT | Interface audit closure. **Network interfaces**: renamed `interface.xot` -> `interface.transfer` (covers AXFR/IXFR/SOA-poll/XoT outbound traffic); BDS-IF-NET-008 records the formal SRS MVP decision to reject a fourth active NOTIFY interface role and receive authorized NOTIFY on DNS listeners; NET-005 clarifies health-endpoint binding relationship with `interface.mgmt`. **Configuration interface**: new CONF-008 (warning-level configuration issues, non-aborting), CONF-009 (`--dump-config` CLI mode), CONF-010 (`--validate-config` CLI mode), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention); CONF-001 extended to explicitly exclude include directives; CONF-004 note added for external secret stores; CONF-003 explicit constraint against interface-name bindings. **Logging interface**: new LOG-005 (canonical structured field names), LOG-006 (bootstrap logging before config parsed), LOG-007 (log entry maximum size), LOG-008 (lazy formatting in hot paths). **Health/metrics endpoint**: HEALTH-001 and HEALTH-002 clarified for relationship with `interface.mgmt`; HEALTH-002 extended with explicit response body content; new HEALTH-005 (response time bounds, gzip support), HEALTH-006 (per-source rate limit on `/metrics`). **Process signals**: SIG-001 extended to reference REL-005 100-ms signal-to-action latency; SIG-004 amended to permit SIGPIPE ignore disposition. **New §6.6 Process Lifecycle and Command-Line Interface**: PROC area code allocated. New requirements PROC-001 (exit code convention per `sysexits.h` style), PROC-002 (`--version` / `-V`), PROC-003 (`--help` / `-h`), PROC-004 (`--example-config`, optional). Appendix C.5 updated. Glossary D.5.2 updated with PROC area code. |
-| v0.6 | 24 May 2026 | DT | Architectural invariants audit closure. **Precision refinements to existing invariants**: BDS-INV-001 (Secondary-Only Operation) tightened terminology ("authoritative state" → "in-memory zone store of any authoritatively-served zone"), explicit handling of NOTIFY-borne SOA, verification corrected to NOTIMP-only; BDS-INV-002 (Memory-Resident Zone Data) "query-serving path" scope explicit (startup-time configuration reading excluded, /proc introspection permitted); BDS-INV-003 (Atomic Zone Refresh) multi-delta IXFR atomicity clarified; BDS-INV-004 (No Persistent Operational State) /tmp coverage added (server runnable with /tmp absent or read-only); BDS-INV-005 (Static Configuration) environment-variable and file sources clarified as additive with env precedence, runtime-derived state explicitly excluded from "configuration"; BDS-INV-006 (Memory Safety Discipline) first-party vs third-party dependency boundary clarified, panic-freedom discipline added. **Three new foundational invariants**: BDS-INV-007 (Authoritative-Only Response Composition) elevating the established NEG-007/-008 + QRY-020 constraints to invariant level; BDS-INV-008 (Single-Process Architecture) prohibiting fork/exec/subprocess invocation; BDS-INV-009 (Static Composition; No Runtime Code Loading) prohibiting plugin loading and embedded interpreters. **Section structure**: new §3.7, §3.8, §3.9 added; §3 introductory text amended with conflict-resolution policy between invariants. **Status fields** updated from "Draft" to "Reviewed v0.6 (architectural invariants audit closure)" or "Introduced v0.6" as appropriate. Cross-references to BDS-INV-007 added to BDS-NEG-007 and BDS-NEG-008. Appendix C.5 updated with audit-resolution entries. |
-| v0.7 | 24 May 2026 | DT | **Verification strategy audit closure.** §7 intro updated (removed obsolete "future revision" note regarding VER category, which was registered in earlier revisions). **Method catalog (§7.1) expanded** with four new methods: Property-based test, Differential test, Static analysis (elevated as distinct method from Inspection), Security audit. **BDS-VER-001 reformulated** from self-referential tautology to a coherence requirement (Verification fields must reference methods enumerated in §7.1). **Six new VER requirements**: BDS-VER-010 (pre-release verification gate with release-notes capture); BDS-VER-011 (Continuous / Periodic / Gate verification classification); BDS-VER-012 (regression detection and triage policy, with configurable performance-regression threshold); BDS-VER-013 (interoperability primary version recording for reproducibility); BDS-VER-014 (RFC compliance assertion publication in release notes and primary documentation); BDS-VER-015 (verification responsibility allocation). **BDS-VER-007 (Alpha milestone) corrected**: §6.6 PROC requirements added to Alpha scope (PROC-001/-002/-003); §6.1 NET-008 marked optional; §6.2 CONF-008–-012 included in Alpha; §5.6 OBS-005 added to Alpha. **BDS-VER-009 (traceability matrix) extended** with explicit update cadence (synchronous with each release). **Appendix C.5 updated** with v0.7 resolutions. **Closing audit-cycle note** added at end of §7. With this revision the audit pass initiated at v0.2 covered functional (§4), non-functional (§5), interface (§6), architectural invariant (§3), and verification (§7) material. |
-| v0.8 | 25 May 2026 | DT | **Zone Provisioning feature addition; CIA-driven security expansion.** **New §4.20 Zone Provisioning** allows the set of zones served by a server instance to be derived from explicit `[[zones]]` configuration and/or DNS Catalog Zones per RFC 9432 via `[[catalog_zones]]`. New area code **PROV** allocated. New requirements BDS-FR-PROV-001 through BDS-FR-PROV-014 covering explicit zones, catalog parsing, member-zone lifecycle (provisioning, de-provisioning), security constraints, and resource limits. **BDS-INV-005 (Static Configuration) clarified**: catalog-derived member-zone set added to the enumerated examples of runtime-derived state explicitly excluded from the "configuration" scope of the invariant. The invariant's *Implications* paragraph extended to note that the configured explicit and catalog-zone sources are static, while the derived catalog member set is runtime-derived state akin to zone contents and the zone state machine state. **Appendix C.3.9 (DNS Catalog Zones) removed** from the exclusions list and promoted to in-scope; the rationale-for-exclusion has been resolved by the §4.20 design which preserves BDS-INV-005 by isolating statically configured `[[catalog_zones]]` coordinates from the runtime-derived member set. **New security requirements from CIA threat-model analysis (§5.3)**: BDS-NFR-SEC-008 (TSIG key material confidentiality for inline and file-backed secret sources), BDS-NFR-SEC-009 (transfer authentication advisory and `require_tsig` flag), BDS-NFR-SEC-010 (mandatory catalog-zone TSIG authentication; refusal to start with a catalog zone without TSIG key), BDS-NFR-SEC-011 (catalog must not redirect member-zone primary coordinates), BDS-NFR-SEC-012 (multi-primary catalog support for SPOF mitigation), BDS-NFR-SEC-013 (`max_member_zones` resource exhaustion cap), BDS-NFR-SEC-014 (per-transfer-session timeout for tarpit defence), BDS-NFR-SEC-015 (catalog member-zone name syntactic validation). **New observability requirement BDS-NFR-OBS-008**: catalog membership metric plus ordinary zone/transfer metrics. **§6.2 extended**: BDS-IF-CONF-013 specifies `[[zones]]` and `[[catalog_zones]]` zone-provisioning configuration. **§6.4 extended**: BDS-NFR-OBS-004 `/readyz` semantics updated to include catalog-zone state. **Appendix D.5.2 area code registry updated** with PROV. |
-| v0.9 | 25 May 2026 | DT | **Protocol-correctness requirements update.** Incorporates functional clarifications from the Alpha review without making implementation audit claims part of the normative SRS. **Functional additions:** BDS-FR-DNSSEC-014 (NSEC3 iteration count cap per RFC 9276 / BCP 236); BDS-FR-QRY-025 (DNAME synthesis name-length overflow handling per RFC 6672 §5.3.1); BDS-FR-AXFR-025 (fail-closed transfer publication validation); and BDS-FR-AXFR-026 (DNAME multiplicity validation per RFC 6672 §2.4). **Configuration interface additions:** BDS-IF-CONF-014 (environment-variable override re-validation), BDS-IF-CONF-015 (NSEC3 max iterations parameter), and BDS-IF-CONF-016 (reserved no-relaxation transfer-owner policy). **Interoperability matrix extension:** BDS-VER-003 extended to require XoT interop coverage against BIND 9 in addition to the already-required Knot DNS XoT coverage. Implementation evidence remains tracked in verification and release-evidence documents, not in normative SRS requirements. **No invariant changes**: §3 (BDS-INV-001 through BDS-INV-009) is unchanged. **No NEG changes**: §4.18 is unchanged. |
-| v0.9.1 | 26 May 2026 | DT | **CHAOS class self-identification addition.** Normalises legacy non-BoronDNS naming to the project-canonical `BoronDNS`/`BDS-` namespace and retains the v0.9 corrections for catalog-zone configuration (`[[zones]]` and `[[catalog_zones]]`), DNS-interface NOTIFY handling, and the bounded EDE profile. Introduces §4.21 (CHAOS Class Query Handling) and allocates functional area code **CHAS**. New requirements BDS-FR-CHAS-001 through BDS-FR-CHAS-006 specify opt-in `version.bind.` / `version.server.` and `hostname.bind.` / `id.server.` CH/TXT responses, REFUSED defaults, REFUSED handling for unsupported CHAOS names and non-TXT CHAOS queries, IN-class orthogonality, and low-noise counters/logging. Adds BDS-IF-CONF-018 for the `[chaos]` configuration subtree while preserving BDS-IF-CONF-017 for the bounded Extended DNS Errors profile. Aligns BDS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model; external secret stores project secrets into files rather than BoronDNS reading secret values from environment variables. No invariant changes. No NEG changes. |
-| v0.9.1 alignment note | 13 Jun 2026 | DT | Source-alignment cleanup for the v0.2.0 preparation branch. The document version and requirement identifiers stay unchanged, but §4.20, §5.3, and §6.2 now describe the implemented reloadable filesystem `secret_store`, split catalog/member transfer configuration, opt-in catalog member transfer extensions, and the private-address-only legacy unsigned member AXFR policy. |
-| v0.9.1 RFC-alignment note | 1 Aug 2026 | Codex | Corrects pre-public-beta requirements against RFCs 1035/1995/4034/5155/5936/8945/9267/9460: fail-closed NSEC3-cap responses; abort-on-panic release behavior; TSIG validation/error/UDP-size rules; IXFR terminal SOA and later-message Question handling; SVCB/HTTPS AliasMode and effective-owner behavior; per-Type-Covered RRSIG TTLs; and backward-only bounded compression pointers. No requirement identifiers were renumbered. |
-| v0.9.1 large-zone IXFR note | 13 Aug 2026 | Codex | Adds BDS-IF-CONF-019 for the externally visible compact/sharded/auto zone-publication policy used to keep small-zone query behavior while allowing delta-sensitive publication of large-zone IXFR. The policy is explicitly performance-only and does not weaken atomic refresh or DNS correctness requirements. |
-| v0.9.1 release-alignment review | 15 Aug 2026 | Codex | Reviews the complete current SRS against the implementation and active documentation after the RFC-compliance and large-zone IXFR work. Adds the missing BDS-IF-CONF-020 traceability for RFC 5936 last-good-zone persistence; replaces the unavailable 30-day soak/configuration promise with risk-based bounded-runtime evidence; replaces fixed vulnerability-response and embargo promises with truthful public-beta intake requirements; and aligns the acceptance gate to several independent 24-hour fuzz rounds, one final 0.9.1 validation release, then a 1.0.0 public-beta decision. Requirement identifiers remain stable. |
-| v1.0.0 | 22 Aug 2026 | Codex | Establishes the initial public-beta requirements baseline after the 0.9.1 validation release. Separates the supported 1.0 product boundary from future full-acceptance evidence targets, updates the XoT profile to the implemented TLS 1.3-only behavior, and assigns detailed verification records to canonical repository evidence rather than duplicating them in concise public release notes. Requirement identifiers remain stable. |
+| Revision | Scope |
+|---|---|
+| v0.1–v0.7, May 2026 | Initial protocol, interface, safety, performance, and verification requirements. |
+| v0.8–v0.9.1, May–June 2026 | Catalog provisioning, CHAOS queries, secret-store reload, and protocol clarifications. |
+| August 2026 alignment | RFC corrections, large-zone publication policy, durable last-good state, and public-beta acceptance criteria. |
+| v1.0.0, 22 August 2026 | Initial public-beta baseline; full SRS acceptance remains a separate evidence target. |
+| September 2026 review | Corrected descriptions of persistence, control operations, and the experimental AF_XDP profile; retained requirement identifiers and acceptance targets. |
 
----
+Detailed edits and review history are available in Git.
 
-## Table of Contents
+## Contents
 
 1. [Introduction](#1-introduction)
-2. [Overall Description](#2-overall-description)
-3. [Architectural Invariants](#3-architectural-invariants)
-   - 3.1 Secondary-Only Operation
-   - 3.2 Memory-Resident Zone Data
-   - 3.3 Atomic Zone Refresh
-   - 3.4 Persisted Last-Good Zone State
-   - 3.5 Static Configuration
-   - 3.6 Memory Safety Discipline
-   - 3.7 Authoritative-Only Response Composition *(new in v0.6)*
-   - 3.8 Single-Process Architecture *(new in v0.6)*
-   - 3.9 Static Composition; No Runtime Code Loading *(new in v0.6)*
-4. [Functional Requirements](#4-functional-requirements)
-   - 4.1 DNS Protocol Core
-   - 4.2 Query Processing
-   - 4.3 Negative Responses
-   - 4.4 Unknown RR Handling
-   - 4.5 Anti-Spoofing Measures
-   - 4.6 AXFR Zone Transfer Client
-   - 4.7 IXFR Incremental Zone Transfer
-   - 4.8 NOTIFY Handling
-   - 4.9 TSIG Authentication
-   - 4.10 Zone Transfer over TLS (XoT)
-   - 4.11 EDNS0
-   - 4.12 TCP Transport
-   - 4.13 DNSSEC Record Serving
-   - 4.14 RR Type Parsing and Serving
-   - 4.15 In-Memory Zone Store
-   - 4.16 Zone State Machine
-   - 4.17 Response Rate Limiting
-   - 4.18 Negative Requirements
-   - 4.19 DNS Cookies
-   - 4.20 Zone Provisioning *(new in v0.8)*
-   - 4.21 CHAOS Class Query Handling *(new in v0.9.1)*
-5. [Non-Functional Requirements](#5-non-functional-requirements)
-   - 5.1 Performance
-   - 5.2 Reliability and Availability
-   - 5.3 Security
-   - 5.4 Maintainability
-   - 5.5 Portability
-   - 5.6 Observability
-   - 5.7 Resource Limits
-6. [External Interfaces](#6-external-interfaces)
-   - 6.1 Network Interfaces
-   - 6.2 Configuration Interface
-   - 6.3 Logging Interface
-   - 6.4 Health and Metrics Endpoint
-   - 6.5 Process Signals
-   - 6.6 Process Lifecycle and Command-Line Interface
-7. [Verification Strategy](#7-verification-strategy)
-   - 7.1 Verification Methods
-   - 7.2 Interoperability Matrix
-   - 7.3 RFC Compliance Assessment
-   - 7.4 Acceptance Criteria for Formal Milestones
-   - 7.5 Verification Evidence and Traceability
-   - 7.6 Test Plan Boundary
-   - 7.7 Audit Cycle Closure *(new in v0.7)*
-8. Appendix A — Requirement-to-RFC Traceability Matrix
-9. Appendix B — Resource Record Type Catalogue Boundary
-10. Appendix C — Out-of-Scope Items and Post-MVP Scope
-11. Appendix D — Glossary
-12. Appendix E — Reference Hardware Profile and Reference Query Mix
+2. [Overall description](#2-overall-description)
+3. [Architectural invariants](#3-architectural-invariants)
+4. [Functional requirements](#4-functional-requirements)
+5. [Non-functional requirements](#5-non-functional-requirements)
+6. [External interfaces](#6-external-interfaces)
+7. [Verification strategy](#7-verification-strategy)
+8. [A: RFC traceability](#appendix-a--requirement-to-rfc-traceability-matrix)
+9. [B: RR type catalogue](#appendix-b--resource-record-type-catalogue-boundary)
+10. [C: Exclusions and optimization profiles](#appendix-c--scope-exclusions-and-optimization-profiles)
+11. [D: Glossary](#appendix-d--glossary)
+12. [E: Reference hardware and query mix](#appendix-e--reference-verification-profile)
 
 ---
 
@@ -131,7 +78,7 @@ in the same change set.
 
 Specifically:
 
-- Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the Engineering MVP companion documents.
+- Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the current implementation companion documents.
 - The RFC compliance target is defined and maintained through Appendix A, the companion traceability matrix, and the canonical RFC compliance assertion register.
 - Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps, if any, and release-evidence gaps tracked in `docs/release-acceptance-gap-register.md` and `docs/verification-ledger.md`.
 
@@ -141,7 +88,7 @@ This SRS is written for the current project participants and, following open-sou
 
 - **DT** (Project Manager, Architect, Lead Developer) shall implement against these requirements.
 - **DTK** (Sponsor, Reviewer) shall verify that the implementation satisfies these requirements and that the requirements themselves remain consistent with the companion documents and the underlying RFCs.
-- **SzI** (Alpha Tester) and the DNS operations team (formal SRS MVP testers) shall construct verification procedures from these requirements.
+- **SzI** (Alpha Tester) and the DNS operations team (full SRS acceptance testers) shall construct verification procedures from these requirements.
 - Future external contributors shall use this document to understand the intended behaviour of the software and the boundaries of its scope.
 
 ## 1.4 Document Conventions
@@ -198,7 +145,10 @@ Once allocated — including in draft revisions of this document — a requireme
 
 ### 1.4.5 Requirement Status
 
-Each requirement carries a status of **Draft**, **Approved**, **Deprecated**, or **Replaced-by-X**. All requirements in this revision are **Draft** unless explicitly marked otherwise. Status transitions are recorded in the document revision history.
+Requirements in this document form the stated baseline. **Draft**, **Approved**,
+**Deprecated**, or **Replaced-by-X** labels record requirement decisions where
+needed; they do not record test results. Verification status and evidence belong
+in the companion traceability matrix and verification ledger (§7.5).
 
 ### 1.4.6 Cross-References
 
@@ -296,7 +246,13 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 
 **Primary DNS Servers.** Trusted, but only insofar as they authenticate via TSIG where configured and present zone data consistent with the SOA records they have previously delivered. The primary is the authoritative source of zone data; the secondary trusts the primary to deliver accurate zone contents but does not assume the underlying transport is secure unless XoT is configured. The set of primaries per zone is established by operator configuration.
 
-**Operators.** Human administrators responsible for the server's configuration, deployment, and lifecycle. They supply zone definitions, primary server addresses, TSIG keys, and any tuning parameters, and are responsible for the secure handling of key material before it reaches the server. Operators interact with the running server only through process signals; there is no runtime administrative interface.
+**Operators.** Administrators supply configuration, primary addresses, TSIG keys,
+and deployment policy. Process signals control shutdown. When explicitly
+configured, the server also polls an external control plane for bounded zone
+operations: retry, pause, resume, feed republish, and TSIG rotation. These
+operations trigger transfer scheduling or secret-store reload; they do not edit
+zone records or reload the general configuration. See the
+[operator guide](operator-deployment-guide.md) for the integration boundary.
 
 **Orchestrators and Supervisors.** Automated systems — container orchestrators, systemd, init managers, anycast routing controllers — that start, stop, and probe the server. They consume health check responses, react to process exit codes, and deliver signals. The server is designed to behave correctly under their control without requiring orchestrator-specific configuration.
 
@@ -334,7 +290,9 @@ The following constraints are binding because they are restated here. They are f
 
 **Static release artifact.** The published Linux release artifact targets `x86_64-unknown-linux-musl` and is verified as a statically linked binary with no runtime shared-library dependencies. Non-release developer builds may use the host toolchain's normal dynamic-linking conventions and are not the portability baseline.
 
-**Container image size.** The published container image does not exceed 20 megabytes uncompressed.
+**Container image size.** The full-acceptance target is at most 20 megabytes
+uncompressed (BDS-NFR-RES-001). Release evidence must record the measured size;
+this target is not a claim about every published image.
 
 **Code size.** The implementation targets a total source size in the range of 5,000 to 15,000 lines of Rust. This is an aspirational ceiling motivating aggressive scoping; any feature that would push the codebase beyond this range requires explicit justification recorded in the Architecture Document.
 
@@ -368,15 +326,22 @@ This section establishes the architectural invariants of BoronDNS-Secondary. An 
 
 The invariants of this section are intended to be mutually consistent; in the unlikely event of apparent conflict between two invariants, the conflict represents an SRS defect requiring revision to resolve explicitly. No implementation-level decision MAY be made to silently resolve such a conflict.
 
-Each invariant is presented with a normative Statement, the Rationale for its existence, the Implications it has for design, and the Verification approach by which the invariant will be confirmed. A Status field records the audit-review status of each invariant.
-
-In v0.1 the section was assembled at draft maturity. In v0.6, following the §3 audit cycle, the existing invariants BDS-INV-001 through BDS-INV-006 received precision refinements (terminology clarification, scope boundaries made explicit, edge cases addressed), and three new foundational invariants were added: BDS-INV-007 (Authoritative-Only Response Composition), BDS-INV-008 (Single-Process Architecture), and BDS-INV-009 (Static Composition; No Runtime Code Loading). The new invariants elevate to foundational status constraints previously expressed only at negative-requirement or implementation-decision level.
+Each invariant gives its required behaviour, rationale, design implications,
+and verification method. The verification ledger records whether retained
+evidence covers it for a particular release.
 
 ## 3.1 Secondary-Only Operation
 
 **BDS-INV-001 — Secondary-Only Operation**
 
-*Statement.* The server MUST acquire zone data only through zone transfer protocols (AXFR per RFC 5936 or IXFR per RFC 1995) initiated by itself toward operator-configured primaries. The server MUST NOT accept zone data, zone modifications, or any change to the in-memory zone store of any authoritatively-served zone (per §3.2 and §4.15) through any other channel.
+*Statement.* The server MUST acquire new zone data only through zone transfer
+protocols (AXFR per RFC 5936 or IXFR per RFC 1995) initiated by itself toward
+operator-configured primaries. It MAY restore previously transferred,
+last-good state under BDS-INV-004 after validating that state again. The server
+MUST NOT accept record edits or other externally supplied zone content through
+any other channel. Expiration, catalog membership changes, and configured
+control operations may change whether a zone is served, but MUST NOT author
+zone records.
 
 *Rationale.* The secondary-only scope is the defining design constraint of this project. The security, simplicity, and auditability claims of the project derive from the absence of any write path other than authenticated zone transfer from a trusted primary.
 
@@ -384,9 +349,11 @@ In v0.1 the section was assembled at draft maturity. In v0.6, following the §3 
 
 Zone-state data carried as optional content in NOTIFY messages — most notably the optional SOA RR in the NOTIFY answer section per RFC 1996 §3.7 — is not trusted as authoritative; the server validates current zone state via an independent SOA poll to the configured primary per BDS-FR-NOTIFY-005 and §4.16. The NOTIFY's hint is a trigger, not a data delivery.
 
-*Verification.* Static analysis of the codebase shall confirm that the only code paths producing changes to the in-memory zone store originate in the zone transfer client (AXFR/IXFR completion path, atomic publication per BDS-INV-003). Functional tests shall confirm that UPDATE messages, however formed, are rejected with RCODE NOTIMP per BDS-FR-CORE-005 and BDS-NEG-001. Functional tests shall confirm that an SOA in the answer section of a NOTIFY does not alter the server's held SOA serial without an independent successful SOA poll.
-
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
+*Verification.* Code review shall confirm that new record content comes only
+from validated AXFR/IXFR completion or revalidated last-good restore. Tests shall
+confirm that UPDATE messages are rejected with NOTIMP, NOTIFY content does not
+replace the held SOA or zone records, and control operations cannot inject zone
+content.
 
 ## 3.2 Memory-Resident Zone Data
 
@@ -394,15 +361,25 @@ Zone-state data carried as optional content in NOTIFY messages — most notably 
 
 *Statement.* All zone data served by the server MUST reside in process memory. From process start completion (after socket binding per BDS-IF-NET-004) through process termination, the query-serving path — defined as the code paths from network socket receive to network socket send for any DNS query — MUST NOT perform filesystem I/O against any path outside `/proc/self/*` and similar process-introspection pseudo-files used for metrics collection per §5.6.
 
-Configuration file reading and secret-file reading per BDS-IF-CONF-004 occur only during the startup phase, before query handling begins; these are not within scope of the prohibition. Log emission to stdout and stderr (per BDS-IF-LOG-001) is file-descriptor I/O directed at standard streams, not filesystem path I/O against zone storage; this is permitted.
+General configuration is read at startup. Validated secret-store reload and
+zone checkpoint/journal writes run outside the query path and are permitted.
+Log emission to stdout and stderr (BDS-IF-LOG-001) is permitted as well.
 
-*Rationale.* Eliminates an entire class of latency variability and a category of operational complexity. Removes the possibility of inconsistent on-disk state outliving an operational error. Supports deployment on read-only root filesystems. It does not by itself prove scratch or distroless image compatibility; that claim depends on the release artifact boundary in §2.4 and §2.5, including binary inspection for runtime shared-library dependencies.
+*Rationale.* Memory-resident serving avoids storage latency in query handling.
+The process can use a read-only root filesystem with a separate writable cache
+directory. It does not by itself prove scratch or distroless image compatibility;
+that claim depends on the release artifact boundary in §2.4 and §2.5, including
+binary inspection for runtime shared-library dependencies.
 
-*Implications.* Zone data is not memory-mapped from disk. The last-good checkpoint and incremental journal are restart inputs, never query-path storage. There is no swap-eligible zone storage in the design — operators are responsible for ensuring sufficient RAM (per BDS-NFR-RES-003) and for disabling swap where production performance requires it. Configuration parsing is a startup-only filesystem operation; once startup completes, the query path is filesystem-free.
+*Implications.* Zone data is not memory-mapped from disk. The last-good checkpoint
+and incremental journal are restart inputs, never query-path storage. Normal
+process memory may be swapped by the operating system; operators are responsible
+for sufficient RAM and for disabling swap where latency requirements demand it.
 
-*Verification.* Code review shall confirm that the query path does not invoke filesystem operations against zone-storage paths. System-call tracing (`strace` with `--syscall=openat,read,write,pread,pwrite` or equivalent) during steady-state query serving shall confirm the absence of filesystem activity outside of operator-controlled logging and `/proc/self/*` introspection.
-
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
+*Verification.* Code review and system-call tracing shall confirm that query
+handling performs no zone-storage I/O. Tracing must distinguish query handling
+from permitted background persistence, secret reload, logging, and process
+introspection.
 
 ## 3.3 Atomic Zone Refresh
 
@@ -415,8 +392,6 @@ Configuration file reading and secret-file reading per BDS-IF-CONF-004 occur onl
 *Implications.* The zone store must support a publish-after-load model: a new zone version is fully constructed before it is made visible to query handlers, and the transition from old version to new version is observed atomically by all handlers. The implementation mechanism is an architectural choice recorded in the Architecture Document, but the property must hold. For multi-delta IXFR, the implementation MAY perform N sequential atomic transitions for N difference sequences, OR MAY accumulate the deltas and perform a single atomic transition to the final state; both are conformant.
 
 *Verification.* Concurrent test harnesses shall issue queries continuously during simulated zone refresh (AXFR and IXFR, single-delta and multi-delta) and shall confirm that no response contains records from two SOA generations of the zone. Stress tests under load shall confirm the absence of torn reads. The multi-delta IXFR semantics — observable as monotonically increasing SOA serials in successive query responses during the transfer — shall be confirmed in dedicated tests.
-
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
 
 ## 3.4 Persisted Last-Good Zone State
 
@@ -432,21 +407,24 @@ The root filesystem and `/tmp` MAY remain read-only; only the configured cache d
 
 *Verification.* Restart tests shall cover valid restore with an unavailable primary, corrupt/truncated/wrong-zone cache rejection, catalog-member restoration, failed-write non-publication, and crash-safe atomic replacement. Filesystem tracing shall confirm no query-path disk I/O.
 
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
-
 ## 3.5 Static Configuration
 
 **BDS-INV-005 — Static Configuration**
 
 *Statement.* All configuration MUST be supplied at process startup via the configuration file (per BDS-IF-CONF-001), via environment variables (per BDS-IF-CONF-006 and BDS-IF-CONF-012), or both; where both are supplied for the same parameter, environment variables take precedence. The server MUST NOT re-read or otherwise alter its configuration during operation. Configuration changes are applied only by process restart. A configured secret-store root is configuration; validated secret-store snapshots loaded from that root are runtime key material, not configuration.
 
-*Rationale.* Eliminates an entire category of reload-related defects and consistency questions ("is the running state consistent with the file on disk?"). Aligns with container-native operational models, where configuration changes are expressed as new deployments rather than in-place mutation. Reduces the operational interface surface — there is no SIGHUP-driven reload, no administrative socket, no runtime configuration API.
+*Rationale.* General configuration changes have one application boundary:
+process restart. The optional control-plane operations and secret-store reload
+remain bounded runtime actions, not a general configuration API.
 
 *Implications.* No SIGHUP handler for configuration reload (per BDS-IF-CONF-007 and BDS-IF-SIG-003). No partial configuration reload semantics to specify or test. The orchestrator (or operator) is responsible for restarting the process to apply configuration changes, with the graceful-shutdown behaviour required by BDS-NFR-REL-001 supporting rolling restart deployment patterns. Secret-store reload is a narrow atomic replacement of runtime key material from the already configured filesystem root.
 
 The §4.20 Zone Provisioning subsystem operates within this invariant by isolating the statically configured sources from the derived zone set: explicit `[[zones]]`, catalog-zone coordinates (apex name, primary IPs, TSIG key reference), and inherited member transfer policy are statically configured per BDS-IF-CONF-013 and are not altered during process lifetime. For `[[catalog_zones]]`, the resulting member-zone set itself is runtime-derived state (enumerated below), updated whenever the catalog zone is successfully transferred or incrementally updated.
 
-"Configuration" in this invariant refers exclusively to the parameters supplied at startup per the cited sources, governing the server's policies, bindings, and operating thresholds. **Runtime-derived state** — operational data generated by the server during its lifetime — is not "configuration" in the sense of this invariant; such state evolves during operation and is intentionally not persisted (per BDS-INV-004). Examples of runtime-derived state explicitly outside the scope of this invariant include:
+"Configuration" means startup parameters governing policies, bindings, and
+operating thresholds. Runtime state can evolve without changing those
+parameters. Only the last-good zone state and its freshness metadata are
+persisted under BDS-INV-004; other runtime state is transient. Examples include:
 
 - the DNS Cookie secret of BDS-FR-COOKIE-004 (runtime-generated at process start for single-instance deployments or configured as shared Server Secret material at startup, held in memory for the process lifetime, zeroed at termination per BDS-NFR-SEC-003);
 - the active secret-store snapshot, including TSIG keys and XoT profile material loaded from the configured filesystem root;
@@ -460,8 +438,6 @@ The §4.20 Zone Provisioning subsystem operates within this invariant by isolati
 Such state may legitimately change during process lifetime without violating this invariant.
 
 *Verification.* Code review shall confirm that configuration parsing occurs once during startup and that no code path re-reads configuration sources thereafter (no file watchers on the configuration file, no periodic re-evaluation of environment variables). Behavioural tests shall confirm that signals other than SIGTERM and SIGINT produce no configuration effect. For `[[catalog_zones]]` (§4.20.2), code review shall confirm that the catalog transfer pathway alters only the runtime member-zone set and never re-reads or alters the static configuration sources.
-
-*Status.* Reviewed v0.9 (catalog-zone runtime-state clarification).
 
 ## 3.6 Memory Safety Discipline
 
@@ -479,8 +455,6 @@ Third-party dependencies (Rust crates depended on by the server per BDS-NFR-SEC-
 
 *Verification.* First-party source-level unsafe usage shall be enumerated by the continuous safe-Rust audit scripts and confined to documented, reviewed exceptions. Transitive dependency unsafe usage shall be enumerated with `cargo geiger` or an equivalent scanner during release review, with scanner caveats retained alongside the evidence. Each `unsafe` block in first-party code shall be reviewed during code review and approved against its documented justification per BDS-NFR-MAINT-003. Fuzz testing (`cargo-fuzz` per BDS-NFR-SEC-002) against the wire-format parsers shall serve as ongoing evidence that the safe-Rust parsers handle malformed input correctly without panic. The release gate MUST confirm the packaged release profile uses abort-on-panic semantics and MUST exercise the supervisor's restart/readiness behavior separately from ordinary task-error handling.
 
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
-
 ## 3.7 Authoritative-Only Response Composition
 
 **BDS-INV-007 — Authoritative-Only Response Composition**
@@ -489,7 +463,11 @@ Third-party dependencies (Rust crates depended on by the server per BDS-NFR-SEC-
 
 (a) the in-memory zone store of an authoritatively-served zone, populated per BDS-INV-001 via zone transfer from a configured primary;
 
-(b) server-generated synthetic records constructed in the response-composition path, namely: the OPT pseudo-RR per §4.11 (including all EDNS options carried in its RDATA — NSID, COOKIE, padding, and any other EDNS option supported in current scope); the TSIG RR per §4.9 for outbound message signing per BDS-FR-TSIG-014; the empty owner-name SOA appended in negative responses per §4.3.
+(b) records derived or generated by the specified response rules: wildcard
+owner expansion and DNAME-synthesized CNAMEs (§4.2); the transferred apex SOA
+with the negative-response TTL (§4.3); OPT and its supported options (§4.11);
+TSIG (§4.9); and opt-in CHAOS identification TXT responses (§4.21). Negative
+responses use the zone's apex SOA owner, not an invented empty owner name.
 
 The server MUST NOT perform any external DNS lookup (no recursion, no upstream forwarding, no resolver functionality), MUST NOT maintain any cache of records sourced from outside its zones (no response cache, no negative cache of upstream answers, no glue cache external to zone data), and MUST NOT compose response content from any source other than (a) and (b) above.
 
@@ -499,13 +477,11 @@ The server MUST NOT perform any external DNS lookup (no recursion, no upstream f
 
 *Verification.* Static analysis confirming that the response-composition code paths read only from the zone store and the server's own synthetic generators. Static analysis confirming the absence of `resolv.conf` parsing, DNS-client libraries (other than for zone-transfer purposes per §4.6 and §4.7), and any recursive resolver crate (e.g., `trust-dns-resolver` is NOT permitted; `trust-dns-client` in client-only mode for AXFR/IXFR IS permitted). Functional tests confirming that out-of-zone names trigger REFUSED per §4.1 without any external lookup attempt observable via packet capture.
 
-*Status.* Introduced v0.6 (architectural invariants audit closure; foundational status elevated from BDS-NEG-007, BDS-NEG-008, BDS-FR-QRY-020).
-
 ## 3.8 Single-Process Architecture
 
 **BDS-INV-008 — Single-Process Architecture**
 
-*Statement.* The server MUST run as a single OS process. The server MUST NOT invoke `fork(2)`, `vfork(2)`, `clone(2)` with new-process semantics (`CLONE_VM` not set, etc.), or any function of the `exec*(3)` family (`execve`, `execvp`, `execle`, etc.). The server MUST NOT invoke `posix_spawn(3)`, `system(3)`, `popen(3)`, or any equivalent subprocess-creation facility. 
+*Statement.* The server MUST run as a single OS process. The server MUST NOT invoke `fork(2)`, `vfork(2)`, `clone(2)` with new-process semantics (`CLONE_VM` not set, etc.), or any function of the `exec*(3)` family (`execve`, `execvp`, `execle`, etc.). The server MUST NOT invoke `posix_spawn(3)`, `system(3)`, `popen(3)`, or any equivalent subprocess-creation facility.
 
 Thread creation within the process — POSIX threads via `pthread_create`, async-runtime worker threads, blocking-IO threadpool threads — is permitted and expected; this invariant prohibits process-level creation, not thread-level concurrency.
 
@@ -515,30 +491,51 @@ Thread creation within the process — POSIX threads via `pthread_create`, async
 
 *Verification.* Static analysis confirming no `std::process::Command`, `nix::unistd::fork`, or equivalent calls in first-party code outside the test tree. Runtime inspection of process tree (`pstree`, `ps --forest`, or `/proc/<pid>/task/`) during sustained operation confirming single PID with thread-only concurrency. CI-integrated grep for prohibited APIs.
 
-*Status.* Introduced v0.6 (architectural invariants audit closure).
-
 ## 3.9 Static Composition; No Runtime Code Loading
 
 **BDS-INV-009 — Static Composition; No Runtime Code Loading**
 
-*Statement.* The server binary MUST be a statically composed Rust binary, produced by the deterministic build process of BDS-NFR-MAINT-005. The server MUST NOT load executable code at runtime from any source: no plugin mechanism via `dlopen(3)` or platform equivalents, no embedded scripting interpreter (Lua, JavaScript, Python, Wasm interpreter, etc.), no LLVM JIT or other just-in-time compilation, no eBPF-program loading driven by configuration or runtime input, no other code-from-data execution.
+*Statement.* The server binary MUST be a statically composed Rust binary,
+produced by the deterministic build process of BDS-NFR-MAINT-005. It MUST NOT
+provide userspace plugins, embedded interpreters, JIT compilation, or executable
+configuration. The experimental AF_XDP profile has one bounded exception: it
+MAY load the kernel redirect object identified by `xdp.redirect_object`, subject
+to the file and loader checks below. This exception does not permit general
+response-policy plugins or code supplied through DNS or control-plane input.
 
-*Rationale.* Runtime code loading is a substantial security surface: a compromised plugin or scripted policy escapes the static review process, defeats the reproducible-build guarantees of BDS-NFR-MAINT-005 and the signed-release verification of BDS-NFR-MAINT-008, complicates supply-chain audit, and produces a runtime behaviour that the operator cannot fully verify from the binary alone. The project's minimal-codebase target (BDS-NFR-MAINT-001), defensive engineering posture (BDS-NFR-SEC-001 through BDS-NFR-SEC-007), and reproducibility commitments (BDS-NFR-MAINT-005, BDS-NFR-MAINT-008) presume that the entire executable surface is the binary that comes out of `cargo build` — nothing additional is composed at runtime.
+*Rationale.* Userspace behaviour remains in the reviewed server build. AF_XDP
+also requires a kernel program; its configured file is a separate trusted input
+whose provenance the operator must establish.
 
-*Implications.* No "policy as code" mechanism for RRL, ACLs, configuration validation, or any other operational decision; all such policies are expressed in the static TOML configuration schema per §6.2. The configuration file is data, parsed by the server; it does not contain executable expressions, embedded scripts, or any code-bearing construct. Any future post-MVP XDP/eBPF integration (Appendix C.6.1) remains subject to this invariant: runtime loading of operator-supplied or configuration-specified eBPF programs is forbidden. The exact packaging and adapter constraints for any project-supplied kernel-side program are owned by `docs/future-optimization-tracks.md` and the Architecture Document when that track is promoted. The current server has no scriptable response transformation feature; adding one would require an explicit SRS revision that changes this invariant. The configuration validation of BDS-IF-CONF-005 is implemented via Rust code paths, not via a runtime-evaluated rule language.
+*Implications.* The AF_XDP object MUST be opened from an absolute path without
+following symbolic or magic links. It MUST be a bounded, nonempty regular file,
+owned by root or the server's effective user, with one hard link and no group or
+world write permissions. The loader MUST read and check metadata through the
+same open file descriptor and reject detected changes during the read. The
+object must expose the expected redirect program and maps, and the program
+must pass the kernel verifier before attachment.
+
+The intended input is the project's redirect object. These filesystem and
+program-interface checks do not authenticate its build or cryptographically
+pin its contents; they do not prove that an arbitrary replacement is the
+project's program. Operators must protect the configured file and its source.
+Current packaging and adapter details are in
+[architecture.md](architecture.md) and
+[future-optimization-tracks.md](future-optimization-tracks.md).
 
 The published Linux binary target is `x86_64-unknown-linux-musl` and MUST be verified as static (`ldd` reports "not a dynamic executable" or equivalent). Developer and distribution builds that use another target MAY dynamically link to the host platform's standard C runtime libraries, but those builds are not the release portability artifact and MUST NOT be described as scratch-compatible unless binary inspection proves the claim.
 
-*Verification.* Static analysis confirming no `dlopen` family calls, no `Mmap::map_executable` patterns, and no embedded interpreter crates (`mlua`, `boa_engine`, `rusty_v8`, `wasmtime`, `wasmer`, etc.) in the dependency tree. Release binary inspection (`ldd`, `objdump -p`, or equivalent) confirming the published musl artifact has no runtime shared-library dependencies. CI-integrated dependency-tree audit at each release confirming no new code-loading capability is introduced.
-
-*Status.* Introduced v0.6 (architectural invariants audit closure).
+*Verification.* Inspect the dependency tree for userspace plugins, executable
+mappings, interpreters, and JIT engines. Inspect the published musl binary for
+runtime shared-library dependencies. AF_XDP tests must cover rejected object
+paths, permissions, file types, and attachment failures; review the loader's
+descriptor and metadata checks whenever that boundary changes.
 
 ---
 
 # 4. Functional Requirements
 
 This section specifies the server's functional behaviour. Requirements are grouped by protocol concern. Functional requirement subsections allocate an area code per the scheme of §1.4.3; §4.18 is the negative-requirement subsection and uses the `BDS-NEG-NNN` category without an AREA component.
-
 
 ## 4.1 DNS Protocol Core
 
@@ -551,141 +548,207 @@ Requirements are grouped thematically for readability; the grouping has no norma
 ### Message format and parsing
 
 **BDS-FR-CORE-001.** The server MUST parse DNS messages received on its configured UDP and TCP listening sockets according to the wire format specified in RFC 1035 §4.
+
 *Source.* RFC 1035 §4.
+
 *Verification.* Wire-format conformance tests against a handcrafted message corpus covering combinations of flag bits, RCODEs, and section structures.
 
 **BDS-FR-CORE-002.** The server MUST silently discard any received message shorter than the 12-octet DNS header, without generating a response.
+
 *Source.* RFC 1035 §4.1.1. A truncated header carries no valid ID to echo and no valid context for a FORMERR response.
+
 *Verification.* Conformance tests; sub-12-octet datagrams produce no observable response.
 
 **BDS-FR-CORE-003.** The server MUST parse the DNS header fields (ID, QR, OPCODE, AA, TC, RD, RA, Z, RCODE, QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT) in network byte order.
+
 *Source.* RFC 1035 §4.1.1.
+
 *Verification.* Conformance tests.
 
 **BDS-FR-CORE-004.** The server MUST silently discard messages received on a query-serving socket with the QR bit set (i.e. responses).
+
 *Source.* RFC 1035 §4.1.1. Responses received on a query-serving socket are either misdirected or hostile.
+
 *Verification.* Conformance tests.
 
 **BDS-FR-CORE-005.** The server MUST accept and process messages with OPCODE = 0 (QUERY) and OPCODE = 4 (NOTIFY). Messages with any other OPCODE value MUST receive a response with RCODE = 4 (NOTIMP) and an echoed header.
+
 *Note.* OPCODE 5 (UPDATE) is explicitly addressed by the negative requirements in §4.18 and by BDS-INV-001; the NOTIMP response is the default for any unrecognised OPCODE. NOTIFY semantics are specified in §4.8.
+
 *Source.* RFC 1035 §4.1.1; the IANA OPCODE registry maintained per RFC 6895.
+
 *Verification.* Conformance tests across the OPCODE space.
 
 ### Question section
 
 **BDS-FR-CORE-006.** The server MUST accept and process messages with QDCOUNT = 1. Messages with QDCOUNT = 0 or QDCOUNT > 1 MUST receive a response with RCODE = 1 (FORMERR).
+
 *Source.* RFC 1035 §4.1.2 defines QDCOUNT as the number of question-section entries and states that the question section usually contains one entry; BoronDNS defines semantics only for exactly one question.
+
 *Verification.* Conformance tests.
 
 For OPCODE = QUERY, ANCOUNT and NSCOUNT MUST both be zero; a non-empty Answer or Authority section is rejected with FORMERR before either section is scanned. This restriction does not apply to NOTIFY: RFC 1996 permits an Answer-section hint and requires receivers to tolerate future-compatible Authority or Additional content.
 
 **BDS-FR-CORE-029.** In any error response (FORMERR, NOTIMP, REFUSED, SERVFAIL), the server SHOULD echo the question section as received if it was successfully parsed, with QDCOUNT = 1 in the response header. Where the question section could not be parsed (parse failure before the question section was successfully extracted — for example, oversized labels per BDS-FR-CORE-007, compression-loop in QNAME per BDS-FR-CORE-008, or QDCOUNT > 1), the server MUST emit the response with QDCOUNT = 0 and no records in the question section.
+
 *Source.* RFC 1035 §4.1.1; defensive composition for malformed inputs where the question content cannot be safely reproduced.
+
 *Note.* This is the explicit project policy for the case left implicit by RFC 1035 §4.1.1, which defines the header counts but does not require echoing a question that could not be parsed. Setting QDCOUNT = 0 avoids returning a malformed echoed question to the client. Earlier draft snapshots used a suffixed CORE label for this requirement; that label is historical only and must not be used for new traceability.
+
 *Verification.* Conformance tests including queries that fail parsing at the question-section stage; the resulting FORMERR responses MUST exhibit QDCOUNT = 0 with an empty question section.
 
 **BDS-FR-CORE-007.** The server MUST parse the QNAME field as a sequence of length-prefixed labels terminating in a zero-length label, rejecting with FORMERR any message in which an individual label length exceeds 63 octets or the total uncompressed QNAME length exceeds 255 octets.
+
 *Source.* RFC 1035 §2.3.4, §3.1, §4.1.2.
+
 *Verification.* Conformance tests including oversize labels and oversize names.
 
 **BDS-FR-CORE-008.** The server MUST resolve DNS name compression pointers per RFC 1035 §4.1.4 when parsing DNS names. Each pointer target MUST precede the pointer that references it; forward, self-referential, out-of-bounds, over-budget, or expanded-name-overflow encodings MUST receive RCODE = 1 (FORMERR). Pointer traversal MUST use constant-time per-hop work and a fixed hop budget rather than a linear visited-pointer search.
+
 *Source.* RFC 1035 §4.1.4; RFC 9267 §§2–3.
+
 *Verification.* Conformance tests including backward nested pointers, forward pointers, pointer loops, self-referential pointers, out-of-bounds targets, hop-budget exhaustion, and expanded names over 255 octets. Continuous fuzz testing.
 
 **BDS-FR-CORE-009.** The server MUST compare domain names case-insensitively with respect to ASCII letters A–Z and a–z, treating all other octet values literally and bit-for-bit.
+
 *Source.* RFC 1035 §2.3.3; RFC 4343 §3.
+
 *Verification.* Lookup tests with mixed-case QNAMEs against zone data containing mixed-case owner names.
 
 **BDS-FR-CORE-010.** The server MUST preserve the case of QNAME octets in the question section of its responses, echoing them exactly as received in the query.
+
 *Source.* RFC 1035 §6.1; RFC 4343.
+
 *Verification.* Wire-format inspection of responses to queries with mixed-case QNAMEs.
 
 ### Header construction in responses
 
 **BDS-FR-CORE-011.** In every response generated by the server, the QR bit MUST be set to 1, and the OPCODE, ID, and RD bit MUST be echoed from the query.
+
 *Source.* RFC 1035 §4.1.1; RFC 1034 §6.2.
+
 *Verification.* Wire-format inspection across response categories.
 
 **BDS-FR-CORE-012.** In every response generated by the server, the RA bit MUST be set to 0.
+
 *Source.* RFC 1035 §4.1.1; BDS-INV-001 (the server never offers recursion).
+
 *Verification.* Wire-format inspection across response categories.
 
 **BDS-FR-CORE-013.** In every response generated by the server, the Z bits MUST be set to 0.
+
 *Source.* RFC 1035 §4.1.1.
+
 *Verification.* Wire-format inspection.
 
 **BDS-FR-CORE-014.** In responses, the server MUST set the AA bit to 1 when the answer is authoritative for the queried name (a direct match, NODATA, NXDOMAIN, wildcard synthesis, or an authoritative CNAME/DNAME chain prefix within a served zone) or when returning an opt-in NOERROR response for a recognised CHAOS-class self-identification query per BDS-FR-CHAS-001 and BDS-FR-CHAS-002. When an authoritative alias chain subsequently reaches a delegation, the referral material terminates the chain but MUST NOT clear AA for the already-authoritative answer prefix. A referral response with no authoritative answer prefix MUST set AA to 0. For all other response categories — REFUSED (per BDS-FR-CORE-018, BDS-FR-CORE-019, BDS-FR-CHAS-001, BDS-FR-CHAS-002, BDS-FR-CHAS-003, and BDS-FR-CHAS-004), FORMERR (per BDS-FR-CORE-006, BDS-FR-CORE-007, BDS-FR-CORE-008), NOTIMP (per BDS-FR-CORE-005, BDS-FR-QRY-008), SERVFAIL (per BDS-FR-QRY-021, BDS-FR-QRY-022), NOTAUTH (per BDS-FR-TSIG-013), and any other response not falling into the authoritative-positive, authoritative-negative, or recognised CHAOS self-identification categories above — the AA bit MUST be set to 0.
+
 *Source.* RFC 1034 §4.3.1; RFC 1035 §4.1.1; defensive interpretation for error categories not explicitly addressed by RFC 1035.
+
 *Verification.* Wire-format inspection across answer categories including referrals, REFUSED, FORMERR, NOTIMP, SERVFAIL, and NOTAUTH responses.
 
 **BDS-FR-CORE-015.** In responses, the server MUST set QDCOUNT, ANCOUNT, NSCOUNT, and ARCOUNT to the exact number of records the server has placed in each respective section of the response message.
+
 *Source.* RFC 1035 §4.1.1.
+
 *Verification.* Wire-format inspection.
 
 ### Class handling
 
 **BDS-FR-CORE-016.** The server MUST process queries with QCLASS = 1 (IN) by matching against IN-class zone data.
+
 *Source.* RFC 1035 §3.2.4.
+
 *Verification.* Lookup tests.
 
 **BDS-FR-CORE-017.** The server MUST process queries with QCLASS = 255 (ANY) by matching against zone data of any served class. In a server serving only IN-class zones, this reduces to matching against IN.
+
 *Source.* RFC 1035 §3.2.5.
+
 *Verification.* Lookup tests with QCLASS = ANY.
 
 **BDS-FR-CORE-018.** Except for the CHAOS-class self-identification surface specified in §4.21, the server MUST respond with RCODE = 5 (REFUSED) to queries with QCLASS values other than IN or ANY when no zone of the requested class is served.
+
 *Source.* RFC 1035 §3.2.4. REFUSED is selected over NOTAUTH because the server is not authoritative for any zone of the requested class.
+
 *Note.* CHAOS-class `TXT` queries for the explicitly enumerated names in BDS-FR-CHAS-001 and BDS-FR-CHAS-002 are handled by the §4.21 meta-query path. All other non-IN/non-ANY class queries, including unsupported CHAOS names and non-TXT CHAOS queries per BDS-FR-CHAS-003 and BDS-FR-CHAS-004, remain refused.
+
 *Verification.* Lookup tests with QCLASS = CH, HS, NONE, and reserved values, including the traditional CH-class informational queries.
 
 ### Authoritative lookup and response construction
 
 **BDS-FR-CORE-019.** The server MUST identify, for each query, the most specific zone in its in-memory zone store that is an ancestor of the QNAME or equal to it. If no such zone exists, the server MUST respond with RCODE = 5 (REFUSED).
+
 *Source.* RFC 1034 §4.3.1, §4.3.2; reasoning from the secondary-only stance — the server is not authoritative for unknown zones and offers no recursion.
+
 *Verification.* Lookup tests with QNAMEs outside the set of served zones.
 
 **BDS-FR-CORE-020.** Where the QNAME falls within a served zone, the server MUST search the zone for the RRset whose owner name equals QNAME (case-insensitively per BDS-FR-CORE-009) and whose type equals QTYPE; or, where QTYPE = 255 (ANY), for all RRsets at the owner name.
+
 *Source.* RFC 1034 §4.3.2.
+
 *Note.* RFC 8482 minimisation of ANY responses is addressed in §4.2.
+
 *Verification.* Lookup tests across record types and ANY queries.
 
 **BDS-FR-CORE-021.** Where the QTYPE matches an RRset at the QNAME, the server MUST place all records of that RRset in the answer section of the response.
+
 *Source.* RFC 1034 §4.3.2; RFC 2181 §5.
+
 *Verification.* Lookup tests.
 
 **BDS-FR-CORE-022.** Where the QNAME exists in the served zone but no RRset of the queried QTYPE exists at that owner name, the server MUST return a NODATA response: empty answer section, AA = 1, RCODE = 0 (NOERROR), and the SOA record of the containing zone in the authority section.
+
 *Source.* RFC 1034 §4.3.2; RFC 2181 §7; RFC 2308 §2.2.
+
 *Verification.* Lookup tests for existing names with no matching type.
 
 **BDS-FR-CORE-023.** Where the QNAME does not exist in the served zone and no wildcard match applies, the server MUST return an NXDOMAIN response: empty answer section, AA = 1, RCODE = 3 (NXDOMAIN), and the SOA record of the containing zone in the authority section.
+
 *Source.* RFC 1034 §4.3.2; RFC 2308 §2.1.
+
 *Verification.* Lookup tests for non-existent names.
 
 **BDS-FR-CORE-024.** Where the QNAME matches a wildcard owner name in the served zone per RFC 1034 §4.3.3 as clarified by RFC 4592, the server MUST synthesise the answer from the wildcard RRset, with the owner name of the synthesised records set to the QNAME and the TTL inherited from the wildcard RRset.
+
 *Source.* RFC 1034 §4.3.3; RFC 4592.
+
 *Note.* If the wildcard owner name (e.g., `*.example.com`) exists in the zone but carries no RRset of the queried QTYPE, the wildcard match still applies and the result is a NODATA response per BDS-FR-CORE-022 with the SOA of the containing zone in the authority section. If the wildcard owner name carries no RRsets at all (an empty wildcard non-terminal), it is treated as any other empty non-terminal per BDS-FR-QRY-016 — the wildcard does not synthesise, and the response is NODATA at the QNAME.
+
 *Verification.* Lookup tests against zones containing wildcards, covering the edge cases enumerated in RFC 4592 (empty non-terminal occlusion, wildcards at apex, wildcards beneath delegations), and the empty-wildcard-owner-name case.
 
 **BDS-FR-CORE-025.** Where the QNAME falls within a child zone delegated from a served zone (the QNAME is at or below an NS RRset within the served zone that is not the zone apex), the server MUST return a referral response: empty answer section, AA = 0, RCODE = 0 (NOERROR), the child zone's NS RRset in the authority section, and any associated A and AAAA glue records from the served zone in the additional section.
+
 *Source.* RFC 1034 §4.3.2; RFC 1035 §6.2.4; RFC 4035 for DNSSEC-related referral additions (see §4.13).
+
 *Verification.* Lookup tests against zones containing delegations, with and without glue.
 
 ### RRset semantics
 
 **BDS-FR-CORE-026.** Except for RRSIG records, the server MUST treat all resource records sharing owner name, class, and type as a single RRset and MUST return all members of that RRset together when the RRset is the subject of a positive answer. The server MUST NOT return a proper subset of an RRset in the answer section of a positive response.
+
 *Source.* RFC 2181 §5; RFC 4035 §2.2; RFC 4034 §3.
+
 *Note.* RRSIG records are handled by DNSSEC-specific rules: each RRSIG covers an RRset identified by its Type Covered field, and multiple RRSIG records at the same owner name may cover different RRsets. They are therefore matched to the covered RRsets per BDS-FR-DNSSEC-003 rather than treated as one ordinary owner/class/type RRset. The 16-bit DNS message section counts and TCP message length do not impose a 65,535-member zone-storage limit. An RRset too large for an ordinary UDP response is reported with TC = 1; if the complete response cannot be represented in one DNS-over-TCP message, the server returns SERVFAIL rather than emitting a partial positive answer.
+
 *Verification.* Lookup tests confirming RRset integrity in responses, including responses near the UDP message size boundary (see §4.11 for EDNS interactions); publication and AXFR tests above 65,535 members in one RRset; UDP truncation and TCP failure tests for an RRset beyond one-message capacity; plus DNSSEC tests confirming RRSIG selection by Type Covered.
 
 **BDS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency. On transfer ingestion, a received TTL whose most significant bit is 1 MUST be treated as zero in its entirety per RFC 2181 §8 before RRset TTL normalization.
+
 *Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.
+
 *Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows the RFC 4035 §2.2 exception: RRSIG records do not form ordinary RRsets, and their TTL values at a common owner name do not follow normal RRset TTL rules. RFC 4034 §3.1.4 supplies the covered-RRset Original TTL field used by validators.
+
 *Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection; DNSSEC transfer/serving tests with RRSIG records covering RRsets with different TTLs at the same owner name.
 
 ### Name octet handling
 
 **BDS-FR-CORE-028.** The server MUST treat the octet values in domain name labels as opaque except for case-insensitive ASCII letter comparison per BDS-FR-CORE-009, neither rejecting nor normalising octets outside the LDH set.
+
 *Source.* RFC 4343 §2; RFC 2181 §11.
+
 *Note.* This permits internationalised domain names (in their wire-format A-label encoding) and other non-LDH labels to be served correctly. Validation of label syntax is a primary-side concern.
+
 *Verification.* Lookup tests with non-LDH octet sequences in QNAMEs and owner names.
 
 ## 4.2 Query Processing
@@ -697,23 +760,31 @@ The area code **QRY** is allocated to this subsection.
 ### Recursion policy
 
 **BDS-FR-QRY-001.** The server MUST process queries authoritatively regardless of the state of the RD (Recursion Desired) bit in the query header. The RD bit affects only its echo into the response header per BDS-FR-CORE-011 and MUST NOT alter the server's resolution behaviour.
+
 *Source.* BDS-INV-001; RFC 1034 §3.7.
+
 *Verification.* Lookup tests issuing identical queries with RD = 0 and RD = 1; responses MUST be identical apart from the echoed RD bit.
 
 ### Idempotency
 
 **BDS-FR-QRY-002.** The processing of a query MUST NOT alter the served zone data nor any operational state observable to other queries, with the sole exceptions of statistics counters (BDS-FR-QRY-024) and rate-limit accounting state (§4.17).
+
 *Source.* RFC 1034 §3.7; BDS-INV-003.
+
 *Verification.* Concurrent query tests under steady-state zone conditions; zone data identity verified before and after.
 
 ### ANY-query handling
 
 **BDS-FR-QRY-003.** The server MUST support an "any-response" configuration option taking the values "full" and "minimal", controlling the response policy for queries with QTYPE = 255 (ANY).
+
 *Source.* RFC 8482.
+
 *Verification.* Configuration round-trip tests; behavioural tests with each setting active.
 
 **BDS-FR-QRY-004.** In "full" any-response mode, for QTYPE = 255 (ANY) queries against a name with at least one first-class, non-DNSSEC-support RRset present, the server MUST return all such RRsets present at the QNAME in the answer section, applying the standard lookup semantics of §4.1. RRSIG, NSEC, and NSEC3 records are not returned merely because QTYPE = ANY; DNSSEC supporting material is added only by the DNSSEC response rules of §4.13, including the query DO-bit policy.
+
 *Source.* RFC 1034 §3.7; RFC 1035 §3.2.5; RFC 8482 §4.1.
+
 *Verification.* Lookup tests in "full" mode against names with multiple first-class RRsets and tests confirming QTYPE = ANY does not by itself select DNSSEC support RRsets.
 
 **BDS-FR-QRY-005.** In "minimal" any-response mode, for QTYPE = 255 (ANY) queries against a name with at least one RRset present, the server MUST return a single RRset selected from those present at the QNAME, per RFC 8482 §4.1. The selection algorithm MUST be the following deterministic procedure:
@@ -722,110 +793,159 @@ The area code **QRY** is allocated to this subsection.
 - Otherwise, return the first-class RRset whose type code is the numerically smallest among those present at the QNAME. RRSIG, NSEC, and NSEC3 records are DNSSEC supporting data and are excluded from the ANY selection set; they are served by explicit type queries or by the DNSSEC response rules of §4.13 when applicable.
 
 This procedure produces a stable, predictable selection for a given zone state, is independent of insertion order or in-memory representation, and aligns with the operational preference of returning the most fundamental data type at a name (A < AAAA < MX < ... by IANA numeric assignment) when present.
+
 *Source.* RFC 8482 §4.1.
+
 *Verification.* Repeated identical queries in "minimal" mode MUST produce identical selected RRsets given an unchanged zone; the selection MUST follow the algorithm above against a test corpus covering names with various type combinations including CNAME-only, A+AAAA+MX+TXT, and names with DNSSEC support RRsets co-located with ordinary data.
 
 **BDS-FR-QRY-006.** The default value of the "any-response" configuration option MUST be "minimal".
+
 *Rationale.* RFC 8482 records legitimate debugging uses for QTYPE = ANY while also identifying amplification and zone-data-mining concerns and standardising optional minimal responses for authoritative responders. For an internet-facing secondary, minimisation is the safer default and consistent with the project's reduced-attack-surface stance.
+
 *Verification.* Default-configuration tests.
 
 **BDS-FR-QRY-007.** The server MUST NOT use the synthesised HINFO response style described in RFC 8482 §4.2.
+
 *Rationale.* RFC 8482 §4 offers multiple optional minimal-response behaviours. BoronDNS selects the §4.1 subset-of-available-RRsets profile because it answers from transferred zone data and avoids adding synthetic ANY-specific HINFO content to the authoritative response path.
+
 *Verification.* Wire-format inspection of ANY responses.
 
 ### Meta-type query rejection
 
 **BDS-FR-QRY-008.** The server MUST respond with RCODE = 4 (NOTIMP) to queries with QTYPE = 253 (MAILB) or QTYPE = 254 (MAILA).
+
 *Source.* RFC 1035; deprecation noted in the IANA RR TYPEs registry per RFC 6895.
+
 *Verification.* Conformance tests.
 
 **BDS-FR-QRY-009.** The server MUST respond with RCODE = 1 (FORMERR) to queries where the QTYPE field carries a meta-type value that has no question-section semantics, specifically: OPT (41), TSIG (250), TKEY (249), and reserved values 0 and 65535.
+
 *Source.* RFC 6891 (OPT); RFC 8945 (TSIG); RFC 6895 IANA registry.
+
 *Note.* AXFR (252) and IXFR (251) as QTYPE values are handled per §4.6 and §4.7 respectively.
+
 *Verification.* Conformance tests across the enumerated values.
 
 ### CNAME handling
 
 **BDS-FR-QRY-010.** Where the QNAME has a CNAME RRset in the served zone and the QTYPE is neither CNAME (5) nor ANY (255), the server MUST include the CNAME record in the answer section, then attempt to resolve the CNAME target within the same response.
+
 *Source.* RFC 1034 §3.6.2, §4.3.2.
+
 *Verification.* Lookup tests against zones containing CNAME records.
 
 **BDS-FR-QRY-011.** When chasing a CNAME chain within a single response, the server MUST follow the chain only as far as the next target falls within a zone served by this server. Where the chain leaves the set of served zones, the server MUST cease appending records and complete the response, leaving the client resolver to continue resolution.
+
 *Source.* RFC 1034 §4.3.2.
+
 *Verification.* Lookup tests with CNAME chains crossing the served-zone boundary.
 
 **BDS-FR-QRY-012.** The server MUST terminate CNAME chain resolution at a configurable maximum chain length, with a default of 8 CNAME records. Where this limit is reached before the chain terminates at a non-CNAME RRset within the served zones, the server MUST emit the response with RCODE = 2 (SERVFAIL), AA = 1 (the partial chain consists of authoritative records), an empty authority section (no SOA, as the failure is not an authoritative negative response), and the partial CNAME chain retained in the answer section up to the limit. The event MUST be logged at warning level recording at minimum the original QNAME, the zone, and the truncation reason.
+
 *Source.* RFC 1034 §3.6.2 and §4.3.2 define CNAME aliasing and server restart of lookup at the canonical name; the configured cap is an BoronDNS defensive policy for pathological zone configurations.
+
 *Note.* SERVFAIL is selected over partial NOERROR to make the failure unambiguous to the client resolver: a NOERROR response with an apparently complete chain might be cached as a partial result, whereas SERVFAIL signals that the response is unusable and triggers normal resolver retry/failover behaviour.
+
 *Verification.* Lookup tests against zones with CNAME chains longer than the configured limit; wire-format inspection confirming SERVFAIL, AA=1, and partial chain in answer; log inspection.
 
 **BDS-FR-QRY-013.** The server MUST detect CNAME loops (a chain in which any target name has already been included in the answer section of the current response) and MUST terminate processing of the chain at the point of detection. The emitted response MUST follow the same composition rules as BDS-FR-QRY-012: RCODE = 2 (SERVFAIL), AA = 1, empty authority section, partial chain in the answer section up to (but not including) the looping repetition. The event MUST be logged at warning level recording the original QNAME, the zone, and the looping target name.
+
 *Source.* RFC 1034 §3.6.2 implicit; defence against zone misconfiguration.
+
 *Verification.* Lookup tests against zones with cyclic CNAME chains; wire-format inspection confirming SERVFAIL with partial chain.
 
 ### DNAME handling
 
 **BDS-FR-QRY-014.** Where the QNAME falls strictly beneath a name carrying a DNAME RRset in the served zone (and is not the DNAME owner name itself), the server MUST include the DNAME record in the answer section and MUST synthesise a CNAME record per RFC 6672 §3.2 mapping the original QNAME to a name constructed by substituting the DNAME target for the DNAME owner in the QNAME. If the resulting synthesised name exceeds the 255-octet domain-name length limit, the server MUST follow BDS-FR-QRY-025 below.
+
 *Source.* RFC 6672 §3.
+
 *Verification.* Lookup tests against zones containing DNAME records, including the edge cases of RFC 6672 §3.3 (DNAME at apex, DNAME above a delegation, name-length overflow on synthesis).
 
 **BDS-FR-QRY-015.** After CNAME synthesis from a DNAME, the server MUST proceed with CNAME chain resolution per BDS-FR-QRY-010 through BDS-FR-QRY-013, treating the synthesised CNAME as if it had been present in the zone authoritatively.
+
 *Source.* RFC 6672 §3.
+
 *Verification.* Lookup tests including DNAME-to-CNAME chains terminating both within and outside served zones.
 
 **BDS-FR-QRY-025.** Where DNAME synthesis under BDS-FR-QRY-014 would produce a target name whose wire-format encoding exceeds 255 octets (the domain-name length limit of RFC 1035 §2.3.4), the server MUST respond with RCODE = 6 (YXDOMAIN) per RFC 6672 §5.3.1. The response MUST include the DNAME record itself in the answer section (since the DNAME RRset's existence has been determined and is correctly returned) but MUST NOT include any synthesised CNAME for the overflowing QNAME. The synthesised name is not constructed and is not used.
+
 *Source.* RFC 6672 §5.3.1; RFC 1035 §2.3.4.
+
 *Note.* RCODE = 6 was assigned by RFC 2136 for the dynamic-update setting where a name "exists when it should not"; RFC 6672 §5.3.1 reuses the same RCODE value for the present semantic of "QNAME would exceed 255 octets after DNAME substitution". The reuse is normative.
+
 *Verification.* Lookup tests with DNAME owner names whose targets, when substituted into the QNAME, exceed 255 octets; verify YXDOMAIN response, DNAME RR included in answer, no CNAME synthesised. *Added in v0.9.*
 
 ### Empty non-terminal handling
 
 **BDS-FR-QRY-016.** Where the QNAME exists in the served zone only as an empty non-terminal — that is, descendant names with RRsets exist beneath it but no RRset exists at the QNAME itself — the server MUST return a NODATA response per BDS-FR-CORE-022, and MUST NOT expand any wildcard owner name that would otherwise match at or above the empty non-terminal, in accordance with RFC 4592 §2.2.2.
+
 *Source.* RFC 4592 §2.2.2; RFC 5155 §1.1.
+
 *Verification.* Lookup tests against zones containing empty non-terminals with and without wildcards above them.
 
 ### Additional section composition
 
 **BDS-FR-QRY-017.** Where a delegation NS RRset is included in a referral, the server MUST include every available A and AAAA RRset whose NS target is in-domain beneath that delegation. It SHOULD also include available sibling glue whose NS target lies elsewhere within the served parent zone, including sibling glue in root referrals. Where an NS RRset is included in an authoritative answer, available in-zone target A and AAAA RRsets MUST be included. All such inclusion remains subject to the message-size constraints of §4.11.
+
 *Source.* RFC 1034 §6.2; RFC 1035 §6.2.4, §6.3; RFC 9471 §3 and §4.
+
 *Verification.* Lookup tests requiring in-domain and sibling glue, including root-zone referrals and delegations within and outside served zones.
 
 **BDS-FR-QRY-018.** Where an MX, SRV, or NAPTR record is included in the answer section of a response and the target name (EXCHANGE for MX, TARGET for SRV, REPLACEMENT for NAPTR) falls within a served zone, the server MUST include the target's A and AAAA RRsets in the additional section, subject to message-size constraints.
+
 *Source.* RFC 1034 §3.3.9; RFC 2782; RFC 3403.
+
 *Note.* For NAPTR, the REPLACEMENT field is only meaningful for further DNS resolution where the FLAGS indicate continuation; the additional-section inclusion is unconditional on the target being in a served zone and a valid name.
+
 *Verification.* Lookup tests.
 
 **BDS-FR-QRY-019.** Where SVCB or HTTPS ServiceMode records are included in the answer section and contain a TargetName falling within a served zone, the server MUST include the effective TargetName's A and AAAA RRsets and SHOULD include the corresponding target SVCB or HTTPS RRset in the additional section in accordance with RFC 9460 §4.1, §4.3, and §5, subject to message-size constraints. For a DO=1 query, every included target RRset MUST be accompanied by its covering RRSIG where available. A ServiceMode TargetName of `.` denotes the record's effective owner name, including the synthesized QNAME for a wildcard answer. AliasMode SvcParams are preserved but ignored by processing as required by RFC 9460 §2.4.2.
+
 *Source.* RFC 9460 §4.1, §4.3, and §5; RFC 4035 §3.1.1.
+
 *Verification.* Lookup tests with SVCB and HTTPS records in both AliasMode and ServiceMode, including target service RRsets and DO=1 covering RRSIGs.
 
 **BDS-FR-QRY-020.** The server MUST NOT include in any section of a response a record sourced from outside the in-memory zone store of served zones. The absence of any non-authoritative cache (BDS-INV-001, BDS-INV-002) is the structural mechanism by which this requirement holds; this requirement records the behavioural consequence.
+
 *Source.* BDS-INV-001; RFC 1034 §6.2.
+
 *Verification.* Record provenance audit during lookup tests.
 
 ### RCODE selection
 
 **BDS-FR-QRY-021.** The server MUST respond with RCODE = 2 (SERVFAIL) to queries against a zone whose authoritative data has expired — that is, where the time since the most recent successful transfer of the zone exceeds the zone's SOA EXPIRE value.
+
 *Source.* RFC 1034 §4.3.5; RFC 1035 §3.3.13.
+
 *Verification.* Tests with simulated primary unavailability across the EXPIRE interval; response code transitions from NOERROR to SERVFAIL at the EXPIRE boundary.
 
 **BDS-FR-QRY-022.** The server MUST respond with RCODE = 2 (SERVFAIL) when processing a query encounters an internal condition that prevents construction of a correct response.
+
 *Note.* In a memory-resident server with statically configured zones, the set of conditions producing SERVFAIL is narrow — primarily allocation failure during response assembly. SERVFAIL MUST NOT be used to mask zone-data inconsistencies that should themselves be detected at transfer time.
+
 *Source.* RFC 1034 §4.3.2.
+
 *Verification.* Fault-injection tests.
 
 ### Name compression in responses
 
 **BDS-FR-QRY-023.** The server MUST apply DNS name compression per RFC 1035 §4.1.4 in response messages where compression reduces the message size. Compression of names embedded in RDATA MUST be restricted to the RR types for which RFC 3597 §4 and the applicable type-specific RFCs permit RDATA name compression.
+
 *Source.* RFC 1035 §4.1.4; RFC 3597 §4.
+
 *Note.* Detailed per-RR-type compressibility is governed by RFC 3597 §4 and inherits any subsequent IETF clarifications; this requirement does not enumerate the type list.
+
 *Verification.* Wire-format inspection of responses; round-trip parsing through a strict decoder.
 
 ### Statistics
 
 **BDS-FR-QRY-024.** The server MUST maintain in-memory counters for: queries received, queries answered with each RCODE value emitted, queries terminated by CNAME-chain limit, queries terminated by CNAME-loop detection, and queries truncated due to message-size limits (see §4.12). These counters MUST be maintained both globally (across all zones) and per-zone for zone-scoped metrics (query count, RCODE distribution). The exposure of these counters to external observers is specified in §5.6 and §6.4.
+
 *Source.* Operational requirement; informed by RFC 8906 response-behavior testing guidance.
+
 *Note.* Per-zone disaggregation is essential for production monitoring; an operator serving many zones must be able to distinguish per-zone traffic patterns to detect anomalies, capacity-plan, and diagnose incidents. The implementation MUST expose per-zone counters as labels on the corresponding metric series (e.g., Prometheus `zone="example.com"` label) rather than as separate top-level metric names.
+
 *Verification.* Inspection of counter values under controlled query load distributed across multiple zones; verify both global aggregates and per-zone disaggregation.
 
 ## 4.3 Negative Responses
@@ -839,35 +959,51 @@ The area code **NRESP** is allocated.
 ### Negative-response TTL semantics
 
 **BDS-FR-NRESP-001.** The TTL of the SOA record placed in the authority section of an NXDOMAIN or NODATA response MUST be set to the lesser of (a) the TTL of the SOA RRset as stored in the zone, and (b) the value of the SOA RDATA MINIMUM field.
+
 *Source.* RFC 2308 §3, §5.
+
 *Note.* RFC 2308 redefined the semantics of the SOA MINIMUM field: under RFC 1035 it served as a per-RR default TTL; under RFC 2308 it is the ceiling on negative-response TTL. The min() formulation captures the redefinition without requiring zone authors to align the SOA RRset TTL and the MINIMUM field.
+
 *Verification.* Wire-format inspection of negative responses; the SOA TTL value MUST equal `min(SOA-RRset-TTL, SOA-MINIMUM)`.
 
 **BDS-FR-NRESP-002.** When the SOA RRset is returned in the *answer* section in response to a direct query for the SOA at the zone apex, its TTL MUST be the SOA RRset's TTL as stored in the zone, unmodified by the MINIMUM field.
+
 *Source.* RFC 2308 §4, §5 (distinction between authority-section SOA in negative responses and answer-section SOA in positive responses).
+
 *Verification.* Wire-format inspection of direct SOA queries vs. negative-response SOAs in the same zone, confirming distinct TTL values where MINIMUM differs from the SOA RRset TTL.
 
 ### RFC 8020 — empty subtree semantics
 
 **BDS-FR-NRESP-003.** The server MUST NOT return NXDOMAIN for a QNAME under which named descendants with RRsets exist in the zone. Such QNAMEs are empty non-terminals; the correct response is NODATA per BDS-FR-QRY-016.
+
 *Source.* RFC 8020 §2; RFC 4592 §2.2.2.
+
 *Note.* RFC 8020 formalises the "NXDOMAIN cut" principle: a downstream resolver receiving NXDOMAIN may rely on the absence of any name beneath the QNAME. Emitting NXDOMAIN where descendants exist would cause the resolver to cache nonexistence of names that do in fact exist.
+
 *Verification.* Lookup tests against zones structured to exercise the distinction — for example, a zone containing `a.b.c.example` with no records at `b.c.example` or `c.example` MUST yield NODATA for queries at those intermediate names, not NXDOMAIN.
 
 ### Negative responses at CNAME and DNAME chain endpoints
 
 **BDS-FR-NRESP-004.** Where a CNAME or DNAME chain followed within a single response (per §4.2) terminates within a served zone at a name that does not exist in that zone, the server MUST set RCODE = 3 (NXDOMAIN), retain the chain records in the answer section, and include the SOA record of the zone containing the terminal name in the authority section per BDS-FR-NRESP-001.
+
 *Source.* RFC 1034 §3.6.2; RFC 2308 §2.1.
+
 *Note.* The NXDOMAIN refers to the terminal name in the chain, not the original QNAME. The response is authoritative (AA = 1, per CORE-014) for both the QNAME and the terminal name because both lie in served zones.
+
 *Verification.* Lookup tests with CNAME and DNAME chains terminating at nonexistent names within served zones.
 
 **BDS-FR-NRESP-005.** Where a CNAME or DNAME chain followed within a single response terminates within a served zone at a name that exists but carries no RRset of the originally queried QTYPE, the server MUST set RCODE = 0 (NOERROR), retain the chain records in the answer section, and include the SOA record of the zone containing the terminal name in the authority section per BDS-FR-NRESP-001.
+
 *Source.* RFC 1034 §3.6.2; RFC 2308 §2.2.
+
 *Verification.* Lookup tests with CNAME and DNAME chains ending in a NODATA condition within served zones.
 
 **BDS-FR-NRESP-006.** Where a CNAME or DNAME chain followed within a single response leaves the set of served zones (per BDS-FR-QRY-011), the server MUST set RCODE = 0 (NOERROR), MUST set the AA bit to 1, MUST NOT include any SOA record in the authority section, and MUST retain the chain records up to the point of departure in the answer section.
+
 *Source.* RFC 1034 §3.6.2, §6.2.5.
+
 *Note.* AA = 1 reflects that the records included in the response are themselves drawn from authoritative zone data, even though the chain extends beyond the set of zones for which this server is authoritative. The resolver is expected to continue resolution from the terminal name. The omission of SOA distinguishes this case from the authoritative-negative cases (NRESP-004, NRESP-005) and signals to the resolver that no negative-caching information applies.
+
 *Verification.* Lookup tests with CNAME and DNAME chains crossing the served-zone boundary.
 
 ## 4.4 Unknown RR Handling
@@ -883,49 +1019,69 @@ The area code **URR** is allocated.
 ### Acceptance and storage of unknown types
 
 **BDS-FR-URR-001.** The server MUST accept resource records of any RR TYPE value during zone transfer, regardless of whether the type is recognised, treating the RDATA of unrecognised types as opaque octet sequences of length RDLENGTH.
+
 *Source.* RFC 3597 §3.
+
 *Verification.* Zone transfer tests delivering records of type codes not enumerated in §4.14, including type codes assigned by IANA after the implementation's release date and type codes in the IANA Private Use range.
 
 **BDS-FR-URR-002.** The in-memory zone store MUST preserve the RDATA of unknown RR types bit-for-bit identical to the octets received from the primary.
+
 *Source.* RFC 3597 §3; RFC 3597 §6 (bit-for-bit comparison implies bit-for-bit storage).
+
 *Verification.* Zone-transfer round-trip tests comparing the RDATA octets emitted in query responses to the RDATA octets received in the originating transfer.
 
 **BDS-FR-URR-003.** The server MUST accept records of unknown RR types with RDLENGTH = 0 (zero-octet RDATA), and MUST serve such records correctly with RDLENGTH = 0 in response messages.
+
 *Source.* RFC 3597 §3; RFC 1035 §3.2.1.
+
 *Verification.* Zone transfer tests delivering zero-length unknown-type RDATA; wire-format inspection of responses.
 
 ### Serving unknown types
 
 **BDS-FR-URR-004.** Where a query specifies a QTYPE matching the numeric type code of an unknown-type RRset at the QNAME within a served zone, the server MUST return the matching RRset using the standard lookup semantics of §4.1 and §4.2.
+
 *Source.* RFC 3597 §3.
+
 *Verification.* Lookup tests with QTYPE values matching unknown-type RRsets present in zones.
 
 **BDS-FR-URR-005.** When emitting a record of an unknown RR type in any section of a response, the server MUST set the RDLENGTH field to the exact octet count of the stored RDATA and MUST emit the RDATA octets verbatim, without modification, reordering, or any normalisation.
+
 *Source.* RFC 3597 §3; RFC 1035 §3.2.1.
+
 *Verification.* Wire-format inspection of responses containing unknown-type RRs.
 
 ### Name compression — prohibition for unknown types
 
 **BDS-FR-URR-006.** When emitting a record of an unknown RR type, the server MUST NOT apply DNS name compression (RFC 1035 §4.1.4) to any octet sequence within the RDATA, regardless of whether any sub-sequence of octets resembles a compression pointer.
+
 *Source.* RFC 3597 §4.
+
 *Note.* This complements BDS-FR-QRY-023, which restricts RDATA compression to RR types for which RFC 3597 §4 permits it. The principle is that compression is meaningful only when both endpoints share semantic understanding of where names appear in RDATA; for unknown types, that shared understanding is absent.
+
 *Verification.* Wire-format inspection of responses containing unknown-type RRs; emitted RDATA MUST be bit-identical to stored RDATA.
 
 **BDS-FR-URR-007.** When parsing the RDATA of an unknown RR type received via zone transfer, the server MUST NOT interpret any octet pattern within the RDATA as a compression pointer. The RDATA is consumed as a contiguous opaque octet sequence of exactly RDLENGTH octets.
+
 *Source.* RFC 3597 §4.
+
 *Verification.* Zone-transfer tests in which the RDATA of unknown-type records contains octet patterns that would be valid compression pointers in known-type contexts (in particular, leading octets with the top two bits set); storage MUST be bit-identical to the wire octets.
 
 ### Bit-for-bit comparison
 
 **BDS-FR-URR-008.** RRset membership for unknown RR types MUST be determined by bit-for-bit comparison of RDATA. The server MUST NOT apply case folding, ordering normalisation, or any other transformation to the RDATA of unknown types when determining whether two records are members of the same RRset or whether a record is a duplicate.
+
 *Source.* RFC 3597 §6.
+
 *Verification.* Zone-transfer tests delivering multiple records of an unknown type at a single owner name with subtly differing RDATA; correct distinct-RR membership must be maintained.
 
 ### Reserved type values
 
 **BDS-FR-URR-009.** The server MUST reject a zone transfer containing any record whose RR TYPE field carries one of the following values: the reserved values 0 and 65535; the pseudo-RR type codes OPT (41), TKEY (249), TSIG (250); or the query meta-type codes AXFR (252), IXFR (251), MAILB (253), MAILA (254), ANY (255). Type values in other ranges — including the IANA Private Use range and type codes not yet assigned at the time of the server's implementation — MUST be accepted and processed under the requirements of this subsection.
+
 *Source.* RFC 6895 §3.1; IANA "Resource Record (RR) TYPEs" registry; RFC 6891 (OPT is per-message context, not zone content); RFC 8945 (TSIG is per-message authentication); RFC 2930 (TKEY is per-message key establishment).
+
 *Note.* The pseudo-RR and meta-type codes have no defined semantics as stored zone data; their presence in a zone transfer indicates either a misconfigured primary, a corrupted transfer, or a malicious peer attempting to inject records that would be misinterpreted by query-handling code. Rejecting the transfer surfaces the problem to the operator. The reserved values 0 and 65535 are likewise prohibited by IANA. Private Use codes are explicitly permitted by the IANA registry and are passed through opaquely.
+
 *Verification.* Zone-transfer tests injecting each prohibited type value; the transfer MUST be rejected and prior zone state preserved.
 
 ## 4.5 Anti-Spoofing Measures
@@ -939,12 +1095,17 @@ The area code **SPOOF** is allocated.
 ### Outbound query randomisation
 
 **BDS-FR-SPOOF-001.** When the server originates a DNS query — including SOA refresh-check queries, IXFR queries, and any other query issued outbound — it MUST select the query ID from a cryptographically secure random source, sampling the full 16-bit ID space uniformly.
+
 *Source.* RFC 5452 §9.1.
+
 *Verification.* Statistical analysis of query IDs generated by the server under sustained outbound query load; the distribution MUST be indistinguishable from uniform random sampling of the 16-bit space.
 
 **BDS-FR-SPOOF-002.** When the server originates a DNS query over UDP, it MUST select the source UDP port from a cryptographically secure random source drawing from the unprivileged ephemeral port range, and SHOULD NOT reuse a source port for an outbound query to the same destination address within the window of any outstanding query to that destination.
+
 *Source.* RFC 5452 §9.2; RFC 6056.
+
 *Note.* On most operating systems, source port randomisation is provided automatically by the kernel when the socket is bound with port 0; the server's responsibility is to verify by testing that this behaviour holds in its deployment environment and to bind sockets in a manner that elicits it.
+
 *Verification.* Statistical analysis of source UDP ports observed on outbound queries.
 
 ### Response validation
@@ -952,26 +1113,37 @@ The area code **SPOOF** is allocated.
 The following requirements apply to responses received in reply to outbound queries originated by the server. They do not apply to NOTIFY messages received from primaries (§4.8) or to inbound zone-transfer streams over established TCP connections (§4.6, §4.7).
 
 **BDS-FR-SPOOF-003.** When the server receives a UDP or TCP response to an outbound query, the response source IP address MUST equal the destination IP address used for the original query; otherwise, the response MUST be silently discarded.
+
 *Source.* RFC 5452 §3, §6.
+
 *Verification.* Outbound-query tests with injected responses from IP addresses other than the query target.
 
 **BDS-FR-SPOOF-004.** When the server receives a response to an outbound UDP query, the response source UDP port MUST equal the destination UDP port used for the original query; otherwise, the response MUST be silently discarded.
+
 *Source.* RFC 5452 §3, §6.
+
 *Verification.* Outbound-query tests with injected responses from source ports other than the query destination port.
 
 **BDS-FR-SPOOF-005.** When the server receives a response to an outbound query, the QID field in the response header MUST equal the QID of the original query; otherwise, the response MUST be silently discarded.
+
 *Source.* RFC 5452 §3.
+
 *Verification.* Outbound-query tests with injected responses bearing mismatched QIDs.
 
 **BDS-FR-SPOOF-006.** When the server receives a response to an outbound query, the question section of the response MUST equal the question section of the original query, with QNAME comparison performed case-insensitively per BDS-FR-CORE-009; otherwise, the response MUST be silently discarded.
+
 *Source.* RFC 5452 §3, §6.
+
 *Verification.* Outbound-query tests with injected responses bearing mismatched question sections.
 
 ### Response discard logging
 
 **BDS-FR-SPOOF-007.** When a response to an outbound query is discarded under BDS-FR-SPOOF-003, BDS-FR-SPOOF-004, BDS-FR-SPOOF-005, or BDS-FR-SPOOF-006, the server MUST emit a log entry at warning level recording at minimum the source IP address of the discarded response, the validation check that failed, and a correlation identifier permitting the discard to be matched against the originating outbound query.
+
 *Source.* RFC 5452 §3 (informative); operational requirement.
+
 *Note.* Repeated discards from a given source may indicate a spoofing attempt and provide actionable evidence for operators. The server MAY continue to await additional responses to the same outstanding outbound query within that query's timeout window.
+
 *Verification.* Test harness injecting forged responses; log inspection confirms structured discard records.
 
 ## 4.6 AXFR Zone Transfer Client
@@ -983,91 +1155,131 @@ The area code **AXFR** is allocated.
 ### Transport and query construction
 
 **BDS-FR-AXFR-001.** The server MUST initiate AXFR queries exclusively over TCP. AXFR queries over UDP MUST NOT be issued.
+
 *Source.* RFC 5936 §2.1.1.
+
 *Verification.* Connection-layer inspection during AXFR initiation.
 
 **BDS-FR-AXFR-002.** An AXFR query message MUST be constructed with QNAME equal to the zone apex name, QTYPE = 252 (AXFR), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, and a QID selected per BDS-FR-SPOOF-001.
+
 *Source.* RFC 5936 §2.1.2; RFC 1035 §4.1.2.
+
 *Verification.* Wire-format inspection of outbound AXFR queries.
 
 **BDS-FR-AXFR-003.** The server MUST establish a TCP connection to the selected primary's configured zone-transfer port (default 53) for the AXFR session. The server MAY reuse an existing TCP connection to the same primary for the AXFR query where RFC 7766 connection persistence (§4.12) is in effect.
+
 *Source.* RFC 5936 §4.1; RFC 7766 §6.
+
 *Verification.* Connection-management tests under both fresh-connection and persistent-connection scenarios.
 
 ### Response message handling
 
 **BDS-FR-AXFR-004.** The server MUST process the AXFR response as a sequence of one or more DNS messages received in order on the TCP connection. Message boundaries within the response stream have no semantic significance for record content; records are processed as concatenated across messages. Repeated occurrences of the same resource record MUST NOT create duplicate members in the published RRset and MUST NOT by themselves cause transfer rejection.
+
 *Source.* RFC 5936 §2.2, §3.1; RFC 7766 §8.
+
 *Verification.* AXFR tests with primaries that vary the number of messages per response (single message, many small messages, near-maximum-sized messages).
 
 **BDS-FR-AXFR-005.** Every message in the AXFR response stream MUST carry a QID equal to the QID of the originating AXFR query, and OPCODE = 0 (QUERY). Failure of either check on any message in the stream MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §2.2.1.
+
 *Verification.* Conformance tests with injected mismatched-QID or mismatched-OPCODE messages.
 
 **BDS-FR-AXFR-006.** The server MUST ignore the values of the AA, TC, RD, RA, AD, and CD bits in AXFR response messages.
+
 *Source.* RFC 5936 §2.2.1.
+
 *Note.* RFC 5936 explicitly declares these bits non-significant in AXFR responses. A primary that sets them inconsistently across messages is not in violation; the secondary's tolerance is mandated.
+
 *Verification.* AXFR tests with primaries varying these bits across messages.
 
 **BDS-FR-AXFR-007.** The first record in the answer section of the first AXFR response message MUST be an SOA record. The server MUST verify that this SOA record's owner name equals the configured zone apex name and that its class equals the configured zone class. Failure of either check MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §2.2, §2.2.1.
+
 *Verification.* AXFR tests with primaries delivering wrong leading record, wrong apex name, or wrong class.
 
 **BDS-FR-AXFR-008.** The server MUST recognise the AXFR response as complete when it receives a second SOA record in the response stream. All records received between (exclusive of) the initial SOA and the terminating SOA constitute the transferred zone data.
+
 *Source.* RFC 5936 §2.2.
+
 *Verification.* AXFR tests with various zone sizes; terminating SOA detection.
 
 **BDS-FR-AXFR-009.** The terminating SOA record MUST be semantically identical to the initial SOA record in owner name, class, type, TTL, and RDATA. Owner name, MNAME, and RNAME comparison MUST be case-insensitive per RFC 4343; all non-name fields MUST compare exactly. Any semantic difference MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §2.2; RFC 4343; defensive interpretation against partial-update propagation.
+
 *Verification.* AXFR tests with deliberately mismatched first and last SOAs and with case-only variants in owner, MNAME, and RNAME.
 
 **BDS-FR-AXFR-010.** No SOA record other than the initial SOA and the terminating SOA MUST appear in the AXFR response stream. Receipt of any additional SOA record MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §2.2, §3.1.
+
 *Verification.* AXFR tests with primaries injecting spurious mid-stream SOAs.
 
 ### Record content validation
 
 **BDS-FR-AXFR-011.** Every record in the AXFR response stream MUST have a class equal to the configured zone class. Records of a different class MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §2.2.1.
+
 *Verification.* AXFR tests with class-inconsistent records.
 
 **BDS-FR-AXFR-012.** Every record in the AXFR response stream MUST have an owner name at or below the zone apex name. Records with owner names outside this subtree MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019. Glue records permitted under BDS-FR-AXFR-013 are subject to this constraint as their owner names also lie below the zone apex.
+
 *Source.* RFC 5936 §2.2.4.
+
 *Verification.* AXFR tests with out-of-zone records injected.
 
 **BDS-FR-AXFR-013.** The server MUST accept glue records — A and AAAA records at owner names below child-zone delegation points within the transferred zone — as part of the AXFR response stream, and MUST store them in the in-memory zone store for use in glue inclusion under BDS-FR-QRY-017.
+
 *Source.* RFC 5936 §2.2.4; RFC 1034 §4.2.1.
+
 *Verification.* AXFR tests delivering glue at delegation points; lookup tests confirming glue inclusion in referral responses.
 
 **BDS-FR-AXFR-014.** Records received in the AXFR response stream whose owner names lie at or below a child-zone delegation point — that is, occluded data per RFC 5936 §2.2.4, other than the permitted glue of BDS-FR-AXFR-013 — MAY be retained in the in-memory zone store but MUST NOT be returned in query responses generated under §4.2.
+
 *Source.* RFC 5936 §2.2.4.
+
 *Note.* RFC 5936 permits either retention or silent discard of occluded data. Retention is acceptable provided query handling cleanly excludes such records. The implementation choice is recorded in the Architecture Document.
+
 *Verification.* AXFR tests with occluded data; lookup tests confirming the data is never returned.
 
 **BDS-FR-AXFR-015.** Compression pointers within an AXFR response message MUST reference positions within that same DNS message only. Pointer targets referencing positions in other messages of the response stream MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 5936 §3.4; RFC 1035 §4.1.4.
+
 *Verification.* AXFR conformance tests with cross-message compression pointers.
 
 ### Primary selection
 
 **BDS-FR-AXFR-016.** Where a zone is configured with more than one primary server, the server MUST select an initial primary by uniform-random choice across the configured list, performed once per process per zone at startup, and MUST attempt subsequent primaries in a stable rotation derived from the initial selection (i.e., process N starts with primary K, then proceeds K+1, K+2, ... modulo list length on failure). On failure to connect, on connection abort prior to successful completion, or on receipt of an error RCODE per BDS-FR-AXFR-020, the server MUST proceed to the next primary in the rotation. After exhausting all configured primaries without successful transfer, the server MUST follow the retry semantics specified in §4.16.
+
 *Source.* RFC 1035 §4.3; operational requirement.
+
 *Note.* Per-process randomised initial selection spreads transfer load across primaries when many secondaries share the same configured primary list (avoiding thundering-herd against the first-listed primary), while the stable rotation within a single process keeps logs and metrics interpretable. The randomised seed MUST persist for the process lifetime per BDS-INV-005 and MUST NOT change between transfer attempts within the same process.
+
 *Verification.* Multi-primary tests with various failure injection patterns; statistical analysis confirming that across many process instances the initial-primary distribution is uniform over the configured list.
 
 ### Authentication
 
 **BDS-FR-AXFR-017.** Where TSIG is configured for AXFR sessions with the selected primary, the server MUST sign the outbound AXFR query with the configured TSIG key per §4.9.
+
 *Source.* RFC 8945 §5.3.1; RFC 5936 §2.2.5.
+
 *Verification.* AXFR tests with TSIG-configured primaries; wire-format inspection of signed queries.
 
 **BDS-FR-AXFR-018.** For TSIG-signed AXFR sessions, the server MUST verify TSIG signatures across the multi-message response in accordance with RFC 8945 §5.3.1 and §4.9 of this SRS. At minimum, the first and last messages of the response MUST carry valid TSIG signatures; intermediate messages MAY omit the TSIG record per RFC 8945 §5.3.1. Failure of any required signature verification MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019.
+
 *Source.* RFC 8945 §5.3.1.
+
 *Verification.* AXFR tests with valid signatures, missing required signatures, and tampered intermediate records.
 
 ### Error handling
 
 **BDS-FR-AXFR-019.** Upon any of the following conditions, the server MUST abort the AXFR session, close the TCP connection, discard all partially received data without modifying the in-memory zone store, emit a log entry at warning level identifying the failure cause and the affected zone and primary, and follow the retry semantics specified in §4.16:
+
 - failure of any validation requirement of this subsection;
 - failure of TSIG verification under BDS-FR-AXFR-018;
 - premature TCP connection close before the terminating SOA is received;
@@ -1075,44 +1287,64 @@ The area code **AXFR** is allocated.
 - receipt of a response with an error RCODE under BDS-FR-AXFR-020.
 
 *Source.* RFC 5936 §3.1, §5.
+
 *Note.* This requirement is the consolidated error-handling entry point referenced by other requirements in this subsection. It is enumerative rather than compositional; a single failure cause produces a single abort path.
+
 *Verification.* Fault-injection tests covering each enumerated failure condition.
 
 **BDS-FR-AXFR-020.** An AXFR response message with RCODE other than 0 (NOERROR) MUST cause the AXFR session to be aborted per BDS-FR-AXFR-019. The specific RCODE value MUST be recorded in the log entry to assist operator diagnosis.
+
 *Source.* RFC 5936 §2.2.1.
+
 *Note.* RFC 5936 identifies NOTAUTH (the queried server is not authoritative) and REFUSED (transfer policy denial) as the principal error RCODEs in AXFR responses; FORMERR may also be returned for malformed AXFR queries. The secondary's response to all such RCODEs is the same — abort and retry — but distinguishing them in logs is useful for diagnosis.
+
 *Verification.* AXFR tests with primaries returning each error RCODE.
 
 ### Session lifecycle
 
 **BDS-FR-AXFR-021.** The server MUST enforce a configurable timeout on AXFR sessions, measured from the moment of initial TCP connection establishment to the receipt of the terminating SOA. The default timeout MUST be 300 seconds (5 minutes). Sessions exceeding the timeout MUST be aborted per BDS-FR-AXFR-019.
+
 *Source.* Operational requirement.
+
 *Verification.* AXFR tests with simulated slow or stalled primary responses.
 
 **BDS-FR-AXFR-022.** The server MUST limit the number of concurrently outstanding AXFR sessions (across all configured zones) to a configurable maximum. The default maximum MUST be 4. New AXFR initiations exceeding this limit MUST be queued and initiated as in-flight sessions complete, in FIFO order.
+
 *Source.* Resource management; defensive configuration against startup AXFR storms.
+
 *Verification.* Tests with simultaneous transfer triggers for many zones; verify queue ordering and limit enforcement.
 
 ### Zone publication
 
 **BDS-FR-AXFR-023.** Upon successful completion of an AXFR session — terminating SOA received, all validation requirements of this subsection satisfied, all TSIG signatures verified where applicable — the server MUST construct the new zone state in memory and publish it atomically in accordance with BDS-INV-003. The previous zone state MUST remain in service to query handlers until publication of the new state is complete.
+
 *Source.* BDS-INV-003.
+
 *Verification.* Concurrent query tests during AXFR completion; verify atomic transition.
 
 **BDS-FR-AXFR-024.** The server MUST enforce both a configurable maximum cumulative ingestion size and a configurable maximum DNS response-message count per AXFR session. The cumulative size is measured as the total number of octets of zone data received, excluding TCP framing and TSIG overhead. The default maximum size MUST be 4 gibibytes (4 × 2³⁰ octets), and the default maximum message count MUST be 4,096. The configurable message count MUST NOT exceed 1,048,576 so per-message allocation metadata remains bounded. The server MUST additionally enforce a global configurable transfer resident-memory envelope, defaulting to 64 GiB, across concurrent retained transfer data and publication work. Admission MUST conservatively charge each retained wire octet at 256 octets to cover name decompression, decoded owned state and indexes, build workspace, the new image, and overlap with the serving generation. When a per-session limit or the global envelope is exceeded, the AXFR session MUST be aborted per BDS-FR-AXFR-019, with the abort log entry recording the observed value and applicable configured limit. Any partially ingested data MUST be discarded without modifying the in-memory zone store.
+
 *Source.* Defence against memory-exhaustion attacks from a compromised, misconfigured, or hostile primary delivering an unbounded transfer stream.
+
 *Note.* Both limits are per-session rather than across sessions. The byte cap bounds retained transfer payload, while the message cap separately bounds streams composed of pathological numbers of small DNS messages. Their configurable nature allows controlled synthetic or unusually large zones to raise both limits; neither limit is silently disabled.
 The implementation MAY additionally enforce an aggregate in-flight ingestion guard, but that guard MUST allow every session admitted by BDS-FR-AXFR-022 to consume the full configured per-session limit concurrently. A derived guard of `maximum concurrent transfers × per-session ingestion limit`, with overflow-safe arithmetic, satisfies this requirement without making otherwise-valid transfers fail according to timing.
+
 *Verification.* AXFR tests with primaries exceeding the byte cap and the message-count cap independently; verify abort behaviour, reported observed/configured values, unchanged publication state, and memory release after abort. Verify that an explicitly raised message cap admits a stream beyond the default while still enforcing the configured boundary.
 
 **BDS-FR-AXFR-025.** After an AXFR response stream has parsed successfully and before the candidate zone is published under BDS-FR-AXFR-023, the server MUST validate that the candidate zone can be compiled into the published query-serving representation. If publication validation fails, the server MUST treat the AXFR as failed per BDS-FR-AXFR-019: the candidate zone MUST be discarded, any previously published zone version MUST remain in service, and the failure log entry MUST identify the publication validation error. The server MUST NOT panic or terminate because a primary supplied transfer data that parsed but cannot be published. The same fail-closed publication boundary applies to IXFR-generated candidate zones before their atomic publication.
+
 *Source.* BDS-INV-003; defence against parser/serving-representation gaps turning bad primary data into process crashes.
-*Note.* Out-of-zone owner names remain rejected by BDS-FR-AXFR-012. There is no Engineering MVP compatibility mode that stores external A/AAAA records outside the transferred zone apex subtree.
+
+*Note.* Out-of-zone owner names remain rejected by BDS-FR-AXFR-012. There is no current implementation compatibility mode that stores external A/AAAA records outside the transferred zone apex subtree.
+
 *Verification.* AXFR tests must cover both parser acceptance and publication compilation for accepted transfer data. Synthetic publication-boundary tests must verify that an uncompilable candidate zone is rejected without replacing the previous active zone and without panicking. *Added in v0.9; revised after removal of the out-of-zone glue tolerance candidate.*
 
 **BDS-FR-AXFR-026.** The transfer ingestion layer MUST reject AXFR or IXFR transfer streams that present more than one DNAME RR at the same owner name within the same zone. RFC 6672 §2.4 prohibits the coexistence of multiple DNAME records at the same owner; this requirement enforces that prohibition at the secondary's ingestion boundary, abandoning the transfer per BDS-FR-AXFR-019 with the abort cause "dname_multiplicity_violation" recorded in the log entry.
+
 *Source.* RFC 6672 §2.4.
+
 *Note.* The same-owner-name DNAME prohibition is distinct from the DNAME chain prohibitions of RFC 6672 §3.3 (DNAMEs in the path between QNAME and the served zone), which are query-time concerns. This requirement is a zone-data structural constraint enforced at ingest. A zone delivered by a misconfigured primary that contains such a structure is rejected at transfer time; the previously-published zone version remains in service per BDS-INV-003.
+
 *Verification.* AXFR and IXFR tests with constructed transfer streams containing multiple DNAME records at the same owner name; verify rejection, log entry, and unchanged previous zone state. *Added in v0.9.*
 
 ## 4.7 IXFR Incremental Zone Transfer
@@ -1126,79 +1358,110 @@ The area code **IXFR** is allocated.
 ### Transport and query construction
 
 **BDS-FR-IXFR-001.** The server MUST initiate IXFR queries exclusively over TCP. IXFR queries over UDP MUST NOT be issued. While RFC 1995 §2 permits UDP IXFR transport, modern deployments overwhelmingly use TCP because the diff stream commonly exceeds a single UDP message; supporting only TCP simplifies the implementation surface in accordance with the project's minimal-codebase target without operational loss.
+
 *Source.* RFC 1995 §2 (TCP permitted as alternative transport); project simplification decision per the §1.4.5 decision record dated 24 May 2026.
+
 *Note.* Inbound IXFR queries are not in scope (BDS-NEG-005 prohibits outbound transfer serving); this requirement applies only to outbound IXFR queries originated by this server toward configured primaries.
+
 *Verification.* Connection-layer inspection during IXFR initiation; verify TCP-only behaviour. Code review confirming no UDP IXFR code path exists.
 
 **BDS-FR-IXFR-002.** TCP IXFR sessions MUST be conducted under the same connection-handling requirements as AXFR sessions specified in BDS-FR-AXFR-003 and the same multi-message reassembly requirements specified in BDS-FR-AXFR-004 and BDS-FR-AXFR-005. For an AXFR-format fallback split across multiple messages, the first response message MUST contain the echoed IXFR Question; each subsequent message MAY use QDCOUNT 0 or 1, and a repeated Question MUST match the originating IXFR query.
+
 *Source.* RFC 1995; RFC 5936 §2.2.2; RFC 7766.
+
 *Verification.* TCP-layer behavioural tests parallel to those used for AXFR, including a multi-message IXFR fallback with QDCOUNT 0 after the first response.
 
 **BDS-FR-IXFR-003.** An IXFR query message MUST be constructed with QNAME equal to the zone apex name, QTYPE = 251 (IXFR), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, a QID selected per BDS-FR-SPOOF-001, and the SOA record currently held in the in-memory zone store for the zone placed in the authority section of the query message.
+
 *Source.* RFC 1995 §3.
+
 *Note.* The SOA placed in the authority section conveys to the primary the version from which incremental changes are requested. Its TTL and complete RDATA — particularly the SERIAL field — must match what the secondary currently holds.
+
 *Verification.* Wire-format inspection of outbound IXFR queries.
 
 ### Response mode detection
 
 **BDS-FR-IXFR-004.** Upon receipt of the IXFR response, the server MUST determine the response mode by inspection of the answer section per RFC 1995 §4, distinguishing three modes:
+
 - **Mode 1 (incremental):** the answer section's first record is an SOA, the second record is also an SOA, and the response contains at least one difference sequence followed by a distinct terminal copy of the first SOA;
 - **Mode 2 (full-zone fallback):** the answer section's first record is an SOA, the second record is a non-SOA resource record, and the response is structured as an AXFR-style full zone delivery;
 - **Mode 3 (no update available):** the answer section contains exactly one SOA record, whose serial equals the serial of the SOA sent in the IXFR query.
 
 The server MUST process the response according to the determined mode under BDS-FR-IXFR-005 (Mode 1), BDS-FR-IXFR-011 (Mode 2), or BDS-FR-IXFR-012 (Mode 3).
+
 *Source.* RFC 1995 §3, §4.
+
 *Verification.* IXFR conformance tests exercising each mode.
 
 ### Mode 1: Incremental processing
 
 **BDS-FR-IXFR-005.** For a Mode 1 IXFR response, the server MUST process the difference sequences in the order they appear in the response. Each difference sequence is structured as:
+
 - An "old SOA" record (the version from which changes apply);
 - Zero or more resource records to be deleted from the zone state at the old SOA's serial;
 - A "new SOA" record (the version to which changes apply);
 - Zero or more resource records to be added to reach the new SOA's serial.
 
 The server MUST apply the deletions and additions of each difference sequence in order, transforming the working zone state from the version at the IXFR query's SOA serial to the version at the response's outer SOA serial.
+
 *Source.* RFC 1995 §4.
+
 *Verification.* IXFR tests with single-step and multi-step difference sequences.
 
 **BDS-FR-IXFR-006.** The first difference sequence in a Mode 1 IXFR response MUST begin with an "old SOA" record whose serial equals the serial of the SOA sent in the IXFR query's authority section. Mismatch MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+
 *Source.* RFC 1995 §4.
+
 *Verification.* IXFR tests with deliberately mismatched starting serials.
 
 **BDS-FR-IXFR-007.** Where a Mode 1 IXFR response contains multiple difference sequences, the "new SOA" of each sequence MUST equal the "old SOA" of the next. The "new SOA" of the final difference sequence MUST equal the response's outer SOA, and a distinct final copy of that outer SOA MUST then terminate the IXFR response. A stream that ends after the final add phase without this terminal SOA is incomplete. Failure of either chaining or termination condition MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+
 *Source.* RFC 1995 §4.
+
 *Verification.* IXFR tests with broken chaining and with the terminal outer SOA omitted.
 
 **BDS-FR-IXFR-008.** Within each difference sequence, the server MUST verify that every resource record listed for deletion is currently present in the working zone state at the time the deletion is applied. A deletion of an absent record MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+
 *Source.* RFC 1995 §4 (consistency requirement, defensive interpretation).
+
 *Note.* This treats diff-state inconsistency as a hard error, on the principle that a primary delivering a diff inconsistent with the secondary's current state indicates either replication drift or compromise. Conservative implementations log and continue; this SRS specifies the strict posture. See closing note 1.
+
 *Verification.* IXFR tests with diffs deleting records the secondary doesn't hold.
 
 **BDS-FR-IXFR-009.** Within each difference sequence, the server MUST verify that every resource record listed for addition is not currently present in the working zone state at the time the addition is applied. Addition of an already-present record MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+
 *Source.* RFC 1995 §4 (consistency requirement, defensive interpretation).
+
 *Verification.* IXFR tests with diffs adding records already present.
 
 **BDS-FR-IXFR-010.** Upon successful application of all difference sequences with all validations passing, the server MUST publish the resulting zone state atomically per BDS-INV-003. The previous zone state MUST remain in service to query handlers until publication of the new state is complete.
+
 *Source.* BDS-INV-003.
+
 *Verification.* Concurrent query tests during IXFR completion.
 
 ### Mode 2: Full-zone fallback
 
 **BDS-FR-IXFR-011.** For a Mode 2 IXFR response, the server MUST process the response under the AXFR semantics of §4.6, treating the IXFR response's first SOA as the AXFR initial SOA and applying BDS-FR-AXFR-004 through BDS-FR-AXFR-023 for content validation, error handling, and atomic publication.
+
 *Source.* RFC 1995 §3.
+
 *Note.* Mode 2 is the primary's signal that incremental history is not available; the secondary transparently falls back to full-zone semantics within the same session, without re-issuing a query.
+
 *Verification.* IXFR tests against primaries that respond in Mode 2.
 
 ### Mode 3: No update available
 
 **BDS-FR-IXFR-012.** For a Mode 3 IXFR response, the server MUST treat the session as successfully completed with no zone change. The in-memory zone state MUST NOT be modified, and the zone's refresh timing under §4.16 MUST be advanced as it would be after any successful refresh check.
+
 *Source.* RFC 1995 §3, §4.
+
 *Verification.* IXFR tests with primaries reporting uptodate.
 
 ### Error handling
 
 **BDS-FR-IXFR-013.** Upon any of the following conditions, the server MUST abort the IXFR session, close any TCP connection involved, discard all partially received and partially applied data without modifying the published zone state, emit a log entry at warning level identifying the failure cause and the affected zone and primary, and follow the retry semantics specified in §4.16:
+
 - failure of any validation requirement of this subsection;
 - failure of TSIG verification under BDS-FR-IXFR-014;
 - premature connection close (TCP) before the terminating SOA is received;
@@ -1207,34 +1470,47 @@ The server MUST apply the deletions and additions of each difference sequence in
 - inconsistency between IXFR diff content and the working zone state per BDS-FR-IXFR-008 or BDS-FR-IXFR-009.
 
 *Source.* RFC 1995 §3, §4; RFC 5936 §3.1.
+
 *Verification.* Fault-injection tests covering each enumerated failure condition.
 
 **BDS-FR-IXFR-014.** After an aborted IXFR session, the zone state machine specified in §4.16 MAY direct the next refresh attempt for the zone to use AXFR rather than IXFR. This is the recommended behaviour where the failure cause indicates non-support of the IXFR protocol by the primary (in particular, RCODE = 4 (NOTIMP) or RCODE = 1 (FORMERR) in response to an otherwise well-formed IXFR query).
+
 *Source.* RFC 1995 §3.
+
 *Note.* The decision logic for choosing AXFR vs IXFR on retry is specified in §4.16. This requirement establishes the architectural permission for the state machine to switch protocols, not the specific algorithm.
+
 *Verification.* Tests with primaries that don't speak IXFR; verify retry uses AXFR.
 
 ### Authentication
 
 **BDS-FR-IXFR-015.** Where TSIG is configured for the selected primary, the server MUST sign outbound IXFR queries with the configured TSIG key per §4.9, and MUST verify TSIG signatures on inbound IXFR response messages per §4.9. Failure of TSIG verification MUST cause the IXFR session to be aborted per BDS-FR-IXFR-013.
+
 *Source.* RFC 8945 §5.3.1; RFC 1995.
+
 *Note.* For Mode 2 (AXFR-style) IXFR responses, TSIG signature placement follows the multi-message rules of RFC 8945 §5.3.1 as specified for AXFR in BDS-FR-AXFR-018.
+
 *Verification.* IXFR tests with valid signatures, missing required signatures, and tampered messages.
 
 ### Session lifecycle
 
 **BDS-FR-IXFR-016.** The server MUST enforce a configurable timeout on IXFR sessions, with a default of 60 seconds. Sessions exceeding the timeout MUST be aborted per BDS-FR-IXFR-013.
+
 *Source.* Operational requirement.
+
 *Note.* IXFR is typically much faster than AXFR because the diff is small; 60 seconds is generous for the common case and short enough that a stuck IXFR session does not block the state machine for long. Operators with unusually large diffs or slow primaries can tune.
+
 *Verification.* IXFR tests with simulated slow primary responses.
 
 **BDS-FR-IXFR-017.** IXFR sessions MUST count against the same concurrent transfer session pool as AXFR sessions under BDS-FR-AXFR-022.
+
 *Source.* Resource management.
+
 *Verification.* Tests with mixed concurrent AXFR and IXFR initiations.
 
 ### Inherited requirements from §4.6
 
 **BDS-FR-IXFR-018.** Except as specified or modified in this subsection, IXFR sessions are subject to the following requirements of §4.6, applied with "IXFR session" substituted for "AXFR session":
+
 - header bit non-significance: BDS-FR-AXFR-006;
 - class consistency in records: BDS-FR-AXFR-011;
 - owner name within zone: BDS-FR-AXFR-012;
@@ -1244,12 +1520,17 @@ The server MUST apply the deletions and additions of each difference sequence in
 - multi-primary failover: BDS-FR-AXFR-016.
 
 *Source.* RFC 1995; this SRS §4.6.
+
 *Note.* The companion traceability matrix records the duplication so that future edits to §4.6 surface IXFR impact for review.
+
 *Verification.* Per the verification of each referenced AXFR requirement.
 
 **BDS-FR-IXFR-019.** IXFR sessions MUST be subject to the same configurable maximum cumulative ingestion size and DNS response-message count caps specified in BDS-FR-AXFR-024 (defaults: 4 gibibytes and 4,096 messages). The limits apply to the complete IXFR response stream within a single session, including both Mode 1 (incremental) and Mode 2 (full-zone fallback) responses.
+
 *Source.* Defence against memory-exhaustion attacks; parallel to BDS-FR-AXFR-024.
+
 *Note.* For Mode 2 IXFR (which delivers AXFR-style content within the IXFR session, per BDS-FR-IXFR-011), both caps apply. AXFR and IXFR reference the same two configuration values.
+
 *Verification.* IXFR tests with primaries independently exceeding the configured response-byte and response-message limits.
 
 ## 4.8 NOTIFY Handling
@@ -1263,37 +1544,51 @@ The area code **NOTIFY** is allocated.
 ### Transport and reception
 
 **BDS-FR-NOTIFY-001.** The server MUST accept NOTIFY messages on its configured UDP and TCP listening sockets (typically port 53), identifying NOTIFY by OPCODE = 4 in the message header per BDS-FR-CORE-005. Messages with QR = 1 (NOTIFY responses) MUST be silently discarded per BDS-FR-CORE-004.
+
 *Source.* RFC 1996 §3.1.
+
 *Note.* Because this server is secondary-only and does not originate NOTIFY, it has no legitimate need to receive NOTIFY responses; they are treated as stray traffic.
+
 *Verification.* Reception tests on both UDP and TCP listening sockets; injected NOTIFY responses confirmed to be discarded.
 
 ### Message format validation
 
 **BDS-FR-NOTIFY-002.** The server MUST verify that a received NOTIFY message has QDCOUNT = 1 and that the question section's QTYPE = 6 (SOA). Messages failing either check MUST be responded to with RCODE = 1 (FORMERR), echoing the QID and the OPCODE per the response construction of BDS-FR-NOTIFY-006.
+
 *Source.* RFC 1996 §3.7.
+
 *Verification.* Conformance tests with malformed NOTIFY messages.
 
 **BDS-FR-NOTIFY-003.** If the QNAME and QCLASS in a received NOTIFY message do not match any zone configured to be served by this server, the server MUST respond with RCODE = 5 (REFUSED) and MUST take no further action on the message.
+
 *Source.* RFC 1996 §3.10.
+
 *Verification.* Tests with NOTIFY messages naming zones not served.
 
 ### Source authentication
 
 **BDS-FR-NOTIFY-004.** The server MUST accept NOTIFY messages only from IP addresses configured as the primary (or other authorised notifier) for the named zone. NOTIFY messages from unauthorised source addresses MUST be silently discarded; the server MUST NOT emit a response of any kind. The discard MUST be logged at warning level, including the source IP address and the NOTIFY's QNAME.
+
 *Source.* RFC 1996 §3.10, §3.11; defensive operational posture.
+
 *Note.* Silent discard (rather than REFUSED) is selected to avoid revealing to unauthorised parties which zones the server serves. The log entry is the operator's signal for investigation. The authorised source list is established by configuration alongside the primaries list for the zone (§6.2).
+
 *Verification.* Tests with NOTIFY messages from unauthorised source addresses; verify no response emitted and discard logged.
 
 ### TSIG authentication
 
 **BDS-FR-NOTIFY-005.** Where TSIG is configured for an authorised notifier of a zone, NOTIFY messages from that notifier MUST be signed with the configured TSIG key. The server MUST verify TSIG signatures on such inbound NOTIFY messages per §4.9 before any further processing. TSIG verification failure MUST cause the NOTIFY to be rejected with the TSIG-specific response defined in §4.9, and MUST be logged at warning level.
+
 *Source.* RFC 8945; RFC 1996.
+
 *Note.* TSIG verification follows source-IP authorisation: an IP-unauthorised source's message is silently discarded under BDS-FR-NOTIFY-004 and never reaches TSIG validation. An IP-authorised source with a TSIG failure does receive a TSIG-protocol response, because the failure mode is meaningful to a legitimately configured sender.
+
 *Verification.* Tests with valid TSIG-signed NOTIFYs, tampered TSIG-signed NOTIFYs, and NOTIFYs missing required TSIG.
 
 ### Response
 
 **BDS-FR-NOTIFY-006.** Upon successful validation of a NOTIFY message — OPCODE, message format (BDS-FR-NOTIFY-002), zone served (BDS-FR-NOTIFY-003), source authorisation (BDS-FR-NOTIFY-004), and TSIG verification where applicable (BDS-FR-NOTIFY-005) — the server MUST emit a NOTIFY response message on the same transport (UDP or TCP) as the received NOTIFY, containing:
+
 - the QID of the received NOTIFY, echoed unchanged;
 - QR = 1;
 - OPCODE = 4 (NOTIFY);
@@ -1303,39 +1598,53 @@ The area code **NOTIFY** is allocated.
 - a freshly computed TSIG record per §4.9 where the received NOTIFY was TSIG-signed.
 
 *Source.* RFC 1996 §4.7, §4.8; RFC 8945.
+
 *Verification.* Wire-format inspection of NOTIFY responses across valid input scenarios.
 
 ### Refresh triggering
 
 **BDS-FR-NOTIFY-007.** Upon successful acceptance of a NOTIFY message for a zone, and subject to the rate-limit deduplication of BDS-FR-NOTIFY-009, the server MUST signal the zone state machine (§4.16) to perform an expedited refresh check for the named zone.
+
 *Source.* RFC 1996 §4.4.
+
 *Note.* The state machine determines whether the refresh check is satisfied by the SOA embedded in the NOTIFY (per BDS-FR-NOTIFY-008), an out-of-band SOA poll, or proceeding directly to IXFR; this requirement establishes only the signalling.
+
 *Verification.* Tests confirming refresh check is initiated within an operationally meaningful time of NOTIFY acceptance.
 
 **BDS-FR-NOTIFY-008.** Where a received NOTIFY message contains an SOA record in the answer section per RFC 1996 §3.7, the server MUST verify that the SOA's owner name matches the NOTIFY's QNAME and that its class matches QCLASS. The serial field of this SOA MAY be used by the state machine (§4.16) to skip the SOA poll and proceed directly to refresh if the serial exceeds the currently held serial. Fields of the embedded SOA other than the serial — REFRESH, RETRY, EXPIRE, MINIMUM — MUST NOT be applied to the zone's timer state; those fields are governed only by the SOA delivered via completed zone transfer.
+
 *Source.* RFC 1996 §3.7, §4.5.
+
 *Verification.* Tests with NOTIFY messages carrying SOAs in answer section, including mismatched owner names, mismatched classes, and serials greater, equal, and lesser than the currently held serial.
 
 ### Rate-limit deduplication
 
 **BDS-FR-NOTIFY-009.** The server MUST respond to every well-formed NOTIFY message per BDS-FR-NOTIFY-006 (subject to the source-authorisation requirement of BDS-FR-NOTIFY-004), but MUST NOT signal the state machine to initiate a new refresh cycle for a zone if a refresh for that zone is already in progress or has completed within a configurable deduplication interval. The default deduplication interval MUST be 1 second.
+
 *Source.* RFC 1996 §3.6, §4.4.
+
 *Note.* RFC 1996 §3.6 anticipates NOTIFY retransmission by the primary. The receiver should always respond (to suppress retransmission), but should not multiply refresh efforts on duplicate signals. Duplicate-suppression is per-zone, not per-(source, zone) — multiple authorised notifiers for the same zone do not multiply refresh actions.
+
 *Verification.* Tests with bursts of NOTIFY messages for the same zone; verify all are responded to but only one refresh is initiated.
 
 ### Logging
 
 **BDS-FR-NOTIFY-010.** The server MUST emit a log entry at info level for each accepted NOTIFY message, recording at minimum the source IP address, the QNAME, the embedded SOA serial (where present per BDS-FR-NOTIFY-008), and the action taken (refresh signalled, or deduplicated). Discards and rejections MUST be logged at warning level per BDS-FR-NOTIFY-004 and BDS-FR-NOTIFY-005, subject to the rate-limit logging discipline of BDS-FR-NOTIFY-011.
+
 *Source.* Operational requirement.
+
 *Verification.* Log inspection across acceptance, deduplication, and rejection scenarios.
 
 **BDS-FR-NOTIFY-011.** To prevent log flooding under hostile conditions (an attacker spoofing NOTIFY messages from many source IP addresses), the server MUST apply rate-limited logging to unauthorised-source NOTIFY discards (per BDS-FR-NOTIFY-004) and TSIG-failure NOTIFY rejections (per BDS-FR-NOTIFY-005). The discipline is parallel to BDS-FR-RRL-011:
+
 - The first warning-level log entry per (source IP /24 prefix for IPv4, /56 for IPv6, zone) tuple within a configurable rate-limit window (default 60 seconds) MUST be emitted in full.
 - Subsequent identical events within the same window MUST be suppressed (counted but not individually logged).
 - At the end of each window, an aggregate info-level summary MUST be emitted recording the number of suppressed events per category and the distinct source prefix count.
 
 *Source.* Defence against log-amplification denial-of-service via spoofed NOTIFY traffic; parallel to BDS-FR-RRL-011's anti-flood discipline.
+
 *Note.* The /24 and /56 prefix granularity matches the RRL accounting key convention. Operators investigating sustained NOTIFY-spoofing campaigns can examine the periodic summary to assess scope. The per-zone metric of BDS-FR-QRY-024 also captures discard counts for cross-reference.
+
 *Verification.* Tests injecting bursts of unauthorised NOTIFYs from many simulated source addresses; verify the first per-prefix event is logged, subsequent events are suppressed, and the periodic summary correctly reports aggregates.
 
 ## 4.9 TSIG Authentication
@@ -1352,40 +1661,57 @@ The area code **TSIG** is allocated.
 ### Supported algorithms
 
 **BDS-FR-TSIG-001.** The server MUST implement and accept the HMAC-SHA256 algorithm for TSIG signing and verification (algorithm name `hmac-sha256`).
+
 *Source.* RFC 8945 §6; RFC 4635 §3.
+
 *Verification.* Cryptographic test vectors per RFC 4231.
 
 **BDS-FR-TSIG-002.** The server MUST implement and accept the HMAC-SHA1 algorithm for TSIG signing and verification (algorithm name `hmac-sha1`).
+
 *Source.* RFC 4635 §3.
+
 *Rationale.* SHA-1-based TSIG is retained for interoperability with existing primary deployments and operator configurations. HMAC-MD5 remains prohibited by BDS-FR-TSIG-004.
+
 *Verification.* Cryptographic test vectors per RFC 2202.
 
 **BDS-FR-TSIG-003.** The server SHOULD implement and accept the HMAC-SHA384 and HMAC-SHA512 algorithms (algorithm names `hmac-sha384` and `hmac-sha512`).
+
 *Source.* RFC 4635 §3.
+
 *Rationale.* These algorithms are part of the HMAC-SHA family and add negligible implementation complexity once SHA-256 is supported; their inclusion future-proofs the server against operators choosing stronger algorithms.
+
 *Verification.* Cryptographic test vectors per RFC 4231.
 
 **BDS-FR-TSIG-004.** The server MUST NOT implement the HMAC-MD5 algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). An otherwise well-formed request naming HMAC-MD5 or another unsupported TSIG algorithm MUST receive the unsigned BADKEY response specified by BDS-FR-TSIG-013, echoing the received algorithm name. BoronDNS MUST NOT emit BADALG for request verification; RFC 8945 §5.2 uses BADKEY when the key or algorithm is unknown.
+
 *Source.* RFC 8945 §6 ("hmac-md5 MUST NOT be used by new implementations").
+
 *Verification.* Reception tests with HMAC-MD5 and unknown algorithm names; verify unsigned BADKEY and exact algorithm-name echo.
 
 ### Key configuration and storage
 
 **BDS-FR-TSIG-005.** TSIG key references MUST be configured at process startup per §6.2 or obtained from validated catalog member metadata. TSIG key material MAY be supplied by startup configuration or by a configured reloadable secret-store snapshot. Each key entry comprises a key name (a DNS name), an algorithm identifier, and a shared secret. Secret-store reload MUST validate a complete candidate snapshot and MUST retain the previous live snapshot if validation fails.
+
 *Source.* BDS-INV-005; RFC 8945 §3.
+
 *Verification.* Configuration round-trip tests; secret-store reload tests confirming successful atomic replacement and failed-reload retention.
 
 **BDS-FR-TSIG-006.** Shared secret material MUST NOT appear in log output at any verbosity level, MUST NOT appear in error messages or diagnostic output of any kind, and MUST be zeroed in process memory at process termination.
+
 *Source.* Standard cryptographic key handling; defensive operational posture.
+
 *Verification.* Static analysis of log statements; review of error-formatting code paths; memory inspection at shutdown.
 
 ### Inbound message verification
 
 **BDS-FR-TSIG-007.** In a received DNS message bearing a TSIG record, the TSIG record MUST appear as the last record in the additional section. Messages with TSIG in any other position, or with more than one TSIG record, MUST be rejected with RCODE = 1 (FORMERR).
+
 *Source.* RFC 8945 §5.2.
+
 *Verification.* Conformance tests with TSIG records in non-final positions and with duplicate TSIG records.
 
 **BDS-FR-TSIG-008.** Upon detection of a TSIG record in a received message, the server MUST perform verification in the following order. The first check to fail terminates verification and produces the corresponding response per BDS-FR-TSIG-013:
+
 - (a) Locate the matching key by the TSIG record's owner name; absence of a matching key produces BADKEY (error code 17).
 - (b) Verify that the algorithm name in the TSIG RDATA matches the algorithm configured for the key; mismatch produces BADKEY (per RFC 8945 §5.2.2).
 - (c) Validate the protocol MAC-length bounds, then compute and compare the expected MAC over the message — with the TSIG record removed and the header ID field temporarily restored to the original-ID field of the TSIG RDATA — using the configured secret and algorithm. A mismatch produces BADSIG (error code 16).
@@ -1393,26 +1719,35 @@ The area code **TSIG** is allocated.
 - (e) Validate request-only fields: Error MUST be zero, while Other Data is treated as opaque authenticated input.
 
 A message is considered authenticated only when all checks pass. Signed TSIG error responses received from a peer MUST likewise be authenticated before their Error field is acted upon.
+
 *Source.* RFC 8945 §§5.2–5.4.
+
 *Verification.* Tests injecting failures at each check stage.
 
 **BDS-FR-TSIG-009.** MAC comparison during TSIG verification MUST be performed using a constant-time comparison function that does not leak timing information about the position of any byte mismatch.
+
 *Source.* Standard cryptographic practice; defence against timing-attack side channels.
+
 *Verification.* Code review confirming use of a constant-time comparison primitive; the implementation choice (e.g., `subtle` crate) is recorded in the Architecture Document.
 
 ### Multi-message TSIG for AXFR and IXFR
 
 **BDS-FR-TSIG-010.** For a multi-message TSIG-signed response (an AXFR or IXFR Mode 2 response in reply to a signed query), the server MUST verify that at least one TSIG-signed message appears within every window of 100 consecutive envelopes of the response stream. A gap exceeding 100 envelopes between consecutive signed messages MUST cause the session to be aborted with a TSIG verification failure logged at warning level.
+
 *Source.* RFC 8945 §5.3.1.
+
 *Verification.* Test response streams with various TSIG placement patterns including gaps at and beyond 100 envelopes.
 
 **BDS-FR-TSIG-011.** For multi-message TSIG-signed responses, the server MUST maintain the cumulative MAC envelope context required by RFC 8945 §5.3.1: the MAC of the originating signed query is the prior-MAC input to the first response message's MAC computation; each subsequently verified TSIG MAC becomes the prior-MAC input to the next signed message's MAC computation. The server MUST advance and verify this state correctly across the response stream.
+
 *Source.* RFC 8945 §5.3.1.
+
 *Verification.* Conformance tests with primaries known to implement multi-message TSIG correctly; cross-implementation interop tests against BIND, NSD, and Knot.
 
 ### Outbound signing
 
 **BDS-FR-TSIG-012.** When the server originates a DNS message destined for a peer with which a TSIG key is configured (AXFR query, IXFR query, SOA poll query, NOTIFY response), the server MUST sign the message by appending a TSIG record to the additional section. The TSIG RDATA MUST be constructed per RFC 8945 §5.3 with:
+
 - algorithm name and shared secret taken from the configured key;
 - time signed set to the server's current time at signing;
 - fudge set to a configurable value with a default of 300 seconds;
@@ -1421,11 +1756,13 @@ A message is considered authenticated only when all checks pass. Signed TSIG err
 - error and other-len fields set to zero.
 
 *Source.* RFC 8945 §5.3.
+
 *Verification.* Wire-format inspection of outbound signed messages; cryptographic verification against the configured key.
 
 ### Error responses
 
 **BDS-FR-TSIG-013.** When the server detects a TSIG verification failure on an inbound message and the source is one to which a response is appropriate (i.e., not an unauthorised source under BDS-FR-NOTIFY-004, which is silently discarded), the server MUST respond per RFC 8945 §5.2.2 with:
+
 - RCODE = 9 (NOTAUTH);
 - BADKEY for an unknown key or unsupported/mismatched algorithm, returned as an unsigned zero-MAC TSIG that echoes the received key and algorithm names;
 - BADSIG for an authentication failure, returned as an unsigned zero-MAC TSIG;
@@ -1436,34 +1773,45 @@ A message is considered authenticated only when all checks pass. Signed TSIG err
 Structurally malformed TSIG input, including a nonzero request Error or a MAC length outside the protocol bounds, MUST receive FORMERR without a TSIG RR rather than a TSIG extended error.
 
 *Source.* RFC 8945 §5.2.2, §5.4.
+
 *Verification.* Conformance tests across all TSIG error conditions.
 
 ### MAC truncation
 
 **BDS-FR-TSIG-014.** The server MUST accept TSIG records on inbound messages with MAC sizes within the per-algorithm range specified by RFC 8945 §5.2.2.1 and RFC 4635 §3.1. A MAC longer than the algorithm output or shorter than the RFC protocol minimum is malformed and MUST cause FORMERR. BADTRUNC (error code 22) is reserved for an otherwise protocol-valid truncation that is below a separately configured local acceptance minimum.
+
 *Source.* RFC 8945 §5.2.2.1; RFC 4635 §3.1.
+
 *Verification.* Conformance tests with truncated MACs at the minimum permitted size and below.
 
 **BDS-FR-TSIG-015.** When the server signs an outbound message, the TSIG record MUST carry the MAC at the full output length of the algorithm, without truncation.
+
 *Source.* RFC 8945 §10.5 (truncation provides no significant benefit and is discouraged).
+
 *Verification.* Wire-format inspection of outbound signed messages.
 
 ### Oversized UDP responses
 
 **BDS-FR-TSIG-016.** Where a TSIG-signed response message would exceed the available UDP message size (the smaller of the inbound EDNS0-advertised buffer size and the server's own configured maximum), the server MUST construct a bounded truncated response, set TC = 1, retain the Question, remove complete DNS records as needed, and sign that truncated response. The emitted message, including its TSIG RR, MUST NOT exceed the negotiated ceiling. If even the minimal signed response cannot fit, the server MUST fail closed rather than emit an oversized or unsigned response.
+
 *Source.* RFC 8945 §5.2.1.
+
 *Note.* In practice this case is rare for the message types the server signs (NOTIFY responses are small); the requirement is for correctness under boundary conditions.
+
 *Verification.* Tests below, exactly at, and above the negotiated boundary, including EDNS Padding that causes only the signed form to exceed the ceiling.
 
 ### Logging
 
 **BDS-FR-TSIG-017.** The server MUST log TSIG events as follows:
+
 - successful inbound verification: debug level, with at minimum key name and source IP;
 - successful outbound signing: debug level, with at minimum key name and destination IP;
 - any TSIG error (BADKEY, BADSIG, BADTIME, BADTRUNC, or a received peer error code), inbound or outbound: warning level, with at minimum key name where known, error type, peer IP, message direction, and timestamp.
 
 MAC values, shared secret material, and any other key-derived material MUST NOT appear in any log entry at any level.
+
 *Source.* Operational requirement; security requirement for key material confidentiality.
+
 *Verification.* Log inspection across success and failure scenarios; static analysis of log-statement contents.
 
 ## 4.10 Zone Transfer over TLS (XoT)
@@ -1477,73 +1825,101 @@ The area code **XOT** is allocated.
 ### TLS configuration
 
 **BDS-FR-XOT-001.** The formal RFC 9103 XoT profile MUST use TLS 1.3 (RFC 8446) or later. TLS protocol implementation is delegated to the configured TLS library, but the BoronDNS release profile MUST prove that XoT handshakes for the formal profile do not negotiate TLS 1.2 or older protocol versions. Any TLS 1.2 support retained for interoperability with legacy or experimental primaries MUST be explicitly documented as a compatibility mode and MUST NOT be presented as RFC 9103 XoT conformance.
+
 *Source.* RFC 9103 §7.2.
+
 *Note.* The production XoT client pins TLS 1.3. TLS 1.2 exists only in isolated test-peer support and is not an operator-selectable compatibility mode.
+
 *Verification.* Handshake tests against test peers offering TLS 1.2 only, TLS 1.3 only, and both; the formal profile must reject the TLS 1.2-only peer and negotiate TLS 1.3 or later where available. Compatibility-mode tests, if retained, must be separated from formal RFC 9103 evidence.
 
 **BDS-FR-XOT-002.** TLS cipher-suite selection MUST conform to the current recommendations of BCP 195 (RFC 9325): authenticated encryption with associated data (AEAD) cipher suites only; NULL, anonymous, RC4, 3DES, and export-grade cipher suites MUST NOT be offered or accepted. The specific suite list is determined by the underlying TLS implementation but MUST fall within these constraints.
+
 *Source.* BCP 195 (RFC 9325).
+
 *Verification.* TLS handshake-capture tests; the offered ClientHello cipher list MUST be entirely AEAD with no prohibited suites.
 
 ### Transport
 
 **BDS-FR-XOT-003.** The server MUST initiate XoT connections to the configured primary on TCP port 853 by default. The destination port MUST be overridable per (zone, primary) tuple in configuration.
+
 *Source.* RFC 9103 §6.
+
 *Verification.* Connection-layer inspection during XoT initiation; configurable-port tests.
 
 **BDS-FR-XOT-004.** XoT connections MUST present the ALPN protocol identifier `dot` (RFC 7858) during TLS negotiation. Failure of the primary to confirm ALPN `dot` MUST cause the XoT session to be aborted per BDS-FR-XOT-010.
+
 *Source.* RFC 9103 §7.4.
+
 *Verification.* TLS handshake inspection; tests against peers not confirming `dot` ALPN.
 
 ### Authentication
 
 **BDS-FR-XOT-005.** The server MUST authenticate the primary's TLS certificate using X.509 PKIX path validation against the configured trust anchors, in accordance with RFC 5280. The configured primary hostname MUST be presented as the TLS SNI (RFC 6066) during the handshake, and the primary's certificate MUST present a matching SubjectAltName entry. Validation failure for any reason — expired certificate, untrusted issuer, hostname mismatch, malformed certificate — MUST cause the XoT session to be aborted per BDS-FR-XOT-010.
+
 *Source.* RFC 9103 §9.1; RFC 5280; RFC 6066.
+
 *Verification.* Tests with expired, untrusted, mismatched-name, and otherwise-invalid certificates.
 
 ### Profile and fallback prohibition
 
 **BDS-FR-XOT-006.** Where XoT is configured for a (zone, primary) tuple, the server MUST apply the Strict Profile of RFC 9103 §9.1: TLS is mandatory, certificate authentication per BDS-FR-XOT-005 is mandatory, and the server MUST NOT establish an XoT session without successful TLS handshake and certificate authentication. The Opportunistic Privacy Profile of RFC 9103 §9.2 MUST NOT be used. The server MUST NOT fall back to unencrypted TCP transport when an XoT connection or authentication fails.
+
 *Source.* RFC 9103 §9.1, §9.2.
+
 *Verification.* Tests confirming that TLS failures result in transfer abort, not cleartext retry. Code review confirming no Opportunistic-Profile code path exists.
 
 ### Mutual TLS (optional)
 
 **BDS-FR-XOT-007.** The server MAY present a client certificate during the TLS handshake for mutual authentication (mTLS), where configured per (zone, primary) tuple, in accordance with RFC 9103 §9.4. The client certificate and the corresponding private key MUST be supplied via configuration per §6.2 and MUST be subject to the key-material handling requirements analogous to TSIG key material under BDS-FR-TSIG-006.
+
 *Source.* RFC 9103 §9.4.
+
 *Verification.* Configuration round-trip tests; handshake tests against primaries requiring client certificates.
 
 ### Combination with TSIG
 
 **BDS-FR-XOT-008.** XoT and TSIG MAY be configured concurrently for the same (zone, primary) tuple. Where both are configured, TSIG signing and verification per §4.9 MUST be performed in addition to the TLS protection of XoT; neither mechanism supersedes the other. TLS provides channel confidentiality and certificate-based identity; TSIG provides per-message integrity that survives connection boundaries.
+
 *Source.* RFC 9103 §9.3.
+
 *Verification.* Conformance tests with peers configured for XoT-only, TSIG-only, XoT+TSIG, and neither.
 
 ### Connection management
 
 **BDS-FR-XOT-009.** The server MAY reuse an established XoT TCP connection for successive zone transfers from the same primary, applying the connection-persistence semantics of RFC 7766 (§4.12) within the TLS tunnel.
+
 *Source.* RFC 9103 §6.5; RFC 7766.
+
 *Verification.* Connection-management tests with multiple sequential transfers to the same primary.
 
 ### Error handling and logging
 
 **BDS-FR-XOT-010.** TLS handshake failures, certificate validation failures, ALPN negotiation failures, and TLS-protocol errors during an XoT session MUST cause the affected transfer session to be aborted in the manner prescribed by BDS-FR-AXFR-019 (for AXFR) or BDS-FR-IXFR-013 (for IXFR). The state-machine retry semantics of §4.16 apply unchanged.
+
 *Source.* RFC 9103 §7; this SRS §4.6, §4.7.
+
 *Verification.* Fault-injection tests across TLS error categories.
 
 **BDS-FR-XOT-011.** XoT events MUST be logged as follows:
+
 - successful handshake and session establishment: info level, with at minimum peer IP address, SNI presented, negotiated TLS version, and negotiated cipher suite;
 - handshake failure, certificate validation failure, ALPN failure: warning level, with at minimum peer IP address, SNI presented, and the failure cause;
 - session termination: info level, with at minimum peer IP, session duration, and bytes transferred.
 
 Certificate material and private key material MUST NOT appear in any log entry. Negotiated session keys, master secrets, and any TLS key-derivation material MUST NOT appear in any log entry.
+
 *Source.* Operational requirement; security requirement for cryptographic material confidentiality.
+
 *Verification.* Log inspection across success and failure scenarios; static analysis of log-statement contents.
 
 **BDS-FR-XOT-012.** The server's XoT implementation MUST NOT perform real-time certificate revocation checking via CRL (RFC 5280) or OCSP (RFC 6960) request. The server SHOULD accept and honour OCSP stapled responses (RFC 6961) presented by the primary during the TLS handshake when its TLS implementation supports stapling; where stapling support is unavailable in the underlying TLS implementation, this requirement reduces to no revocation checking.
+
 *Source.* RFC 5280; RFC 6960; RFC 6961; operational pragmatics in zone-transfer paths.
+
 *Rationale.* Real-time CRL or OCSP request from a DNS secondary would introduce an external network dependency on a third-party CA service into the zone-refresh hot path, with associated latency, failure-mode coupling, and privacy implications (the secondary would disclose its primary-certificate fingerprints to the CA on every transfer). OCSP stapling, where supported, provides revocation visibility without these costs because the response travels in-band on the TLS handshake. The explicit declaration here records the security posture so that operators understand the server's revocation behaviour and configure trust anchors and certificate rotation policies accordingly.
+
 *Note.* Operators requiring stricter revocation enforcement should rotate certificates more frequently (short-lived certificates with automated renewal) rather than relying on revocation infrastructure. Decision recorded in Appendix C.5.
+
 *Verification.* Code review confirming no outbound CRL or OCSP request is issued during XoT handshake; tests with OCSP-stapled and non-stapled primary certificates confirming behaviour.
 
 ## 4.11 EDNS0
@@ -1559,103 +1935,144 @@ The area code **EDNS** is allocated.
 ### OPT RR parsing
 
 **BDS-FR-EDNS-001.** The server MUST parse the OPT pseudo-RR (RFC 6891 §6.1) when it appears in inbound DNS messages, decoding the fixed fields (owner name, TYPE, class, TTL containing extended-RCODE / VERSION / DO / Z, RDLENGTH) and the RDATA option pairs (option-code, option-length, option-data). RDATA whose options are not bit-exact consumable up to RDLENGTH (option-length exceeding remaining RDATA, trailing octets, or other framing defects) MUST cause the message to be rejected with RCODE = 1 (FORMERR).
+
 *Source.* RFC 6891 §6.1.2.
+
 *Verification.* Wire-format conformance tests with valid, oversized-option-length, and trailing-octet OPT RDATA.
 
 **BDS-FR-EDNS-002.** Inbound DNS messages MUST contain at most one OPT RR. Messages containing two or more OPT RRs MUST be rejected with RCODE = 1 (FORMERR).
+
 *Source.* RFC 6891 §6.1.1.
+
 *Verification.* Conformance tests with multiple OPT RRs.
 
 **BDS-FR-EDNS-003.** An OPT RR in an inbound message MUST appear in the additional section with the root name (".") as its owner name and TYPE = 41. OPT RRs appearing in the answer, authority, or question sections, or carrying any owner name other than the root, MUST cause the message to be rejected with RCODE = 1 (FORMERR).
+
 *Source.* RFC 6891 §6.1.1, §6.1.2.
+
 *Verification.* Conformance tests.
 
 ### Version handling
 
 **BDS-FR-EDNS-004.** The server MUST accept inbound OPT RRs with the VERSION field equal to 0. Inbound OPT RRs with VERSION > 0 MUST cause the server to respond with extended RCODE = 16 (BADVERS), with the response carrying an OPT RR whose VERSION field is 0 — indicating the highest EDNS version supported by the server.
+
 *Source.* RFC 6891 §6.1.3.
+
 *Verification.* Conformance tests across VERSION values 0, 1, 2, 255.
 
 ### UDP payload size negotiation
 
 **BDS-FR-EDNS-005.** The class field of an inbound OPT RR advertises the requestor's maximum UDP payload size. The server MUST treat class-field values below 512 as equal to 512 in subsequent processing; values at 512 and above MUST be used as advertised, subject to the upper bound established by BDS-FR-EDNS-006.
+
 *Source.* RFC 6891 §6.2.3.
+
 *Verification.* Wire-format conformance tests with advertised payload sizes of 0, 256, 512, 1232, 4096, and 65535.
 
 **BDS-FR-EDNS-006.** The server MUST enforce a configurable maximum UDP response size, with a default of 1232 octets. The applied UDP payload size ceiling for any given response MUST be the lesser of the requestor's advertised payload size (after BDS-FR-EDNS-005 normalisation) and the server's configured maximum. Responses that would exceed this ceiling MUST trigger truncation as specified in §4.12.
+
 *Source.* RFC 6891 §6.2.5; DNS Flag Day 2020 consensus (1232 octets is the widely-adopted ceiling avoiding IP fragmentation on the public Internet).
+
 *Verification.* Tests at the boundary of the ceiling; tests confirming TC bit is set per §4.12.
 
 ### Response OPT RR
 
 **BDS-FR-EDNS-007.** Where an inbound query contained an OPT RR, the response MUST include an OPT RR in its additional section. Where an inbound query did not contain an OPT RR, the response MUST NOT include an OPT RR.
+
 *Source.* RFC 6891 §6.1.1; RFC 6891 §7.
+
 *Verification.* Wire-format inspection of responses across queries with and without OPT.
 
 **BDS-FR-EDNS-008.** The OPT RR included in a response MUST have owner name ".", TYPE = 41, the class field set to the server's configured maximum UDP payload size (default 1232), the VERSION field set to 0, and the Z bits (other than DO) set to 0.
+
 *Source.* RFC 6891 §6.1.
+
 *Verification.* Wire-format inspection of response OPT RRs.
 
 **BDS-FR-EDNS-009.** Where an inbound query contains an OPT RR, the response OPT RR's TTL field MUST copy the query's DO bit exactly. DNSSEC augmentation remains controlled by the query DO bit per §4.13; the response DO bit is not a signal that augmentation records were included.
+
 *Source.* RFC 6840 §5.6; RFC 3225 §3; RFC 6891 §6.1.4.
+
 *Verification.* Wire-format inspection of response OPT RRs for DO = 0 and DO = 1 queries, including signed-zone responses, unsigned-zone responses, REFUSED responses, error responses, and truncation paths.
 
 ### Extended RCODE
 
 **BDS-FR-EDNS-010.** Where the server's response uses an RCODE in the extended range (16 or greater), the high 8 bits of the response OPT RR's TTL field MUST encode the upper 8 bits of the 12-bit extended RCODE, with the low 4 bits of the RCODE encoded in the response header's RCODE field. For RCODEs in the range 0–15, the extended-RCODE field (high 8 bits of the OPT TTL) MUST be 0.
+
 *Source.* RFC 6891 §6.1.3.
+
 *Verification.* Conformance tests with extended RCODEs including BADVERS (16) and BADTRUNC (22 — see also §4.9 TSIG).
 
 ### TCP Keepalive option (RFC 7828)
 
 **BDS-FR-EDNS-011.** The server MUST recognise the edns-tcp-keepalive option (option code 11) per RFC 7828 in inbound queries received over TCP. The option MUST be silently ignored when received in queries over UDP, in accordance with RFC 7828 §3.4.
+
 *Source.* RFC 7828 §3.4.
+
 *Verification.* Conformance tests with the option on both transports.
 
 **BDS-FR-EDNS-012.** In responses to TCP queries that included the edns-tcp-keepalive option, the server MUST include an edns-tcp-keepalive option in the response OPT RR's RDATA, advertising the server's idle-timeout policy expressed in 100-millisecond units per RFC 7828 §3.1. The advertised timeout value MUST be configurable, with a default of 300 (= 30 seconds).
+
 *Source.* RFC 7828 §3.
+
 *Note.* TCP connection persistence and idle timeout management are specified in §4.12; the edns-tcp-keepalive option is the wire-level advertisement of the policy.
+
 *Verification.* Wire-format inspection of responses to TCP queries that requested keepalive.
 
 ### Padding option (RFC 7830)
 
 **BDS-FR-EDNS-013.** The server MUST recognise the Padding option (option code 12) per RFC 7830 in inbound queries. The server MUST NOT include DNS message padding in a response sent over an unencrypted transport. The server MAY include a Padding option only on an authenticated encrypted client-query transport and only when configured to do so. Because this release exposes no encrypted client-query listener, `[limits].edns_padding_block_size` MUST remain 0 and startup MUST reject a nonzero value.
+
 *Source.* RFC 7830 §3 and §4; RFC 8467 (informative).
+
 *Note.* XoT encrypts outbound zone transfers, not inbound client queries, so it does not make ordinary UDP/TCP response padding permissible. The response composer nevertheless keeps a transport-gated implementation so an encrypted client-query listener can enable the feature without weakening the plaintext prohibition.
+
 *Verification.* Plaintext UDP/TCP conformance tests proving a Padding request is recognised but no response padding is emitted; configuration validation proving nonzero padding is rejected while no encrypted query listener exists; isolated encrypted-transport response-composer tests proving configured block alignment.
 
 ### Unknown options
 
 **BDS-FR-EDNS-014.** The server MUST silently ignore OPT options whose option codes it does not recognise in inbound messages. Unknown options MUST NOT cause the message to be rejected.
+
 *Source.* RFC 6891 §6.1.2.
+
 *Verification.* Conformance tests with synthetic option codes outside the recognised set.
 
 ### Non-EDNS UDP responses
 
 **BDS-FR-EDNS-015.** Where an inbound query did not contain an OPT RR (a non-EDNS query), the applied UDP payload size ceiling for the corresponding response MUST be 512 octets, per the unextended limit of RFC 1035 §2.3.4 and §4.2.1. Responses that would exceed this ceiling MUST trigger truncation as specified in §4.12. The server MUST NOT include an OPT RR in responses to non-EDNS queries (per BDS-FR-EDNS-007), and consequently MUST NOT advertise any larger UDP capability to such clients.
+
 *Source.* RFC 1035 §2.3.4, §4.2.1; RFC 6891 §6.2.5 (EDNS-extended buffer sizes apply only when EDNS is in use).
+
 *Note.* This requirement closes the case left implicit by BDS-FR-EDNS-006, which specifies the UDP ceiling as the lesser of (client-advertised, server-configured) — for non-EDNS clients there is no advertised value, and the implicit RFC 1035 default of 512 octets governs. Modern resolvers almost universally use EDNS; non-EDNS traffic on the production query path is rare and typically originates from legacy stub resolvers or monitoring probes.
+
 *Verification.* Tests with non-EDNS queries soliciting responses that would exceed 512 octets; verify TC bit setting and ≤ 512 octet response size.
 
 ### Name Server Identifier (NSID, RFC 5001)
 
 **BDS-FR-EDNS-016.** The server MUST recognise the NSID (Name Server Identifier) EDNS option (option code 3) per RFC 5001 in inbound queries. When the option is present in the query's OPT RR with zero-length OPTION-DATA (a request for the server's identifier), and the server is configured with a non-empty NSID value, the server MUST include an NSID option in the response's OPT RR carrying the configured NSID as its OPTION-DATA. When the option is present with non-zero OPTION-DATA in a query, the server MUST silently ignore the supplied data and treat the option as a request per the above; non-zero OPTION-DATA from a client is not a meaningful semantic per RFC 5001 §2.4.
+
 *Source.* RFC 5001 §2.
+
 *Note.* NSID is the standard mechanism for identifying which anycast or load-balanced instance answered a given query — a critical capability for debugging production deployments. The configured NSID value is opaque octet content (commonly an ASCII hostname like `dns-iad-3` or a hex-encoded site identifier); it is set by configuration per BDS-IF-CONF-003.
+
 *Verification.* Conformance tests with NSID-requesting queries; wire-format inspection of responses confirming NSID option presence and content matches configuration.
 
 **BDS-FR-EDNS-017.** The NSID value MUST be configurable per §6.2 as either an inline string or an octet sequence. The default value MUST be empty (no NSID configured). When no NSID is configured, NSID requests in inbound queries MUST be silently ignored — the server MUST NOT include an NSID option in responses to such queries.
+
 *Source.* RFC 5001 §2.4 (NSID response is optional).
+
 *Verification.* Configuration round-trip tests; behavioural tests with NSID configured and not configured.
 
 ### Extended DNS Errors (RFC 8914)
 
 **BDS-FR-EDNS-018.** The server MUST support an operator-configurable minimal Extended DNS Errors profile per RFC 8914. The default profile MUST be `off`. When the profile is `minimal`, and the inbound query contained an OPT RR, the response OPT RR MAY include an Extended DNS Error option (option code 15) with no EXTRA-TEXT for the following server-local diagnostic conditions:
+
 - `Not Ready` (INFO-CODE 14) when the matching zone exists but is not yet ACTIVE, including LOADING and EXPIRED zone-state-machine states;
 - `Unsupported NSEC3 Iterations` (INFO-CODE 27) when correct DNSSEC denial-of-existence proof construction is refused because the zone's NSEC3 iteration count exceeds the configured `dnssec.nsec3_max_iterations` cap per BDS-FR-DNSSEC-014.
 
 The EDE option MUST NOT change the base DNS RCODE selected by the underlying response condition: NSEC3-cap refusal is SERVFAIL whether EDE is enabled or disabled. The server MUST NOT emit EDE in responses to non-EDNS queries. If a UDP response must be truncated to fit the applicable payload ceiling, the server MAY omit the EDE option before omitting DNS resource records.
+
 *Source.* RFC 8914 §2, §3, §4; RFC 9276 §3.2, §6.
+
 *Verification.* Wire-format tests for profile off/on, LOADING-zone SERVFAIL with INFO-CODE 14, NSEC3-over-cap negative response with INFO-CODE 27, non-EDNS omission, and truncation behaviour. *Added in v0.9.*
 
 ## 4.12 TCP Transport
@@ -1669,63 +2086,87 @@ The area code **TCP** is allocated.
 ### Message framing
 
 **BDS-FR-TCP-001.** DNS messages exchanged over TCP MUST be framed with a 2-octet length prefix in network byte order, followed by the DNS message of exactly the indicated length. Multiple DNS messages MAY be exchanged on the same TCP connection, each independently framed. A length prefix value of 0 MUST cause the connection to be closed, with a log entry at warning level recording the malformed framing.
+
 *Source.* RFC 7766 §8; RFC 1035 §4.2.2.
+
 *Verification.* TCP framing tests with valid frames, zero-length frames, frames where declared length exceeds remaining stream data, and back-to-back frames.
 
 ### Inbound connection lifecycle
 
 **BDS-FR-TCP-002.** The server MUST keep accepted TCP connections open for receipt of subsequent queries from the same client until any of the following: idle timeout under BDS-FR-TCP-003, read or write timeout under BDS-FR-TCP-004, client-initiated TCP close, the global concurrent connection limit under BDS-FR-TCP-005 requires reclamation, or server shutdown.
+
 *Source.* RFC 7766 §6.2.1.
+
 *Verification.* Connection-management tests confirming connections persist across multiple queries.
 
 **BDS-FR-TCP-003.** The server MUST enforce a configurable TCP idle timeout on accepted connections, with a default of 30 seconds. The applied timeout MAY be reduced below the configured default for individual connections where the client advertises a shorter timeout via the edns-tcp-keepalive option (BDS-FR-EDNS-012). Idle is measured from the completion of the last message exchange (response sent or query received). Connections idle beyond the applied timeout MUST be closed by the server with a TCP FIN.
+
 *Source.* RFC 7766 §6.2.3; RFC 7828 §3.
+
 *Verification.* Connection-lifecycle tests with varied client edns-tcp-keepalive values; verify timeout is enforced and connection is closed with FIN.
 
 **BDS-FR-TCP-004.** The server MUST enforce configurable read and write timeouts on accepted TCP connections, with defaults of 30 seconds each. Read operations that fail to receive any data within the read timeout, or write operations that fail to make progress within the write timeout, MUST cause the connection to be closed with a TCP RST.
+
 *Source.* Operational requirement; defensive against slow-loris-style resource exhaustion.
+
 *Verification.* Tests with simulated slow clients.
 
 ### Concurrency limits
 
 **BDS-FR-TCP-005.** The server MUST limit the number of concurrently accepted TCP connections to a configurable maximum, with a default of 1024. At the global limit the listener MUST cease polling `accept`, leaving new attempts under the configured kernel backlog until capacity returns; it MUST NOT create an accept-and-close busy loop. Entry into a continuous saturation interval MUST be logged once at warning level rather than once per connection attempt.
+
 *Source.* RFC 7766 §10; resource management.
+
 *Verification.* Tests at and beyond the concurrent connection limit.
 
 **BDS-FR-TCP-006.** The server MAY enforce a configurable per-source-IP TCP connection limit. The default policy is no per-source-IP limit beyond the global limit of BDS-FR-TCP-005. Where configured, connection attempts from an IP address at its per-IP cap MUST be refused or immediately closed, with the refusal logged at info level.
+
 *Source.* Operational requirement; defence against single-client connection exhaustion.
+
 *Verification.* Tests with configured per-IP limits.
 
 ### Pipelining and out-of-order responses
 
 **BDS-FR-TCP-007.** The server MUST accept multiple in-flight queries on a single TCP connection (query pipelining). The server MAY emit responses to pipelined queries in any order, with responses matched to queries by the QID field of the response header. The server MUST process queries as resources permit, without imposing implicit ordering between independent queries on the same connection.
+
 *Source.* RFC 7766 §6.2.
+
 *Verification.* Pipelined-query tests verifying responses are emitted and correctly matched.
 
 ### Truncation and TCP fallback
 
 **BDS-FR-TCP-008.** Where a UDP response would exceed the applicable UDP payload size ceiling determined per BDS-FR-EDNS-006, the server MUST construct a truncated response per RFC 1035 §4.2.1: the TC bit in the response header MUST be set to 1, and resource records MUST be removed from the response in the following order until the response fits within the ceiling:
+
 - (a) additional section records, with the exception of the OPT RR (which is retained for EDNS response context);
 - (b) authority section records other than any SOA record required to be present under §4.3 (NRESP) for NXDOMAIN or NODATA semantics;
 - (c) answer section records.
 
 The truncated response MUST be emitted with the TC bit set, and the client is expected to retry the original query over TCP.
+
 *Source.* RFC 1035 §4.2.1; RFC 2181 §9.
+
 *Verification.* Tests near and beyond the UDP payload ceiling, verifying truncation order and TC bit setting; inspection of retained OPT RR and SOA where applicable.
 
 ### Outbound TCP connections
 
 **BDS-FR-TCP-009.** TCP connections initiated by the server toward primaries (for AXFR per §4.6, IXFR per §4.7, SOA poll where TCP is used, or NOTIFY response where TCP was the incoming transport) MUST use the same 2-octet length-prefix framing specified in BDS-FR-TCP-001. The server MAY reuse a single TCP connection to a primary for multiple outbound queries, subject to the primary's connection-management policy and the connection persistence requirements of RFC 7766 §6.
+
 *Source.* RFC 7766 §8; RFC 5936 §4.1.
+
 *Verification.* Outbound TCP framing tests; connection-reuse tests for multiple sequential queries.
 
 **BDS-FR-TCP-010.** The server MUST enforce a configurable timeout on outbound TCP connection establishment, with a default of 10 seconds. Connection attempts that fail to establish within the timeout MUST be abandoned; the failure MUST be treated as a transfer or query failure under the relevant requirements of §4.6, §4.7, or §4.16 (zone state machine).
+
 *Source.* Operational requirement.
+
 *Verification.* Tests with simulated unreachable primaries.
 
 **BDS-FR-TCP-011.** The server MUST enforce a configurable maximum number of concurrently in-flight queries per accepted TCP connection, with a default of 64. When this limit is reached on a connection, the server MUST cease reading new queries from that connection's socket until enough in-flight queries have been answered to bring the count below the limit. Connections persistently at the limit for a configurable duration (default equal to the read timeout of BDS-FR-TCP-004) MUST be closed by the server with a TCP FIN, with the closure logged at info level.
+
 *Source.* RFC 7766 §7 (resource management for pipelined connections); defence against single-client query-state exhaustion via unbounded pipelining.
+
 *Note.* Pipelining (BDS-FR-TCP-007) permits multiple in-flight queries per connection, but unbounded pipelining is a DoS vector — a single TCP connection could otherwise accumulate millions of pending queries. The 64 default is comfortably above legitimate pipelining patterns and well below resource-exhaustion thresholds. Operators serving especially aggressive pipelining clients can tune upward.
+
 *Verification.* Tests opening a single TCP connection and pipelining queries beyond the configured limit; verify back-pressure (reads cease) rather than unbounded buffer growth.
 
 ## 4.13 DNSSEC Record Serving
@@ -1741,6 +2182,7 @@ The area code **DNSSEC** is allocated.
 ### DNSSEC record types
 
 **BDS-FR-DNSSEC-001.** The server MUST implement type-aware parsing, storage, and serving of the following DNSSEC resource record types, in accordance with the wire formats specified in RFC 4034 and RFC 5155:
+
 - DNSKEY (type 48), RFC 4034 §2;
 - RRSIG (type 46), RFC 4034 §3;
 - NSEC (type 47), RFC 4034 §4;
@@ -1749,86 +2191,122 @@ The area code **DNSSEC** is allocated.
 - NSEC3PARAM (type 51), RFC 5155 §4.
 
 Type-aware handling MUST include the ability to identify, for each RRSIG record, the type covered by that signature via the RRSIG RDATA's "type covered" field, to permit matching of RRSIGs to the RRsets they cover during response construction.
+
 *Source.* RFC 4034 §2–§5; RFC 5155 §3, §4; Appendix A.
+
 *Verification.* Wire-format conformance tests for each record type; round-trip tests confirming opaque-equivalent preservation of RDATA.
 
 ### DO bit inspection
 
 **BDS-FR-DNSSEC-002.** The server MUST inspect the DO (DNSSEC OK) bit in the OPT RR of each inbound query per RFC 4035 §3.2.1. Where DO = 1, the server MUST construct responses with DNSSEC augmentation per BDS-FR-DNSSEC-003 through BDS-FR-DNSSEC-007. Where DO = 0 (or no OPT RR is present), the server MUST construct responses without DNSSEC augmentation per BDS-FR-DNSSEC-008.
+
 *Source.* RFC 4035 §3.2.1.
+
 *Verification.* Tests confirming response composition varies by DO bit setting.
 
 ### Response augmentation (DO = 1)
 
 **BDS-FR-DNSSEC-003.** Where DO = 1 in the query and the response references a DNSSEC-signed zone, the server MUST include the RRSIG records covering each RRset placed in any section of the response (answer, authority, additional), provided those RRSIGs exist in the zone store and the message size permits inclusion. RRSIGs are matched to RRsets by the "type covered" field of the RRSIG RDATA.
+
 *Source.* RFC 4035 §3.1; RFC 4035 §3.1.1.
+
 *Verification.* Lookup tests against signed zones; wire-format inspection of RRSIG presence.
 
 **BDS-FR-DNSSEC-004.** In an NXDOMAIN response (per BDS-FR-CORE-023) where DO = 1 and the queried zone is signed, the server MUST include in the authority section the already-transferred NSEC or NSEC3 records (and their corresponding RRSIGs) that authenticate the non-existence of the QNAME, in accordance with RFC 4035 §3.1.3 for NSEC or RFC 5155 §7.2.2 for NSEC3, provided those proof records exist in the zone store and the response size permits inclusion. The server MUST NOT synthesize missing proof records.
+
 *Source.* RFC 4035 §3.1.3; RFC 5155 §7.2.2.
+
 *Verification.* Lookup tests against signed zones with NSEC and NSEC3 chains; verify denial-of-existence proofs.
 
 **BDS-FR-DNSSEC-005.** In a NODATA response (per BDS-FR-CORE-022) where DO = 1 and the queried zone is signed, the server MUST include in the authority section the already-transferred NSEC or NSEC3 records (and their corresponding RRSIGs) that authenticate the existence of the QNAME together with the absence of the queried type, in accordance with RFC 4035 §3.1.3.1 for NSEC or RFC 5155 §7.2.3, §7.2.4 for NSEC3, provided those proof records exist in the zone store and the response size permits inclusion. The server MUST NOT synthesize missing proof records.
+
 *Source.* RFC 4035 §3.1.3.1; RFC 5155 §7.2.3, §7.2.4.
+
 *Verification.* Lookup tests producing NODATA against signed zones.
 
 **BDS-FR-DNSSEC-006.** Where a positive response is synthesised from a wildcard owner name (per BDS-FR-CORE-024) and DO = 1 and the zone is signed, the server MUST include in the authority section the already-transferred NSEC or NSEC3 records (and their RRSIGs) that authenticate the non-existence of the QNAME as a non-wildcard match, in accordance with RFC 4035 §3.1.3.4 or RFC 5155 §7.2.5, provided those proof records exist in the zone store and the response size permits inclusion. The server MUST NOT synthesize missing proof records.
+
 *Source.* RFC 4035 §3.1.3.4; RFC 5155 §7.2.5.
+
 *Verification.* Lookup tests against signed zones with wildcards.
 
 **BDS-FR-DNSSEC-007.** In a referral response (per BDS-FR-CORE-025) where DO = 1 and the parent zone is signed, the server MUST include in the authority section either the transferred DS RRset for the child zone (and its RRSIGs) where DS records exist, or the already-transferred NSEC or NSEC3 records (and their RRSIGs) that authenticate the absence of DS records where the child zone is unsigned, in accordance with RFC 4035 §3.1.4 or RFC 5155 §7.2.7, provided those records exist in the zone store and the response size permits inclusion. The server MUST NOT synthesize missing DS or denial-proof records.
+
 *Source.* RFC 4035 §3.1.4; RFC 5155 §7.2.7.
+
 *Note.* For zones signed with NSEC3 using the opt-out flag (RFC 5155 §6), unsigned delegations within an opt-out span are not explicitly proved absent by NSEC3 records — the opt-out span's NSEC3 record covers the gap. The server's behaviour follows the data delivered by the primary: where the primary's NSEC3 chain covers the delegation point with an opt-out span (no specific NSEC3 record for the delegation), the server MUST include the covering NSEC3 record and its RRSIG, which is the correct proof under RFC 5155 §6. The server does not synthesise additional proofs.
+
 *Verification.* Lookup tests against signed parent zones with both signed-child and unsigned-child delegations, and against NSEC3-opt-out signed parent zones with unsigned children inside opt-out spans.
 
 ### Response composition (DO = 0)
 
 **BDS-FR-DNSSEC-008.** Where DO = 0 in the query (or no OPT RR is present), the server MUST NOT include RRSIG, NSEC, or NSEC3 records in any section of the response, with the single exception that records of these types MAY be returned where they are themselves the explicitly queried QTYPE.
+
 *Source.* RFC 4035 §3.2.1.
+
 *Note.* The exception covers a client explicitly requesting (for example) QTYPE = RRSIG at a name: the response then contains the RRSIG RRset by virtue of being the queried type, not by virtue of DNSSEC augmentation.
+
 *Verification.* Tests with DO = 0 queries against signed zones; verify absence of DNSSEC augmentation except in the explicit-type case.
 
 ### Header bits in responses
 
 **BDS-FR-DNSSEC-009.** The response DO bit MUST follow BDS-FR-EDNS-009: if the query contains an OPT RR, the response OPT RR copies the query's DO bit exactly, regardless of whether DNSSEC augmentation records were ultimately included. The presence or absence of RRSIG, NSEC, NSEC3, DS, DNSKEY, or NSEC3PARAM records is governed by BDS-FR-DNSSEC-002 through BDS-FR-DNSSEC-008 and by response-size truncation, not by recomputing the response DO bit from the final response contents.
+
 *Source.* RFC 6840 §5.6; RFC 4035 §3.2.1.
+
 *Verification.* Wire-format inspection of response OPT RRs across signed and unsigned zone responses, explicit DNSSEC QTYPE responses, non-authoritative REFUSED responses, error responses, DO = 0 and DO = 1 queries, and truncation paths.
 
 **BDS-FR-DNSSEC-010.** The server MUST set the AD (Authentic Data) bit to 0 in every response message regardless of query state.
+
 *Source.* RFC 6840 §5.8 (the AD bit's meaning in authoritative responses is unspecified; this server's posture is to never assert AD).
+
 *Note.* Resolvers ignore the AD bit on responses from authoritative servers per the same RFC clause. Setting AD = 0 unambiguously avoids any implicit claim of validation by the server (which does not validate).
+
 *Verification.* Wire-format inspection of all response messages.
 
 **BDS-FR-DNSSEC-011.** The server MUST set the CD (Checking Disabled) bit to 0 in every response message regardless of query state.
+
 *Source.* RFC 4035 §3.1.6.
+
 *Note.* RFC 4035 §3.1.6 says a security-aware authoritative name server SHOULD clear CD when composing an authoritative response. This SRS makes that stronger as a project policy because BoronDNS-Secondary is authoritative-only, performs no DNSSEC validation during query processing, and has no recursive response path where RFC 4035 §3.2.2's recursive copy rule would apply.
+
 *Verification.* Wire-format inspection.
 
 ### Algorithm opacity
 
 **BDS-FR-DNSSEC-012.** The server MUST accept DNSSEC records bearing any algorithm number in the relevant algorithm field, including algorithm numbers reserved or unassigned at the time of implementation. The server MUST NOT perform algorithm-validity checks during zone transfer, storage, or serving; algorithm interpretation is exclusively the responsibility of client validators.
+
 *Source.* RFC 6944; RFC 4034 Appendix A.
+
 *Note.* This requirement allows the secondary to faithfully serve zones using algorithms not anticipated at implementation time — for example, future post-quantum algorithms that may be standardised after this server is built.
+
 *Verification.* Zone-transfer tests delivering DNSKEY, RRSIG, and DS records with synthetic algorithm numbers.
 
 ### Prohibited operations
 
 **BDS-FR-DNSSEC-013.** The server MUST NOT generate RRSIG records, MUST NOT generate NSEC or NSEC3 records, MUST NOT generate or maintain DNSKEY records or DNSSEC key material of any kind, MUST NOT perform DNSSEC signature verification or validation, and MUST NOT participate in any DNSSEC key rollover protocol (including RFC 5011). All DNSSEC records served by this server are received via zone transfer from primaries.
+
 *Source.* BDS-INV-001; Appendix C.2.
+
 *Note.* This requirement is the DNSSEC-specific restatement of the architectural invariant. It is cross-referenced from §4.18 (Negative Requirements) for the explicit catalogue of prohibitions.
+
 *Verification.* Static analysis of the codebase; no code path producing DNSSEC records exists outside the zone-transfer ingestion layer.
 
 ### NSEC3 iteration cap
 
 **BDS-FR-DNSSEC-014.** Where a query against an NSEC3-signed zone requires the server to traverse NSEC3 chain records to compose a negative-existence proof (per BDS-FR-DNSSEC-004 or BDS-FR-DNSSEC-005), and the zone's NSEC3PARAM RDATA specifies an iteration count exceeding a configurable cap (per BDS-IF-CONF-015, default 100 as an BoronDNS compatibility default informed by RFC 9276 Appendix A measurements), the server MUST treat the affected response composition as follows:
+
 - The server MUST fail closed with RCODE = 2 (SERVFAIL), AA = 0, and no partial NODATA or NXDOMAIN proof response;
 - The answer, authority, and ordinary additional sections MUST be empty; an OPT RR MAY remain for negotiated EDNS metadata;
 - Where the minimal EDE profile is enabled per BDS-FR-EDNS-018 and the inbound query contained an OPT RR, the response SHOULD include EDE INFO-CODE 27 (`Unsupported NSEC3 Iterations`) without EXTRA-TEXT;
-- The server MUST increment the DNSSEC NSEC3-cap metric defined by BDS-NFR-OBS-009 for each affected response. The current Engineering MVP profile deliberately uses a global counter without a `zone` label to avoid high-cardinality metrics under large catalog-zone deployments.
+- The server MUST increment the DNSSEC NSEC3-cap metric defined by BDS-NFR-OBS-009 for each affected response. The current implementation profile deliberately uses a global counter without a `zone` label to avoid high-cardinality metrics under large catalog-zone deployments.
 
 This requirement is a CPU-amplification defence against adversarial or misconfigured zones whose NSEC3PARAM specifies very high iteration counts. RFC 9276 §2.3 explains the poor cost/benefit tradeoff of additional NSEC3 iterations, and RFC 9276 §3.1 recommends an iteration count of 0 for NSEC3 zone publishers. Appendix A records deployment measurements in which treating zones above 100 iterations as insecure was interoperable near RFC publication time; BoronDNS uses 100 as a compatibility default, not as an RFC compliance ceiling. The cap value is configurable to allow operators to accept legacy zones if they are willing to absorb the CPU cost.
+
 *Source.* RFC 9276 §2.3, §3.1, Appendix A (BCP 236); RFC 5155 §10.3.
+
 *Note.* Positive responses against NSEC3-signed zones do not require denial-chain traversal and are not affected by the cap. A configured value of 0 therefore permits zero-iteration NSEC3 proofs and makes negative queries requiring higher-iteration proofs fail closed; it does not disable ordinary positive service for the zone. The metric remains observable when `edns.extended_dns_errors = "off"` and EDE INFO-CODE 27 is absent.
+
 *Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify fail-closed SERVFAIL composition, optional EDE emission when enabled, positive-answer continuity, and metric increment. *Added in v0.9; fail-closed semantics corrected before public beta.*
 
 ## 4.14 RR Type Parsing and Serving
@@ -1869,7 +2347,9 @@ The area code **RR** is allocated.
 | URI | 256 | RFC 7553 §4.5 | N/A |
 
 *Source.* Appendix A; the specifying RFCs above; RFC 3597 §4 for the compression-policy distinction between pre-RFC-3597 types (permitted) and later types (prohibited); RFC 6604 (clarifying SRV non-compressibility).
+
 *Note.* The "Prohibited" entries derive from RFC 3597 §4's restriction that DNS name compression applies only to RR types whose RDATA structure was defined prior to RFC 3597, plus type-specific clarifications.
+
 *Verification.* Wire-format conformance tests per type; compression-handling tests for the permitted/prohibited boundary.
 
 ### Structural constraints from RR semantics
@@ -1877,35 +2357,48 @@ The area code **RR** is allocated.
 The following requirements specify zone-level constraints that derive from RR-type semantics and are enforced at zone-transfer completion (per §4.6, §4.7). Violations cause transfer abort under BDS-FR-AXFR-019 or BDS-FR-IXFR-013, with the offending record(s) logged.
 
 **BDS-FR-RR-002.** Each served zone MUST contain exactly one SOA record, and that SOA record MUST be at the zone apex. The presence of zero, multiple, or non-apex SOA records in a transferred zone MUST cause the transfer to be aborted.
+
 *Source.* RFC 1034 §4.3.5; RFC 1035 §3.3.13; RFC 2181 §6.1.
+
 *Verification.* Zone-transfer tests delivering zones with anomalous SOA placements.
 
 **BDS-FR-RR-003.** Each served zone MUST contain at least one NS record at the zone apex. Absence of an apex NS RRset in a transferred zone MUST cause the transfer to be aborted.
+
 *Source.* RFC 1034 §4.2.1.
+
 *Verification.* Zone-transfer tests with apex-NS-less zones.
 
 **BDS-FR-RR-004.** SOA serial number arithmetic MUST be performed in accordance with RFC 1982 §3.2: serial A is considered greater than serial B when (A − B) mod 2³² lies in the range [1, 2³¹−1]. This applies to all SOA serial comparisons performed by the server, including IXFR query-target evaluation (§4.7) and zone-state-machine freshness evaluation (§4.16).
+
 *Source.* RFC 1982 §3.2; RFC 1035 §3.3.13.
+
 *Verification.* Unit tests across the serial-arithmetic boundary cases (wrap-around, equal, near-2³¹ differences).
 
 **BDS-FR-RR-005.** At any owner name carrying a CNAME RRset, that RRset MUST contain exactly one distinct canonical target, and no other RRset of any other type MUST be present, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC support of that name. Case-only or repeated encodings of the same target are duplicates, not multiple targets. Transferred zones violating this constraint MUST cause the transfer to be aborted.
+
 *Source.* RFC 1034 §3.6.2; RFC 2181 §10.1; RFC 4035 (DNSSEC exception).
+
 *Verification.* Zone-transfer tests with CNAME-and-other-data coexistence at non-DNSSEC names.
 
 **BDS-FR-RR-006.** At any owner name carrying a DNAME RRset, no CNAME RRset MUST be present at that same owner name, with the exception of RRSIG, NSEC, and NSEC3 records as required for DNSSEC. A DNAME owner below the zone apex MUST NOT also carry an NS RRset because that would place the DNAME at a zone cut. Transferred zones violating either constraint MUST cause the transfer to be aborted.
+
 *Source.* RFC 6672 §2.3 and §2.4.
+
 *Verification.* Zone-transfer tests with DNAME and CNAME at the same name and with non-apex DNAME plus NS.
 
 ### RDATA wire-format validation
 
 **BDS-FR-RR-007.** During zone transfer, the server MUST validate each known-type record's RDATA for conformance to the wire-format requirements of its specifying RFC, including at minimum:
+
 - RDLENGTH equal to the expected fixed size for types with fixed RDATA size (A: 4 octets; AAAA: 16 octets);
 - domain name fields within RDATA parse as valid wire-format names without exceeding RDATA bounds;
 - character-string fields have length octets consistent with RDATA bounds and do not exceed 255 octets per string;
 - multi-field RDATA's total decoded size equals RDLENGTH exactly (no trailing bytes, no truncation).
 
 Records failing validation MUST cause the zone transfer to be aborted per BDS-FR-AXFR-019 or BDS-FR-IXFR-013. The transfer abort log entry MUST identify the offending record's owner name, type, and the specific validation failure.
+
 *Source.* Each RR type's specifying RFC; defensive parsing posture.
+
 *Verification.* Zone-transfer tests with deliberately malformed records of each type; fuzz testing of the parsers.
 
 ### Type-specific parsing notes (informative)
@@ -1930,29 +2423,41 @@ The area code **ZONE** is allocated.
 ### Zone identity and lookup
 
 **BDS-FR-ZONE-001.** Each zone designated for service is identified uniquely by the tuple (zone apex name, zone class), where zone names are compared case-insensitively per BDS-FR-CORE-009 and RFC 4343. The set of designated zones is established by configuration at process startup per BDS-INV-005 and is immutable for the process lifetime.
+
 *Source.* RFC 1034 §4.2; BDS-INV-005.
+
 *Verification.* Configuration round-trip tests; runtime-modification attempts confirmed impossible.
 
 **BDS-FR-ZONE-002.** Within each zone, the in-memory zone store MUST support lookup by (owner name, RR type) → RRset, with owner-name comparison case-insensitive per BDS-FR-CORE-009. Lookups MUST also support the queries required by §4.1 and §4.2: longest-suffix-match for zone-cut determination, wildcard-owner-name matching per RFC 4592, and direct equality for RRset retrieval.
+
 *Source.* RFC 1034 §3.1; RFC 2181 §5; RFC 4592.
+
 *Note.* Where the operator configures both a parent zone (e.g., `example.com`) and a child zone (`child.example.com`) for service, queries within the child zone's namespace are resolved against the child zone per the "most specific zone wins" rule of BDS-FR-CORE-019. The parent zone's NS records at the delegation point for the child are still present and authoritatively served when queried directly, but the child zone supplies the authoritative answer for any QNAME at or below `child.example.com`. The two zones may carry inconsistent data (different apex NS RRsets, divergent glue) — this is a primary-side concern; the secondary serves each zone's data as received without cross-zone consistency enforcement.
+
 *Verification.* Lookup tests covering each access pattern across zones with varying structure and depth, including the parent-plus-child served-zone overlap configuration.
 
 ### Consistency
 
 **BDS-FR-ZONE-003.** For each query, the zone store MUST present a single internally consistent version of the zone throughout the query's processing. The atomic publication of a refreshed zone version per BDS-INV-003 ensures that the transition from one version to its successor does not produce mixed observations within any query. Concurrent queries against the same zone MAY observe different versions across the refresh boundary, but no single query MUST observe a mixture.
+
 *Source.* BDS-INV-003.
+
 *Verification.* Concurrent query tests sustained across simulated zone refreshes; per-query record-set provenance verified to derive from a single zone version.
 
 ### Wildcard and glue storage
 
 **BDS-FR-ZONE-004.** Wildcard owner names (labels containing the asterisk character `*` per RFC 4592) MUST be stored in the zone store as regular records. The wildcard semantics — synthesis of responses with the QNAME substituted for the wildcard owner — are applied at query time per BDS-FR-CORE-024 and BDS-FR-QRY-016, not at storage time.
+
 *Source.* RFC 4592 §2; RFC 1034 §4.3.3.
+
 *Verification.* Zone-transfer tests delivering wildcard records; lookup tests covering wildcard expansion and the related empty-non-terminal occlusion cases.
 
 **BDS-FR-ZONE-005.** Glue records (A and AAAA records at owner names below child-zone NS delegation points within the served zone, accepted per BDS-FR-AXFR-013) MUST be stored in the zone store and made available to query handlers for additional-section composition per BDS-FR-QRY-017. Glue records MUST be distinguishable in the store from authoritative-data records of the parent zone for the purposes of the occluded-data exclusion of BDS-FR-AXFR-014 and the AA-bit determination of BDS-FR-CORE-014.
+
 *Source.* RFC 1034 §6.2; RFC 1035 §6.2.4.
+
 *Note.* "Distinguishable" does not prescribe a representation; the implementation may use a flag, separate sub-structure, or other mechanism. The behavioural requirement is that glue is included in additional sections but does not influence AA or appear in answer/authority sections of queries that strictly target authoritative data.
+
 *Verification.* Lookup tests requiring glue; lookup tests at and below delegation points confirming occluded data is not served.
 
 ### Zone lifecycle states
@@ -1966,7 +2471,9 @@ The area code **ZONE** is allocated.
 State transitions are governed by the zone state machine specified in §4.16. The internal status REFRESHING — denoting that a refresh attempt is in progress for a zone otherwise in ACTIVE state — is not a query-observable state; queries during an in-progress refresh are processed against the previously published zone version per BDS-FR-ZONE-003.
 
 *Source.* RFC 1034 §4.3.5; this SRS §4.16.
+
 *Note.* LOADING and EXPIRED are observationally identical to clients (both yield SERVFAIL); internally they have different causes and trigger different state-machine behaviour. The state distinction is necessary for the state machine, not for the wire protocol.
+
 *Verification.* Zone-state tests covering each state with the corresponding query response; transitions exercised through transfer success, transfer failure, and EXPIRE-window elapse.
 
 ## 4.16 Zone State Machine
@@ -1980,92 +2487,125 @@ The area code **ZSM** is allocated.
 ### Initial load
 
 **BDS-FR-ZSM-001.** At startup, each designated zone with a fully revalidated persisted last-good snapshot enters ACTIVE and refreshes from its restored SOA serial (IXFR where available); a zone without one enters LOADING and initiates AXFR. Catalog snapshots MUST be reconciled before member refresh scheduling so authorized member caches can be restored.
+
 *Source.* This SRS §4.15, §4.6, §4.7.
+
 *Verification.* Startup tests with many configured zones; verify all are scheduled for initial AXFR.
 
 **BDS-FR-ZSM-002.** Where an initial AXFR transfer for a LOADING zone fails, the state machine MUST schedule a retry after a delay. The first retry delay MUST be configurable, with a default of 60 seconds. Each subsequent failed retry MUST double the delay (exponential backoff), up to a configurable maximum (default 3600 seconds = 1 hour). The zone remains in LOADING state across initial-load retries; the state machine MUST NOT abandon initial-load retries while the process is running.
+
 *Source.* RFC 1034 §4.3.5 (general retry principle); operational requirement.
+
 *Verification.* Tests with unreachable primaries; verify retry intervals and continuity.
 
 ### Refresh triggering
 
 **BDS-FR-ZSM-003.** The state machine MUST initiate a refresh attempt for an ACTIVE or EXPIRED zone under any of the following conditions:
+
 - Wall-clock time has reached the next scheduled refresh time for the zone (set per BDS-FR-ZSM-004 or BDS-FR-ZSM-008);
 - A NOTIFY message has been accepted for the zone per §4.8 and the NOTIFY's signal to the state machine (per BDS-FR-NOTIFY-007) has cleared the dedup interval of BDS-FR-NOTIFY-009.
 
 *Source.* RFC 1034 §4.3.5; RFC 1996 §4.4.
+
 *Verification.* Tests confirming both trigger pathways.
 
 **BDS-FR-ZSM-004.** Upon successful completion of a refresh attempt (successful transfer, or SOA poll showing serial equality), the state machine MUST:
+
 - Transition the zone to ACTIVE state (from LOADING, EXPIRED, or unchanged ACTIVE);
 - Record the wall-clock timestamp of completion as the zone's "last successful refresh" time;
 - Schedule the next refresh attempt at (last successful refresh + REFRESH interval), where REFRESH is read from the SOA RDATA of the just-confirmed-current zone, subject to the minimum of BDS-FR-ZSM-011 and the jitter of BDS-FR-ZSM-010.
 
 *Source.* RFC 1034 §4.3.5; RFC 1035 §3.3.13.
+
 *Verification.* Refresh-cycle tests measuring time between successful refreshes.
 
 ### Protocol selection
 
 **BDS-FR-ZSM-005.** For each refresh attempt against a zone that already holds data (ACTIVE or EXPIRED with prior data), the state machine MUST attempt IXFR by default. Where the primary has, within the preceding "IXFR-disabled cooldown" interval (configurable, default 3600 seconds = 1 hour), returned RCODE = 4 (NOTIMP) or RCODE = 1 (FORMERR) in response to an IXFR query for this zone, the state machine MUST use AXFR instead for the current attempt.
+
 *Source.* RFC 1995 §3.
+
 *Note.* Mode 2 IXFR response (full-zone fallback per BDS-FR-IXFR-011) is considered a successful IXFR, not evidence of IXFR non-support; the primary supports the protocol but had no incremental history to deliver.
+
 *Verification.* Tests with primaries returning IXFR support, NOTIMP, and FORMERR; verify next-attempt protocol selection.
 
 ### SOA poll optimisation
 
 **BDS-FR-ZSM-006.** Prior to initiating an IXFR or AXFR for a refresh, the state machine MAY perform an SOA query against the selected primary to compare the primary's current serial against the secondary's held serial. Serial comparison MUST use the arithmetic of BDS-FR-RR-004 (RFC 1982). If the primary's serial is equal to or less than the secondary's held serial, no transfer is needed and the refresh attempt is recorded as successful per BDS-FR-ZSM-004. If the primary's serial is greater, the configured transfer protocol is initiated per BDS-FR-ZSM-005.
+
 *Source.* RFC 1034 §4.3.5.
+
 *Note.* The SOA poll is optional because IXFR's Mode 3 response (RFC 1995 §4, per BDS-FR-IXFR-004) provides equivalent "no update available" signalling at the cost of one IXFR query rather than one SOA query plus one IXFR query. Implementations may choose either pattern; both are operationally correct.
+
 *Verification.* Refresh tests with primaries at equal serial confirming refresh is recorded as successful without transfer.
 
 **BDS-FR-ZSM-014.** SOA poll queries issued under BDS-FR-ZSM-006 MUST be constructed with QNAME equal to the zone apex name, QTYPE = 6 (SOA), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, a QID selected per BDS-FR-SPOOF-001, and (where TSIG is configured for the selected primary) a TSIG record signing the query per §4.9. The query MAY be sent over UDP or TCP; over UDP, response validation MUST apply RFC 5452 (BDS-FR-SPOOF-003 through BDS-FR-SPOOF-006) and any received truncation (TC bit set) MUST cause retry over TCP.
+
 *Source.* RFC 1034 §4.3.5; RFC 1035 §4.1.2; this SRS §4.5, §4.9.
+
 *Note.* Earlier draft snapshots used a suffixed ZSM label for this requirement; that label is historical only and must not be used for new traceability.
+
 *Verification.* Wire-format inspection of outbound SOA poll queries; spoofing-resistance tests parallel to other outbound query paths.
 
 **BDS-FR-ZSM-007.** Where a refresh attempt has been triggered by a NOTIFY message that carried an SOA record in its answer section (per BDS-FR-NOTIFY-008), the state machine MAY use that embedded SOA's serial as the primary-side input to the comparison of BDS-FR-ZSM-006, skipping a separate SOA poll. If the embedded serial is equal to or less than the secondary's held serial, the refresh is recorded as successful per BDS-FR-ZSM-004 without any further query. If greater, the configured transfer protocol is initiated.
+
 *Source.* RFC 1996 §3.7.
+
 *Verification.* Tests with NOTIFY messages carrying embedded SOAs at various serial relationships.
 
 ### Refresh failure
 
 **BDS-FR-ZSM-008.** Where a refresh attempt fails — transfer abort per §4.6 or §4.7, SOA poll failure, all configured primaries exhausted without success — the state machine MUST:
+
 - Leave the zone in its prior state (ACTIVE if previously ACTIVE, LOADING if previously LOADING, EXPIRED if previously EXPIRED), with its prior data intact, subject to the EXPIRE evaluation of BDS-FR-ZSM-009;
 - Schedule the next refresh attempt at (current time + RETRY interval), where RETRY is read from the zone's currently held SOA RDATA for an ACTIVE or EXPIRED zone, or from the initial-load backoff (BDS-FR-ZSM-002) for a LOADING zone, subject to BDS-FR-ZSM-010 (jitter), BDS-FR-ZSM-011 (minimum), and the maximum effective REFRESH/RETRY ceiling of BDS-FR-ZSM-011 (paragraph 2).
 
 *Source.* RFC 1034 §4.3.5; RFC 1035 §3.3.13.
+
 *Verification.* Failure-injection tests across transfer abort causes, exercising prior-state preservation for each of ACTIVE, LOADING, and EXPIRED.
 
 ### Expiration
 
 **BDS-FR-ZSM-009.** For each ACTIVE zone, the state machine MUST monitor the elapsed wall-clock time since the most recent successful refresh. When this elapsed time exceeds the zone's SOA EXPIRE value, the state machine MUST transition the zone to EXPIRED state per BDS-FR-ZONE-006. The state machine MUST continue to schedule and attempt refreshes for EXPIRED zones at intervals not exceeding the SOA RETRY value (with jitter and minimum applied per BDS-FR-ZSM-010 and BDS-FR-ZSM-011); on the first successful refresh of an EXPIRED zone, the state machine MUST transition the zone back to ACTIVE per BDS-FR-ZSM-004.
+
 *Source.* RFC 1034 §4.3.5; RFC 1035 §3.3.13.
+
 *Verification.* Long-running tests with simulated primary unreachability spanning the EXPIRE interval; verify state transitions to EXPIRED and recovery to ACTIVE.
 
 ### Jitter and minimum intervals
 
 **BDS-FR-ZSM-010.** The state machine MUST apply uniform random jitter in the range ±10% to every scheduled interval (REFRESH, RETRY, initial-load backoff) before scheduling. The jitter MUST be drawn independently per zone per scheduling decision.
+
 *Source.* Defensive operational practice against synchronised refresh storms.
+
 *Verification.* Statistical analysis of scheduled refresh times across many zones and many cycles; the empirical distribution MUST be consistent with the specified jitter.
 
 **BDS-FR-ZSM-011.** The state machine MUST enforce a configurable minimum effective interval for REFRESH and RETRY values read from SOA records, with a default minimum of 60 seconds. SOA REFRESH or RETRY values below the minimum MUST be treated as equal to the minimum for scheduling purposes. The original SOA values are preserved unchanged for serving.
 
 The state machine MUST also enforce a configurable maximum effective interval for REFRESH and RETRY values, with a default maximum of 86400 seconds (24 hours). SOA REFRESH or RETRY values above the maximum MUST be treated as equal to the maximum for scheduling purposes. As with the minimum, the original SOA values are preserved unchanged for serving.
+
 *Source.* Defensive operational practice; protection against refresh storms from pathological primary configurations (minimum); bounded staleness when primaries configure excessive intervals (maximum).
+
 *Note.* The maximum is a useful upper bound because primaries occasionally publish very large REFRESH values (weeks or months) — without a cap, NOTIFY-less change propagation could lag by that interval. NOTIFY (§4.8) provides expedited refresh when the primary supports it, but a maximum effective REFRESH ensures eventual convergence even in NOTIFY-absent deployments. The configured minimum and maximum constrain only the state machine's scheduling; they do not modify the SOA record served to clients.
+
 *Verification.* Tests with SOA records containing REFRESH or RETRY below the minimum, above the maximum, and within the allowed range.
 
 ### Shutdown
 
 **BDS-FR-ZSM-012.** On process shutdown initiated by SIGTERM, the state machine MUST cease initiating new refresh attempts. Refresh timers MUST NOT trigger new transfers after the SIGTERM signal is received. In-progress transfer sessions complete or are aborted per the graceful shutdown timing specified in §5.5.
+
 *Source.* This SRS §5.5; §6.5.
+
 *Verification.* Shutdown tests confirming no new transfers initiated after SIGTERM.
 
 ### Long-loading detection
 
 **BDS-FR-ZSM-013.** Where a zone has remained in LOADING state for a configurable threshold duration (default 3600 seconds = 1 hour) since process startup, the state machine MUST emit a warning-level log entry recording the zone name, the elapsed LOADING duration, the most recent failure cause across all configured primaries, and the next scheduled retry time. The state machine MUST repeat this warning at the configured threshold interval for as long as the zone remains in LOADING state. The corresponding per-zone metric ("zone in LOADING state for N seconds") MUST be exposed per §5.6 and §6.4 for orchestrator and alerting integration.
+
 *Source.* Operational requirement; protection against silent persistent failures (misconfigured TSIG keys, unreachable primaries, certificate problems) that would otherwise be invisible to operators relying on the server's continued process-running status.
+
 *Note.* Per BDS-FR-ZSM-002, the state machine MUST NOT abandon initial-load retries; this requirement complements that by ensuring such persistent failures are made visible. A zone permanently in LOADING produces a continuous stream of structured warnings at the threshold interval — operators wire these into alerting per their normal observability stack.
+
 *Verification.* Tests with unreachable primaries; verify warning log emission at the threshold and at threshold-interval repetitions; verify metric exposure.
 
 ## 4.17 Response Rate Limiting
@@ -2081,12 +2621,15 @@ The area code **RRL** is allocated.
 ### Mechanism
 
 **BDS-FR-RRL-001.** The server MUST implement Response Rate Limiting as specified in this subsection, applied to all responses produced for clients (responses to ordinary DNS queries). RRL MUST be enabled by default. The operator MAY disable RRL by configuration, but doing so removes the server's primary structural defence against amplification reflection.
+
 *Source.* Operational requirement; defence against DNS amplification reflection attacks.
+
 *Verification.* Configuration tests with RRL enabled and disabled; functional tests confirming RRL takes effect.
 
 ### Accounting
 
 **BDS-FR-RRL-002.** RRL MUST account responses per a tuple of (source IP prefix, response category). The source IP prefix length MUST be configurable, with defaults of /24 for IPv4 and /56 for IPv6. The response categories MUST be:
+
 - (a) positive responses (RCODE = NOERROR with non-empty answer section);
 - (b) NXDOMAIN responses (RCODE = NXDOMAIN);
 - (c) NODATA responses (RCODE = NOERROR with empty answer section and SOA in authority);
@@ -2094,11 +2637,13 @@ The area code **RRL** is allocated.
 - (e) error responses (RCODE other than NOERROR or NXDOMAIN — SERVFAIL, REFUSED, FORMERR, NOTIMP, etc.).
 
 *Source.* BoronDNS project RRL accounting model; response categories are the code-owned bucket model for rate limiting, metrics, and tests.
+
 *Verification.* Tests confirming responses of each category are counted under the corresponding accounting key.
 
 ### Thresholds and bucket model
 
 **BDS-FR-RRL-003.** For each response category, the server MUST enforce a configurable per-second rate limit, applied per accounting key. The default rate limits MUST be:
+
 - positive responses: 20 responses per second;
 - NXDOMAIN responses: 5 responses per second;
 - NODATA responses: 10 responses per second;
@@ -2106,36 +2651,50 @@ The area code **RRL** is allocated.
 - error responses: 5 responses per second.
 
 *Source.* BoronDNS project default baseline, recorded in `docs/rrl-release-thresholds.md`; operational review pending before formal SRS acceptance.
+
 *Note.* These defaults are project defaults, not inherited vendor defaults. Operators serving high-traffic zones or anycast networks may need to tune upward; operators of low-traffic zones may benefit from tuning downward to detect anomalies faster.
+
 *Verification.* Tests at and beyond the limit thresholds.
 
 **BDS-FR-RRL-004.** The rate-limit MUST be implemented as a token-bucket per accounting key: bucket capacity equal to the configured per-second rate, refilled at the configured per-second rate (one token per (1 / rate) seconds). Each response produced for the accounting key consumes one token. When the bucket is empty, the response is subject to the action of BDS-FR-RRL-005.
+
 *Source.* Standard rate-limiting design.
+
 *Verification.* Burst-tolerance tests confirming the bucket model.
 
 ### Limit-exceeded action
 
 **BDS-FR-RRL-005.** When a response would be produced for an accounting key whose token bucket is exhausted, the server MUST apply the configured "slip" policy, parameterised by an integer N with default value 2:
+
 - If N = 0: every rate-limited response MUST be silently dropped (no message sent on the wire).
 - If N ≥ 1: of every N rate-limited responses for that accounting key, on average exactly one MUST be emitted as a truncated response (TC bit set, empty answer/authority/additional sections, retaining the question section and OPT RR if applicable), and the remaining MUST be silently dropped.
 
 The truncated response provides an escape path for legitimate clients (which can switch to TCP per §4.12 to receive the full response) while substantially reducing the amplification utility of the server to a spoofed-source attacker.
+
 *Source.* BoronDNS project slip policy. RFC 1035 §4.1.1 defines the TC bit; RFC 6891 §6.1.1 requires an OPT response when the request carried OPT, which is why the truncated response retains the request's parsed question and OPT RR when applicable.
+
 *Note.* The "on average exactly one of N" is implemented as a per-(accounting-key) counter that increments on each rate-limited response and emits the truncated variant when the counter modulo N equals zero. The counter is retained with the accounting key until that key is evicted or the process restarts. Over many rate-limited responses for a key, this yields the 1/N truncation ratio. The earlier wording "of every N consecutive" suggested a stricter sliding-window semantics that is not implementable under the token-bucket model and not necessary for the RRL design goal.
+
 *Verification.* Tests under sustained rate-limit pressure on a single accounting key; verify the empirical drop-to-truncate ratio approaches (N−1):1 as the sample size grows, and verify the counter-retention behavior across repeated rate-limited bursts for the same key.
 
 ### Exemptions
 
 **BDS-FR-RRL-006.** The server MUST support a configurable allowlist of source IP addresses and prefixes that are exempt from RRL accounting and limit enforcement. Responses to allowlisted clients MUST NOT consume tokens and MUST NOT be subject to BDS-FR-RRL-005's action.
+
 *Source.* Operational requirement; trusted recursive resolvers and internal monitoring should not be impeded.
+
 *Verification.* Configuration round-trip tests; functional tests with allowlisted source addresses under high query load.
 
 **BDS-FR-RRL-007.** Responses to TCP queries MUST NOT be subject to RRL. RRL accounting and action MUST apply only to responses sent over UDP.
+
 *Source.* Operational practice; TCP's three-way handshake provides intrinsic anti-spoofing that obviates the need for RRL on the TCP path.
+
 *Verification.* Tests with sustained TCP query load; verify no RRL action taken on TCP responses.
 
 **BDS-FR-RRL-008.** Responses to queries authenticated via TSIG (per §4.9) MUST NOT be subject to RRL.
+
 *Source.* Operational practice; TSIG-authenticated queries are presumed legitimate, and the cryptographic cost of TSIG processing itself serves as a rate limit on attacker capabilities.
+
 *Verification.* Tests with TSIG-authenticated queries under high rate.
 
 DNS Cookie valid Server Cookie exemption is specified under BDS-FR-COOKIE-009.
@@ -2145,25 +2704,34 @@ COOKIE processing profile, but RRL implementation and evidence MUST preserve it.
 ### Configuration scope and state
 
 **BDS-FR-RRL-009.** RRL configuration in this version of the server is process-wide; the rate limits and slip value apply uniformly across all zones served. Per-zone or per-view RRL configuration is not supported.
+
 *Source.* Implementation simplicity per the minimal codebase target.
+
 *Note.* Per-zone RRL is a frequently requested capability and may be added in a future version. The decision to defer it here reflects the project's minimal-codebase target, not a position on its desirability. Operators requiring per-zone RRL today should use a server with that capability.
+
 *Verification.* Configuration tests confirming global application.
 
 **BDS-FR-RRL-010.** The server MUST enforce a configurable maximum number of concurrently tracked RRL accounting keys, with a default of 100000. When the limit is reached, the least-recently-used (LRU) accounting key MUST be evicted to make room for a new key. Eviction MUST NOT affect serving — an evicted key's accounting starts fresh on its next observed response.
+
 *Source.* Resource management; defence against state-exhaustion attacks from many distinct source prefixes.
+
 *Verification.* Stress tests with many distinct source prefixes; verify LRU eviction and bounded memory consumption.
 
 ### Observability
 
 **BDS-FR-RRL-011.** The server MUST log RRL events:
+
 - First entry into rate-limited state for an accounting key: warning level, with the key (source prefix and response category) and the threshold value;
 - Periodic aggregate summary: info level, every configurable interval (default 60 seconds), reporting the number of responses dropped, the number emitted as truncated, and the number of currently-rate-limited accounting keys.
 
 Per-event logging of individual drops or truncations MUST NOT be performed at info level or above, to avoid log amplification during attack conditions.
+
 *Source.* Operational requirement; observability without log flooding.
+
 *Verification.* Log inspection across normal and attack conditions.
 
 **BDS-FR-RRL-012.** The server MUST maintain in-memory counters for RRL:
+
 - total responses subject to RRL (across all keys);
 - total responses dropped due to RRL;
 - total responses emitted as truncated due to RRL;
@@ -2171,7 +2739,9 @@ Per-event logging of individual drops or truncations MUST NOT be performed at in
 - accounting key evictions due to the cap of BDS-FR-RRL-010.
 
 Exposure of these counters is per §5.6 and §6.4.
+
 *Source.* Operational requirement; observability for rate-limit enforcement.
+
 *Verification.* Counter inspection under controlled load.
 
 ## 4.18 Negative Requirements
@@ -2185,81 +2755,124 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 ### Secondary-only role enforcement
 
 **BDS-NEG-001.** The server MUST NOT process DNS UPDATE messages (OPCODE = 5, RFC 2136). Inbound messages with OPCODE = 5 are rejected with RCODE = 4 (NOTIMP) per BDS-FR-CORE-005.
+
 *Enforces.* BDS-INV-001.
+
 *Verification.* Conformance tests with UPDATE messages of various forms; verify NOTIMP response and zero modification to the in-memory zone store.
 
 **BDS-NEG-002.** The server MUST NOT generate, modify, or maintain any DNSSEC record — RRSIG, NSEC, NSEC3, NSEC3PARAM, DNSKEY, or any other type whose generation is properly a primary-role activity. All DNSSEC records served originate from the primary via zone transfer.
+
 *Enforces.* BDS-INV-001; BDS-FR-DNSSEC-013.
+
 *Verification.* Static analysis of the codebase confirming no code path generates DNSSEC records.
 
-**BDS-NEG-003.** The server MUST NOT accept zone data, zone modifications, or any change to its authoritative state through any channel other than authenticated zone transfer (AXFR per §4.6 or IXFR per §4.7) from configured primaries.
+**BDS-NEG-003.** The server MUST NOT accept newly authored zone content through
+any channel other than AXFR (§4.6) or IXFR (§4.7) from configured primaries,
+authenticated as required by the configured transfer policy. Revalidation and
+restore of its own last-good state is permitted under BDS-INV-004; it is not an
+alternative zone-authoring interface.
+
 *Enforces.* BDS-INV-001.
-*Verification.* Static analysis confirming the only code paths that write to the in-memory zone store originate in the zone-transfer client; no administrative interface exists.
+
+*Verification.* Review transfer and restore publication paths; confirm control
+operations can schedule or pause service but cannot provide record content.
 
 **BDS-NEG-004.** The server MUST NOT originate NOTIFY messages. NOTIFY origination is a primary-role function; the server's role per §4.8 is exclusively NOTIFY reception.
+
 *Enforces.* BDS-INV-001; Appendix C.2 (out-of-scope).
+
 *Verification.* Static analysis confirming no NOTIFY-emission code path exists.
 
 **BDS-NEG-005.** The server MUST NOT serve outbound AXFR or IXFR responses to inbound zone-transfer queries. Queries received with QTYPE = 252 (AXFR) or QTYPE = 251 (IXFR) MUST be rejected with RCODE = 5 (REFUSED).
+
 *Enforces.* BDS-INV-001; Appendix C.2 (the server does not act as a transfer source for downstream secondaries).
+
 *Verification.* Conformance tests with AXFR and IXFR queries received as a server; verify REFUSED response with no transfer attempted.
 
 **BDS-NEG-006.** The server MUST NOT read zone data from presentation-format (master) files per RFC 1035 §5. All zone data is received in wire format via zone transfer.
+
 *Enforces.* BDS-INV-001; Appendix C.2.
+
 *Verification.* Static analysis confirming no presentation-format parser exists.
 
 ### Resolver-role prohibitions
 
 **BDS-NEG-007.** The server MUST NOT perform recursive resolution. The RA bit in responses MUST be 0 unconditionally per BDS-FR-CORE-012. Queries for names outside any served zone MUST be rejected with RCODE = 5 (REFUSED) per BDS-FR-CORE-019.
+
 *Enforces.* BDS-INV-001; BDS-INV-007; Appendix C.2.
+
 *Verification.* Conformance tests with queries for names outside served zones; verify REFUSED and RA = 0.
 
 **BDS-NEG-008.** The server MUST NOT forward DNS queries to any other server. Every response is determined exclusively from the server's in-memory zone store.
+
 *Enforces.* BDS-INV-001; BDS-INV-007; Appendix C.2.
+
 *Verification.* Static analysis confirming no query-forwarding code path exists; network-layer tests confirming no outbound queries are generated in response to inbound queries.
 
 **BDS-NEG-009.** The server MUST NOT perform DNSSEC signature validation on inbound or outbound messages. The AD (Authentic Data) bit in responses MUST be 0 unconditionally per BDS-FR-DNSSEC-010, regardless of whether the queried zone is signed.
+
 *Enforces.* BDS-INV-001 (the server does not act as a validator); Appendix C.2.
+
 *Verification.* Static analysis confirming no signature-validation code path exists outside any explicitly-required TSIG verification under §4.9.
 
 ### Lifecycle and operational prohibitions
 
 **BDS-NEG-010.** The server MUST NOT persist operational state other than the bounded, validated last-good zone state required by BDS-INV-004. A bounded incremental journal used solely to reconstruct the newest snapshot is part of that state, not retained transfer history. It MUST NOT persist metrics, query statistics, historical versions, configuration, or partial/unvalidated transfers.
+
 *Enforces.* BDS-INV-004.
-*Verification.* System-call tracing during steady-state operation confirming absence of filesystem write operations outside standard streams; runnable on read-only root filesystems.
+
+*Verification.* Trace writes during refresh, restart, and query load. Only
+standard streams and the configured last-good cache directory may be written;
+the rest of the root filesystem can remain read-only.
 
 **BDS-NEG-011.** The server MUST NOT re-read configuration sources after process startup. The server MUST NOT install a SIGHUP handler (or equivalent mechanism) that re-reads configuration. Configuration changes are applied only via process restart.
+
 *Enforces.* BDS-INV-005.
+
 *Verification.* Code review confirming configuration is parsed once at startup; SIGHUP signal tests confirming no configuration reload behaviour.
 
 **BDS-NEG-012.** The server MUST NOT serve authoritative zone data for a zone whose authoritative data has expired — that is, where the elapsed time since the most recent successful refresh exceeds the zone's SOA EXPIRE value. Queries against expired zones receive RCODE = 2 (SERVFAIL) per BDS-FR-QRY-021 and BDS-FR-ZONE-006.
+
 *Enforces.* BDS-INV-001 (authoritative data must remain consistent with the primary); RFC 1034 §4.3.5.
+
 *Verification.* Tests with zones whose primaries are unreachable past the EXPIRE interval; verify SERVFAIL response.
 
 ### Cryptographic and protocol-option prohibitions
 
 **BDS-NEG-013.** The server MUST NOT implement the HMAC-MD5 TSIG algorithm (algorithm name `hmac-md5.sig-alg.reg.int`). Requests bearing this unsupported algorithm name MUST receive the unsigned BADKEY response specified by BDS-FR-TSIG-004 and BDS-FR-TSIG-013.
+
 *Enforces.* BDS-FR-TSIG-004; RFC 8945 §6 ("hmac-md5 MUST NOT be used by new implementations").
+
 *Verification.* Conformance tests with HMAC-MD5-signed messages; verify unsigned BADKEY response with the received algorithm name echoed.
 
 **BDS-NEG-014.** The server MUST NOT implement the TKEY mechanism (RFC 2930) for dynamic key establishment. Queries with QTYPE = 249 (TKEY) MUST be rejected with RCODE = 1 (FORMERR) per BDS-FR-QRY-009.
+
 *Enforces.* Appendix C.2; static-configuration invariant for TSIG keys per BDS-FR-TSIG-005.
+
 *Verification.* Conformance tests with TKEY queries.
 
 **BDS-NEG-015.** The server MUST NOT use the synthesised HINFO response style described in RFC 8482 §4.2 for QTYPE = ANY queries.
+
 *Enforces.* BDS-FR-QRY-007.
+
 *Verification.* Wire-format inspection of ANY-query responses; verify no synthesised HINFO records.
 
 **BDS-NEG-016.** Where XoT is configured for a (zone, primary) tuple, the server MUST NOT fall back to unencrypted TCP zone transfer on TLS connection-establishment or certificate-authentication failure. The Opportunistic Privacy Profile of RFC 9103 §9.2 MUST NOT be used.
+
 *Enforces.* BDS-FR-XOT-006.
+
 *Verification.* Tests with TLS-failing primaries under XoT configuration; verify no cleartext retry.
 
 **BDS-NEG-017.** The server MUST NOT accept inbound TLS connections for XoT (server-side XoT, including NOTIFY-over-TLS receipt). XoT in this server is scoped to outbound zone-transfer connections only, per the scope statement of §4.10.
+
 *Enforces.* §4.10 scope; Appendix C.2.
+
 *Verification.* Network-layer tests confirming no TLS listener is bound; inbound TLS connection attempts are refused at the TCP layer.
 
 **BDS-NEG-018.** The server MUST NOT issue IXFR queries over UDP. All outbound IXFR queries MUST use TCP per BDS-FR-IXFR-001. While RFC 1995 §2 permits UDP IXFR transport, this server does not implement that variant.
+
 *Enforces.* BDS-FR-IXFR-001; project simplification decision per §1.4.5 dated 24 May 2026.
+
 *Verification.* Code review confirming no UDP IXFR code path exists; outbound network-layer inspection confirming all IXFR queries are issued over TCP.
 
 ## 4.19 DNS Cookies
@@ -2273,37 +2886,56 @@ The area code **COOKIE** is allocated.
 ### Cookie option processing
 
 **BDS-FR-COOKIE-001.** The server MUST recognise the COOKIE EDNS option (option code 10) per RFC 7873 §4 in inbound queries. The option's OPTION-DATA carries a Client Cookie (always 8 octets) and optionally a Server Cookie (8 to 32 octets per RFC 7873 §4 as updated by RFC 9018).
+
 *Source.* RFC 7873 §4; RFC 9018.
+
 *Verification.* Conformance tests with queries carrying Client-Cookie-only and Client-Cookie+Server-Cookie variants.
 
 **BDS-FR-COOKIE-002.** The server MUST process inbound DNS Cookies according to the four-case logic of RFC 7873 §5.2: (a) no cookies in query; (b) Client Cookie only; (c) Client Cookie and an invalid Server Cookie; (d) Client Cookie and a valid Server Cookie. The server's response action per case MUST follow BDS-FR-COOKIE-005, BDS-FR-COOKIE-006, and BDS-FR-COOKIE-007.
+
 *Source.* RFC 7873 §5.2.
+
 *Verification.* Conformance tests covering each of the four cases.
 
 ### Server Cookie computation
 
 **BDS-FR-COOKIE-003.** The Server Cookie computed by the server MUST follow the construction of RFC 9018 §4: a SipHash-2-4 (RFC 9018 §4.4) MAC over the input fields (Client Cookie, Version, Reserved, Timestamp, Client IP address) using the active Server Secret. The cookie format MUST include the 1-octet Version field set to 1, the 3-octet Reserved field set to 0, the 4-octet Timestamp field encoding the cookie's generation time in seconds since the Unix epoch, and the 8-octet MAC. The total Server Cookie length is thus 16 octets.
+
 *Source.* RFC 9018 §4, §4.3, §4.4.
+
 *Note.* RFC 9018 replaces the RFC 7873 example Server Cookie algorithms with an interoperable Version 1 construction. BoronDNS follows that construction for locally generated and validated Server Cookies.
+
 *Verification.* Tests for RFC 9018 field construction, fixed 16-octet Server Cookie length, timestamp handling, IPv4/IPv6 Client-IP input length, and successful validation of cookies generated by the implementation.
 
 **BDS-FR-COOKIE-004.** The server cookie secret MUST be at least 16 octets of cryptographic secret material and MUST be suitable for the SipHash-2-4 Server Cookie construction of BDS-FR-COOKIE-003. The configuration MUST support a 16-octet Server Secret encoded as 32 hexadecimal characters. When configured, the same Server Secret can be deployed across an anycast or load-balanced set. The configuration MUST also support a previous Server Secret for staged rollover; during rollover, the server MUST validate received Server Cookies against both current and previous secrets and MUST compute refreshed response Server Cookies with the current secret.
+
 *Source.* RFC 9018 §4.4, §5; RFC 7873 §6, §7.1; BDS-INV-004.
+
 *Note.* If no shared Server Secret is configured, the implementation may use a process-local secret generated from a cryptographically secure random source at process startup. That single-instance behavior keeps secret material off disk but invalidates all previously issued server cookies on restart and is not an anycast/load-balanced consistency mechanism.
+
+The current fields are `cookie.server_secret` and
+`cookie.previous_server_secret`. Both are validated as 16-byte hexadecimal
+secrets and redacted from configuration dumps and debug output.
+
 *Verification.* Code review confirming secret generation at startup, configured shared-secret validation/redaction, staged rollover validation, absence of unintended disk persistence, and retained two-instance validation for configured shared secrets.
 
 ### Server response logic
 
 **BDS-FR-COOKIE-005.** When the server receives a query with no COOKIE option (case (a) of BDS-FR-COOKIE-002), the server MUST process the query normally and the response MUST NOT contain a COOKIE option. RRL accounting (§4.17) applies normally.
+
 *Source.* RFC 7873 §5.2.1.
+
 *Verification.* Conformance tests with cookieless queries.
 
 **BDS-FR-COOKIE-006.** When the server receives a query with a Client Cookie only — case (b) of BDS-FR-COOKIE-002 — the server's behaviour depends on the operator-configured "cookies-enforce" policy:
+
 - **Default policy ("lenient"):** The server MUST process the query normally, and the response MUST include a COOKIE option containing the received Client Cookie and a freshly computed Server Cookie per BDS-FR-COOKIE-003. The response is the requested response (normal RCODE, normal data). The client now possesses a valid Server Cookie and can use it in subsequent queries.
 - **"strict" policy:** The server MUST emit a BADCOOKIE response (extended RCODE 23, per RFC 7873 §5.2.3): RCODE set to BADCOOKIE encoded via the EDNS extended-RCODE mechanism, an answer-section-empty response, and a COOKIE option in the response carrying the received Client Cookie and a freshly computed Server Cookie. The client is expected to retry with the server cookie attached, at which point case (d) applies.
 
 The "strict" policy raises the effective resistance to spoofing further (no useful response is given to a client that hasn't proved client-side address possession via a prior exchange) at the cost of one extra round-trip per new client.
+
 *Source.* RFC 7873 §5.2.2; RFC 7873 §5.4.
+
 *Verification.* Tests with Client-Cookie-only queries under each policy; verify response composition and BADCOOKIE encoding under strict policy.
 
 **BDS-FR-COOKIE-007.** When the server receives a query with both a Client Cookie and a Server Cookie — cases (c) and (d) of BDS-FR-COOKIE-002 — the server MUST verify the Server Cookie by recomputing the expected MAC per BDS-FR-COOKIE-003 with the received Timestamp and the cookie secret. The MAC comparison MUST be performed in constant time per the cryptographic-hygiene requirement of BDS-FR-TSIG-009. Additionally, the Timestamp MUST be checked against the server's current time: cookies with Timestamps more than (configurable) 3600 seconds in the past or more than (configurable) 300 seconds in the future MUST be considered invalid.
@@ -2312,33 +2944,43 @@ The "strict" policy raises the effective resistance to spoofing further (no usef
 - **Invalid Server Cookie (case (c)):** The server MUST treat the query as if no Server Cookie were present, applying the policy of BDS-FR-COOKIE-006 (lenient or strict).
 
 *Source.* RFC 7873 §5.2.4, §5.2.5; RFC 9018 §4.3, §4.4.
+
 *Verification.* Tests with valid, expired, future-skewed, and tampered Server Cookies; verify constant-time comparison and correct response action under each case.
 
 ### Configuration
 
 **BDS-FR-COOKIE-008.** DNS Cookies MUST be enabled by default with the "lenient" policy. The configuration MUST permit the operator to disable cookies entirely or to switch to "strict" policy per §6.2. Process-local Server Secrets MUST rotate automatically at a configurable interval that is greater than zero and no longer than 36 days; the default interval is 30 days. Independent per-process regeneration MUST NOT be combined with configured shared Server Secret material; anycast or load-balanced rollover uses the current-plus-previous shared-secret mechanism of BDS-FR-COOKIE-004.
+
 *Source.* Operational defaults; Appendix A.
+
 *Note.* RFC 7873 §5.2.3 permits a server receiving a Client-Cookie-only query to discard the request, send BADCOOKIE, or process the request and return a Server Cookie. BoronDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie while still issuing Server Cookies to clients that request them. Operators that need a stricter UDP anti-spoofing posture can opt into BADCOOKIE enforcement.
+
 *Verification.* Configuration round-trip tests across the three modes; behavioural tests confirming each mode's response composition.
 
 ### RRL interaction
 
 **BDS-FR-COOKIE-009.** Responses to queries that carried a valid Server Cookie (case (d) of BDS-FR-COOKIE-002, per BDS-FR-COOKIE-007) MUST NOT be subject to RRL accounting or limit enforcement, parallel to TSIG-authenticated queries per BDS-FR-RRL-008. The valid Server Cookie is sufficient evidence for this server's RRL policy that the client completed a prior exchange from the claimed source address; it is not a general client-identity assertion.
+
 *Source.* RFC 7873 §5.2.5; this SRS §4.17.
+
 *Verification.* Tests with sustained valid-cookie traffic; verify no RRL action.
 
 ### Logging
 
 **BDS-FR-COOKIE-010.** The server MUST log cookie events per the discipline of §6.3:
+
 - Cookie secret generation or configured shared-secret activation at startup: info level, recording the secret's fingerprint (a non-reversible hash, NOT the secret itself);
 - BADCOOKIE response emission (BDS-FR-COOKIE-006 strict): debug level, with source IP and reason;
 - Aggregate cookie statistics: per the metric counters of BDS-FR-COOKIE-011.
 
 The cookie secret value MUST NOT appear in any log entry at any level.
+
 *Source.* Operational requirement; security requirement for secret confidentiality.
+
 *Verification.* Log inspection across cookie event categories; static analysis of log statements.
 
 **BDS-FR-COOKIE-011.** The server MUST maintain in-memory counters for cookies:
+
 - queries received with no cookie (case (a));
 - queries received with Client Cookie only (case (b));
 - queries received with valid Server Cookie (case (d));
@@ -2346,7 +2988,9 @@ The cookie secret value MUST NOT appear in any log entry at any level.
 - BADCOOKIE responses emitted (strict policy).
 
 These counters MUST be exposable globally and per-source-prefix per §5.6 and §6.4.
+
 *Source.* Operational visibility for the RFC 7873 §5.2 cookie processing cases and RFC 9018 server-cookie validation profile.
+
 *Verification.* Counter inspection under controlled cookie traffic.
 
 ## 4.20 Zone Provisioning
@@ -2360,68 +3004,97 @@ The area code **PROV** is allocated.
 ### Mode selection and shared invariants
 
 **BDS-FR-PROV-001.** The configuration MUST select zone-provisioning sources at startup via `[[zones]]` and/or `[[catalog_zones]]` entries (per BDS-IF-CONF-013). At least one explicit zone or catalog zone MUST be configured. Changing the configured sources during operation MUST NOT be possible per BDS-INV-005; changes are applied only via process restart with updated configuration.
+
 *Source.* BDS-INV-005; RFC 9432 §3 and §5.1.
+
 *Verification.* Configuration round-trip tests across explicit-zone, catalog-zone, and mixed configurations; tests confirming attempts to alter configured sources during runtime (e.g., via signal, via configuration-file modification) have no effect.
 
 **BDS-FR-PROV-002.** Regardless of source, every served zone — whether explicitly configured or catalog-derived — MUST proceed through the standard zone state machine of §4.16 (initial AXFR via §4.6, subsequent SOA polling and IXFR refresh via §4.7, NOTIFY processing per §4.8). The zone-acquisition mechanism, TSIG authentication (§4.9), XoT transport (§4.10), and externally observable functional behaviours specified elsewhere in §4 are unchanged by the source.
+
 *Source.* RFC 9432 §5.1; preservation of existing secondary-zone behaviour.
+
 *Verification.* Functional regression tests confirming identical query, transfer, refresh, logging, metrics, and lifecycle behaviour across explicit and catalog-derived zones for equivalent zone contents.
 
 **BDS-FR-PROV-003.** Each served zone MUST have a zone apex name, an ordered list of primary IP addresses with optional port, the TSIG key reference where required, and the per-zone XoT configuration where configured. For explicit zones, these coordinates are taken directly from the matching `[[zones]]` entry. For catalog-derived member zones, the default coordinates are inherited from the configured `[[catalog_zones]]` entry. Where the operator explicitly enables catalog member transfer extensions per BDS-FR-PROV-014 and BDS-IF-CONF-013, the effective member coordinates MAY instead be derived from the supported extension records, subject to the security constraints of BDS-NFR-SEC-010 and BDS-NFR-SEC-011.
+
 *Source.* Operational requirement; per-zone primary specification.
+
 *Verification.* Configuration and catalog-processing tests confirming effective transfer coordinates under each source.
 
 ### Explicit Zones (`[[zones]]`)
 
 **BDS-FR-PROV-004.** The explicit-zone set served by the process MUST be exactly the set enumerated in the `[[zones]]` configuration array (per BDS-IF-CONF-013). The set is fixed for the process lifetime per BDS-INV-005. This source corresponds to the v0.1 through v0.7 behaviour of this server.
+
 *Source.* BDS-INV-005; backward compatibility.
+
 *Verification.* Tests with various static zone configurations; confirmation that the served zone set matches the configuration exactly and remains unchanged across SIGHUP, configuration-file modification, and indefinite runtime.
 
 ### Catalog Zones (`[[catalog_zones]]`)
 
 **BDS-FR-PROV-005.** For each configured catalog zone, the server MUST transfer a catalog zone (RFC 9432) from the primary specified in the matching `[[catalog_zones]]` entry (per BDS-IF-CONF-013) using the AXFR protocol per §4.6, authenticated by TSIG per §4.9 with the key referenced by that catalog entry's `tsig_key`. The catalog zone MUST be processed per RFC 9432 §3 and §4: the version property `version.<catalog-apex>` MUST be verified to contain the TXT value `"2"` (other version values cause the catalog transfer to be rejected with an error logged); member zones MUST be enumerated from the `<unique-id>.zones.<catalog-apex>` PTR records.
+
 *Source.* RFC 9432 §3, §4.
+
 *Verification.* Tests with catalog zones containing valid version=2 properties; tests with absent or non-"2" version properties (expecting rejection); tests with valid and invalid PTR record structures.
 
 **BDS-FR-PROV-006.** The catalog zone itself MUST be subject to SOA-driven refresh (§4.7) and NOTIFY-driven refresh (§4.8) on the same terms as any other zone. Successful catalog refresh MUST trigger reconciliation between the previously applied member-zone set and the newly derived member-zone set. Newly accepted members MUST be added per BDS-FR-PROV-007; members no longer present MUST be removed per BDS-FR-PROV-008. If a member's Unique identifier changes while its PTR target remains the same, the consumer MUST process the change as removal of the old member followed by addition of a new member: transfer-plan, NOTIFY, refresh, and active-snapshot state tied to the old member node MUST be discarded, and the replacement MUST enter LOADING with a new plan generation.
+
 *Source.* RFC 9432 §5.1, §5.3, and §5.4; design integration with §4.16 zone state machine.
+
 *Verification.* Tests with catalog updates adding and removing member zones and renaming a member node; confirm externally observable member-zone lifecycle, state reset, query, log, metric, and plan-generation changes.
 
 **BDS-FR-PROV-007.** When a newly accepted catalog member zone is added, the server MUST initiate the standard zone-acquisition pathway per §4.16: the new zone enters the LOADING state, an initial AXFR is attempted against the effective member primary coordinates determined by BDS-FR-PROV-003, and successful AXFR completion transitions the zone to ACTIVE. Failure modes follow the normal zone state machine.
+
 *Source.* Design integration with §4.16.
+
 *Verification.* End-to-end tests adding a member zone to the catalog and observing the standard LOADING→ACTIVE transition for the new zone.
 
 **BDS-FR-PROV-008.** When a previously accepted catalog member zone is no longer present in the applied catalog membership, the server MUST de-provision the zone: any in-progress transfer for the zone MUST be aborted (treated as a normal transfer abort per §4.6 and §4.7), the zone's entry in the in-memory zone store MUST be removed atomically per BDS-INV-003 (subsequent queries for the zone receive REFUSED or, where the orphaned zone-cut produces a non-authoritative state, the appropriate response per §4.3), and the zone state machine state for the zone MUST be discarded. The de-provisioning MUST be logged at info level with the zone name and the catalog refresh that triggered it.
+
 *Source.* RFC 9432 §5.3; operational requirement for clean removal.
+
 *Verification.* Tests removing a member zone from the catalog and confirming the zone becomes unservable from the secondary within one catalog-refresh interval, without affecting other zones.
 
 **BDS-FR-PROV-009.** The catalog zone's contents — specifically the per-member PTR records and any RFC 9432 property records associated with member zones — MUST be hidden from the DNS query interface by default. The configuration parameter `serve_catalog_zone` (per BDS-IF-CONF-013) controls this policy. Where `serve_catalog_zone = false` (the default), the catalog apex and names below it are not part of the published-zone set, and queries for those names MUST receive REFUSED. Where `serve_catalog_zone = true`, the catalog zone MAY be served as ordinary authoritative zone content, but this mode SHOULD be used only on restricted management-facing deployments because RFC 9432 §7 notes that catalog zones reveal the zones served by their consumers and recommends limiting systems able to query them.
+
 *Source.* RFC 9432 §3 and §7; operational separation of provisioning data from served data.
+
 *Verification.* Functional tests querying the catalog apex and member-property names with `serve_catalog_zone = false` and `true`; verify default REFUSED behavior and opt-in authoritative serving behavior.
 
 **BDS-FR-PROV-010.** Catalog membership reconciliation MUST use only a fully transferred and committed catalog zone version. A failed or partial catalog transfer MUST NOT partially add, remove, or alter member-zone service. The atomicity guarantee of BDS-INV-003 applies independently to catalog membership changes: query handlers MUST observe either the previously applied membership or the newly applied membership, never an intermediate partially reconciled state. Where multiple catalogs list the same member-zone name, the already-applied instance MUST remain authoritative for provisioning and each later clashing instance MUST be ignored per RFC 9432 §5.2; catalog-name ordering MUST NOT replace it. Removal of the accepted instance MUST NOT automatically promote an ignored stale listing. That other catalog must supply a subsequent membership change or be retransferred before its instance can be accepted.
+
 *Source.* RFC 9432 §5.2 and §5.5; BDS-INV-003; clean architectural separation.
+
 *Verification.* Tests with deliberately failed catalog transfers confirming no partial membership changes; concurrent query tests during catalog reconciliation; arrival-order tests proving the first-applied instance wins even when a later catalog name sorts earlier; removal tests proving ignored clash state is not automatically promoted.
 
 ### Bootstrap and dependency ordering
 
 **BDS-FR-PROV-011.** With configured catalog zones, process startup MUST proceed as follows: (1) each catalog zone is transferred and processed; (2) the initial member-zone set is determined; (3) the zone manager begins concurrent AXFR for the member zones up to the limit of BDS-FR-AXFR-022; (4) the `/readyz` endpoint (per BDS-NFR-OBS-004) reports `ready` once at least one configured explicit or catalog-derived zone has reached ACTIVE state per the standard criterion. If initial catalog transfer fails, the server MUST retry using the configured zone-state retry timers and `/readyz` MUST report `not-ready` until at least one zone reaches ACTIVE.
+
 *Source.* Operational requirement; orchestrator-friendly bootstrap.
+
 *Verification.* Startup-sequence tests with reachable and unreachable catalog primaries; verify `/readyz` transitions; verify retry behaviour.
 
 **BDS-FR-PROV-012.** If the catalog primary becomes unreachable after the initial successful transfer, the catalog zone MUST follow the normal zone state machine: SOA-poll failures accumulate per §4.16, and after the catalog zone's own SOA EXPIRE time is exceeded, the catalog zone transitions to EXPIRED. While the catalog is in EXPIRED state, the most recently known member-zone set MUST remain in service (the server does NOT de-provision all member zones merely because the catalog has expired); each member zone independently continues its own SOA polling and lifecycle. Recovery of the catalog (successful subsequent refresh) MUST resume normal reconciliation behaviour, with any member-zone deltas that accrued during the EXPIRED period applied at recovery time.
+
 *Source.* Operational requirement; isolation of catalog availability from member-zone availability; BDS-NFR-SEC-012.
+
 *Verification.* Tests with catalog primary going unreachable for periods exceeding the catalog's SOA EXPIRE; verify member zones continue to refresh from their own primaries; verify recovery and reconciliation.
 
 ### Catalog content constraints
 
 **BDS-FR-PROV-013.** The catalog zone provider MUST validate the structural member-zone PTR data required by RFC 9432 §4.1 before applying a catalog version. Each member node directly below `zones.<catalog-apex>` MUST have exactly one PTR record, and the PTR RDATA MUST parse as a complete DNS domain name in wire format, including RFC 1035 label-length and total-name-length bounds. BoronDNS MUST NOT apply LDH host-name restrictions to member-zone names merely because RFC 1035 §2.3.1 describes a preferred host-name syntax; RFC 9432 §4.1 uses PTR RDATA so all valid domain names can be represented. A malformed member PTR RRset or malformed PTR RDATA makes the candidate catalog version broken; that catalog version MUST NOT be processed or partially applied, and the previously applied catalog membership MUST remain unchanged per BDS-FR-PROV-010 and RFC 9432 §5.1. The validation requirements of BDS-NFR-SEC-015 apply after structural catalog parsing succeeds.
+
 *Source.* RFC 9432 §4.1 and §5.1; RFC 1035 domain-name wire-format bounds; defensive engineering against malformed catalog contents.
+
 *Verification.* Tests with catalog zones containing invalid PTR record structures and malformed PTR targets; verify the candidate catalog version is rejected, an operator-visible diagnostic is emitted, and the previously applied membership remains unchanged.
 
 **BDS-FR-PROV-014.** The catalog zone MAY contain RFC 9432 §5 per-member property records and BoronDNS-specific member transfer extension records. By default, catalog members inherit the member-transfer policy from the static `[[catalog_zones]]` entry, and ordinary RFC 9432 `primaries.<unique-id>.zones.<catalog-apex>` records MUST NOT redirect member-zone transfer coordinates. When `member_transfer_extensions = true` is explicitly configured for the catalog, the server MAY consume only the supported extension records for that member: `primaries.ext.<unique-id>.zones.<catalog-apex>` A/AAAA records for transfer addresses, `primaries.ext.<unique-id>.zones.<catalog-apex>` TXT records for TSIG key-name references, `_udns-xfr.ext.<unique-id>.zones.<catalog-apex>` TXT records for transfer transport/port/server-name hints, and `_udns-notify.ext.<unique-id>.zones.<catalog-apex>` TXT records for additional NOTIFY source addresses. Every custom property MUST be below the `ext` label as required by RFC 9432 §4.4; legacy `_udns-xfr.<unique-id>` and `_udns-notify.<unique-id>` owners outside `ext` MUST be ignored. Extension records MUST carry references and coordinates only; raw TSIG secrets, TLS private keys, trust anchors, and client certificates MUST NOT be carried in DNS catalog data.
+
 *Source.* RFC 9432 §5; local extension profile; BDS-NFR-SEC-010; BDS-NFR-SEC-011.
+
 *Note.* The default remains conservative. The RFC 9432 `primaries` property is ignored because honoring it would let a compromised catalog primary redirect member-zone transfers without an operator choosing the BoronDNS extension profile. The extension profile is an explicit operator opt-in intended for secondary-service deployments where the catalog primary is the control plane for customer member-zone transfer coordinates. Secret material still comes from static configuration or the configured filesystem secret store.
+
 *Verification.* Tests with ordinary RFC 9432 `primaries` properties confirming inherited/static defaults are used; tests with `member_transfer_extensions = false` confirming extension records are ignored; tests with `member_transfer_extensions = true` confirming supported extension records affect member transfer plans, unsupported or malformed extension records do not reject the member, and no raw secret material is accepted from catalog DNS data.
 
 ## 4.21 CHAOS Class Query Handling
@@ -2437,41 +3110,57 @@ The area code **CHAS** is allocated.
 ### Recognised CHAOS TXT names
 
 **BDS-FR-CHAS-001.** The server MUST recognise inbound DNS queries with QCLASS = 3 (CHAOS / CH), QTYPE = 16 (TXT), and QNAME equal to `version.bind.` or `version.server.` (case-insensitive label comparison per RFC 1035 §2.3.3). When `chaos.version` (per BDS-IF-CONF-018) is configured to a non-empty string, the server MUST construct a response with RCODE = 0 (NOERROR), AA = 1, an answer-section RR whose owner name is the queried name, CLASS = CHAOS, TYPE = TXT, TTL = 0, and RDATA consisting of one TXT character-string carrying the configured value. When `chaos.version` is empty or absent, the server MUST respond with RCODE = 5 (REFUSED) and no answer-section RRs.
+
 *Source.* RFC 1035 §3.2.4 defines CLASS = CH; RFC 1035 §3.3.14 defines TXT RDATA. The recognised probe names are an explicit BoronDNS compatibility policy, enabled only when configured.
+
 *Note.* The configured value is bounded by the 255-octet TXT character-string limit. Operators may choose a precise build string on internal-only deployments, but public-facing deployments SHOULD prefer a soft-identifying value or the default REFUSED behaviour. TTL = 0 is used because these responses are diagnostic and should not be cached for operationally meaningful periods.
+
 *Verification.* Conformance tests with CH/TXT queries for both QNAMEs, with and without `chaos.version` configured; wire-format inspection of class, type, TTL, TXT framing, AA, and REFUSED default behaviour. *Added in v0.9.1.*
 
 **BDS-FR-CHAS-002.** The server MUST recognise inbound DNS queries with QCLASS = CHAOS, QTYPE = TXT, and QNAME equal to `hostname.bind.` or `id.server.` (case-insensitive). The response value MUST be selected as follows:
+
 - if `chaos.hostname` (per BDS-IF-CONF-018) is configured to a non-empty value, that value is used;
 - otherwise, if the configured NSID value (per BDS-FR-EDNS-017) is non-empty and consists only of printable ASCII octets (0x20 through 0x7E inclusive), the NSID value is used;
 - otherwise, the server MUST respond with RCODE = 5 (REFUSED).
 
 Where a value is selected, the response MUST be constructed as in BDS-FR-CHAS-001: NOERROR, AA = 1, one CHAOS/TXT answer RR with TTL = 0, and a single TXT character-string carrying the selected value.
+
 *Source.* RFC 5001 §2.3 and §3.1 define NSID as opaque, operator-chosen name-server identity data. The `hostname.bind.` and `id.server.` CHAOS/TXT names are an explicit BoronDNS compatibility policy, with printable NSID fallback restricted by project policy.
+
 *Note.* The NSID fallback avoids duplicating the same node identifier in two configuration locations. The printable-ASCII restriction exists because NSID is opaque octet content and may contain values that are not suitable for TXT presentation; operators using non-printable NSID values can configure `chaos.hostname` explicitly.
+
 *Verification.* Tests covering explicit `chaos.hostname`, printable NSID fallback, non-printable NSID refusal, and both values absent. *Added in v0.9.1.*
 
 ### Unsupported CHAOS names and types
 
 **BDS-FR-CHAS-003.** For inbound queries with QCLASS = CHAOS, QTYPE = TXT, and QNAME other than the names enumerated in BDS-FR-CHAS-001 and BDS-FR-CHAS-002 — including `authors.bind.`, `id.authors.`, and site-specific CHAOS names — the server MUST respond with RCODE = 5 (REFUSED) and no answer-section RRs. The server MUST NOT implement `authors.bind.` or any other software-author-credit name.
+
 *Source.* Operational minimal-disclosure policy; explicit project decision against BIND-specific authorship-credit names.
+
 *Note.* REFUSED is preferred over NXDOMAIN because the CHAOS class is not represented as a zone in the §4.15 zone store; there is no authoritative CHAOS zone in which the name could be proven to exist or not exist.
+
 *Verification.* CH/TXT tests for `authors.bind.`, `id.authors.`, and arbitrary CHAOS names; verify REFUSED independent of configuration. *Added in v0.9.1.*
 
 **BDS-FR-CHAS-004.** For inbound queries with QCLASS = CHAOS and QTYPE other than TXT, the server MUST respond with RCODE = 5 (REFUSED), regardless of QNAME, with no answer-section RRs and no SOA in the authority section. The server MUST NOT attempt to construct CHAOS-class A, AAAA, ANY, AXFR, SOA, or other non-TXT data responses.
+
 *Source.* RFC 1035 §3.2.4; operational minimal-disclosure policy.
+
 *Verification.* Tests with CH/A, CH/AAAA, CH/ANY, CH/SOA, and CH/AXFR queries for recognised and arbitrary names; verify REFUSED in all cases. *Added in v0.9.1.*
 
 ### Class orthogonality
 
 **BDS-FR-CHAS-005.** The CHAOS-class handler MUST NOT be reachable for queries with QCLASS = IN, even where the QNAME matches one of the recognised CHAOS names (`version.bind.`, `hostname.bind.`, etc.). IN-class queries for these names MUST follow the standard zone-lookup machinery of §4.2: if no served zone is authoritative for the name, the response is REFUSED per BDS-FR-CORE-019; if a served zone is authoritative, the response reflects that zone's actual content.
+
 *Source.* DNS class orthogonality; BDS-INV-007.
+
 *Verification.* IN/TXT tests for `version.bind.` and related names; verify the response is determined by zone authority and not by `[chaos]` configuration. *Added in v0.9.1.*
 
 ### Logging and metrics
 
 **BDS-FR-CHAS-006.** The server MUST maintain in-memory counters for CHAOS-class queries, distinguishing at minimum: answered queries; queries refused because the relevant configuration value was empty or absent; queries refused because the CHAOS name was unrecognised; and queries refused because QTYPE was not TXT. These counters MUST be exposed globally via the metrics endpoint per §5.6 and §6.4. CHAOS-class queries MUST be logged at debug level only, recording at minimum source address, QNAME, QTYPE, and resulting RCODE.
+
 *Source.* Operational observability; consistency with the low-noise counter discipline used for DNS Cookies and NOTIFY.
+
 *Verification.* Counter inspection under controlled CHAOS-query traffic across each branch; log-output inspection at info and debug levels. *Added in v0.9.1.*
 
 # 5. Non-Functional Requirements
@@ -2480,50 +3169,70 @@ This section specifies properties of the system beyond its functional behaviour:
 
 Each subsection allocates an area code per the scheme of §1.4.3 (BDS-NFR-<AREA>-NNN). The standard requirement template applies, presented more compactly than the functional sections; the per-subsection identifier range follows.
 
-The targets below are formal project acceptance targets for the BoronDNS reference verification profile. They are not a statement that the current Engineering MVP has already met every numerical value, nor that local smoke or loopback benchmarks demonstrate equivalence to NSD, Knot DNS, BIND, or any other authoritative server. Proposed values consistent with the project capacity goal are recorded; entries that still need project confirmation are flagged in Appendix C.5 for review.
+The targets below are formal project acceptance targets for the BoronDNS reference verification profile. They are not a statement that the current implementation has already met every numerical value, nor that local smoke or loopback benchmarks demonstrate equivalence to NSD, Knot DNS, BIND, or any other authoritative server. Proposed values consistent with the project capacity goal are recorded; entries that still need project confirmation are flagged in Appendix C.5 for review.
 
 **Reference Profile.** All quantitative performance and resource targets in this section are stated with respect to the **Reference Hardware Profile** and the **Reference Query Mix** specified in Appendix E. Verification of performance NFRs is performed on hardware matching the Reference Hardware Profile, against the Reference Query Mix; deviations from the Profile during verification (e.g., different CPU, different NIC) must be recorded and may be cause for the verification result to be qualified rather than treated as conformance evidence. Where defaults are stated in non-functional requirements, every such default is operator-configurable per §6.2 unless explicitly stated otherwise; the configuration parameter name is identified in each requirement.
 
-For the repository's Engineering MVP, local smoke and large-catalog benchmark harnesses record measured performance and identify bottlenecks in the implemented code. Those harnesses are engineering evidence for tuning decisions; they are not formal conformance evidence for the quantitative NFR targets unless a release run explicitly executes the Reference Hardware/Profile procedure and retains the artifacts required by Appendix E.4. Full conformance to the quantitative targets below is a formal BDS-VER-008 release-acceptance activity, not a prerequisite for the bounded Engineering MVP evidence profile.
+For the repository's current implementation, local smoke and large-catalog benchmark harnesses record measured performance and identify bottlenecks in the implemented code. Those harnesses are engineering evidence for tuning decisions; they are not formal conformance evidence for the quantitative NFR targets unless a release run explicitly executes the Reference Hardware/Profile procedure and retains the artifacts required by Appendix E.4. Full conformance to the quantitative targets below is a formal BDS-VER-008 release-acceptance activity, not a prerequisite for the bounded current implementation evidence profile.
 
 ## 5.1 Performance
 
 The area code **PERF** is allocated.
 
 **BDS-NFR-PERF-001.** Under the Reference Query Mix of Appendix E.3, on hardware matching the Reference Hardware Profile of Appendix E.2, with the metrics endpoint enabled (per BDS-NFR-OBS-003, default 10-second scrape interval), with logging at info level (per BDS-NFR-OBS-002 default), and with RRL accounting enabled (per BDS-FR-RRL-001 default), the server MUST sustain a query-handling throughput of at least 50,000 UDP queries per second per CPU core dedicated to query handling, where TSIG verification on queries is not exercised and DNSSEC augmentation is not exercised (DO = 0 in all queries).
+
 *Source.* Project reference-hardware throughput target; formal acceptance evidence required before asserting conformance.
+
 *Note.* "Per CPU core dedicated to query handling" is normalised to the per-core throughput because the implementation's multi-core scaling factor is an architectural choice recorded in the Architecture Document. The Reference Profile specifies a Dual Xeon Gold 6230R (52 physical cores total); the per-core target multiplied by the cores dedicated to query handling yields the aggregate throughput target for the deployment.
+
 *Verification.* Sustained-load benchmarking using `dnsperf` or `kxdpgun` against the Reference Query Mix on hardware matching the Reference Hardware Profile, with the operational stack (metrics, logging, RRL) enabled per the conditions above. Results are recorded with their exact hardware, kernel version, container runtime, and benchmark-tool versions for reproducibility.
 
 **BDS-NFR-PERF-002.** Under the workload of BDS-NFR-PERF-001 at no more than 50% of the throughput target, the server MUST achieve a 99th-percentile query response latency below 1 millisecond for direct-hit lookups (queries answered without CNAME chain expansion), measured as in-process latency: the elapsed time between the kernel delivering the query packet to the server's UDP socket and the server submitting the response packet for transmission. End-to-end latency including network propagation is not specified, as it depends on factors outside the server's control.
+
 *Source.* Operational requirement.
+
 *Verification.* Latency-distribution inspection under controlled load on the Reference Hardware Profile; in-process latency measurement via instrumented timestamps at socket-receive and socket-send.
 
 **BDS-NFR-PERF-003.** Under the workload of BDS-NFR-PERF-001 at up to 90% of the throughput target, the server MUST achieve a 99th-percentile query response latency below 10 milliseconds, measured per BDS-NFR-PERF-002.
+
 *Source.* Operational requirement.
+
 *Verification.* Latency-distribution inspection at near-capacity load on the Reference Hardware Profile.
 
 **BDS-NFR-PERF-004.** AXFR transfer ingestion on the Reference Hardware Profile MUST sustain at least 100,000 records per second when the network bandwidth to the primary is at least 1 Gbit/s and the primary serves the transfer at line rate. Records are counted as wire-format RRs received and validated; the ingestion rate includes the validation passes specified in §4.6 and the publication step of BDS-INV-003.
+
 *Source.* Operational requirement; bounds transfer time for large zones to operationally acceptable values.
+
 *Verification.* AXFR ingestion timing with synthetic zones of varying sizes on the Reference Hardware Profile.
 
 **BDS-NFR-PERF-005.** Process initialization (binding sockets, parsing configuration, initiating first transfer attempts) MUST complete within 1 second of process start on the Reference Hardware Profile with the configuration containing up to 1,000 zones. Zone-transfer completion time (loading data into ACTIVE state per §4.15) is separate and constrained by primary responsiveness and zone size; the bound here is on initialization steps alone.
+
 *Source.* Operational requirement; orchestrator-friendly startup.
+
 *Verification.* Startup-timing tests with configurations of varying zone counts on the Reference Hardware Profile.
 
 **BDS-NFR-PERF-006.** Under the Reference Query Mix delivered over TCP with at least 32 in-flight queries per connection (within the limit of BDS-FR-TCP-011), on the Reference Hardware Profile and under the operational conditions of BDS-NFR-PERF-001, the server MUST sustain a TCP query throughput of at least 30% of the UDP throughput target of BDS-NFR-PERF-001 per CPU core dedicated to query handling (i.e., at least 15,000 TCP queries per second per core under the current PERF-001 target).
+
 *Source.* Operational requirement; TCP query traffic is a meaningful fraction of authoritative-server load in DNSSEC-heavy and large-response-heavy deployments.
+
 *Note.* TCP throughput is naturally lower than UDP throughput because of connection-state overhead, framing, and pipelining accounting. The 30% factor is the BoronDNS formal acceptance ratio for the Reference Profile; future transport optimisations (e.g., io_uring or epoll batching) may exceed it.
+
 *Verification.* TCP-pipelined query benchmarking on the Reference Hardware Profile using a benchmark tool that supports pipelining (e.g., `dnsperf` with appropriate flags or a custom harness).
 
 **BDS-NFR-PERF-007.** TSIG-authenticated message verification on the Reference Hardware Profile MUST sustain at least 10,000 verifications per second per CPU core for the HMAC-SHA256 algorithm (BDS-FR-TSIG-001), under sustained inbound TSIG-signed NOTIFY load. The cryptographic cost of TSIG verification is the principal new computational cost on the inbound transfer/notify path; this target bounds the rate at which a TSIG-configured primary can drive the secondary's authentication path.
+
 *Source.* Operational requirement; bounds the throughput of the TSIG-protected control path.
+
 *Note.* Outbound TSIG signing (BDS-FR-TSIG-012) is computationally equivalent to verification and follows the same target.
+
 *Verification.* TSIG verification benchmarking on the Reference Hardware Profile using a load generator emitting TSIG-signed messages at controlled rates.
 
 **BDS-NFR-PERF-008.** Under the Reference Query Mix against zones signed with NSEC (BDS-FR-DNSSEC-001 et seq.), where the client query carries DO = 1 and the response includes DNSSEC augmentation per BDS-FR-DNSSEC-003 through BDS-FR-DNSSEC-007, the server on the Reference Hardware Profile MUST sustain at least 60% of the throughput target of BDS-NFR-PERF-001 per CPU core (i.e., at least 30,000 DNSSEC-augmented queries per second per core under the current PERF-001 target). The performance reduction reflects the larger response size and additional records placed in the authority section.
+
 *Source.* Operational requirement; DNSSEC-aware deployments must not pay an unacceptable throughput penalty.
+
 *Note.* NSEC3-signed zones may yield different numbers because NSEC3 proof selection can require hash computation, but the same target applies. NSEC3 benchmark variants MUST record the signed-zone parameters in the retained run artifacts.
+
 *Verification.* Benchmarking against NSEC- and NSEC3-signed Reference Query Mix variants on the Reference Hardware Profile.
 
 ## 5.2 Reliability and Availability
@@ -2531,48 +3240,64 @@ The area code **PERF** is allocated.
 The area code **REL** is allocated.
 
 **BDS-NFR-REL-001.** On receipt of SIGTERM, the server MUST cease accepting new queries and new TCP connections, allow in-flight query processing and transfer sessions to complete within a configurable grace period (parameter `shutdown.grace_period`, default 30 seconds), then exit with status code 0. Sessions still active at the end of the grace period MUST be aborted as follows:
+
 - Client TCP connections: closed with a graceful TCP FIN; an in-progress query response is sent if assembly completed before the grace expired, otherwise the connection is closed without response.
 - In-progress AXFR or IXFR transfer sessions: aborted per BDS-FR-AXFR-019 or BDS-FR-IXFR-013; partial data is discarded and the next process instance restores the preceding last-good snapshot before refreshing.
 - In-progress XoT TLS handshakes: closed with TLS close-notify where the handshake state permits, otherwise the underlying TCP connection is closed.
 
 After the grace period expires, the server MUST exit regardless of remaining in-flight work.
+
 *Source.* Operational requirement; orchestrator-friendly graceful shutdown.
+
 *Verification.* Shutdown-behaviour tests under sustained query load and active transfer sessions; verify clean TCP close on client connections and correct abort accounting on transfer sessions.
 
 **BDS-NFR-REL-002.** A crash MUST leave either the preceding complete cache file or the newly fsynced complete cache file. Temporary, malformed, mismatched, or checksum-invalid files MUST never be served. Restart MUST restore the preceding validated version and then resume refresh per §4.16.
+
 *Source.* BDS-INV-004.
+
 *Verification.* Forced-kill tests followed by restart verification; filesystem state inspection across crash-restart cycles.
 
 **BDS-NFR-REL-003.** Steady-state memory consumption MUST remain bounded across extended operation. Under a stable workload, stable zone sizes, and a stable distribution of client source IPs, the server MUST NOT exhibit continuing memory growth attributable to its own data structures after an identified warm-up period. Release verification MUST declare the workload, warm-up point, observation duration, sampling cadence, and acceptable growth threshold before execution; it MUST retain the RSS samples and classify any continuing trend rather than treating a short run as proof of indefinite stability.
 
 The SRS does not prescribe a 30-day duration or a runtime configuration parameter for this verification policy. A release may combine multi-day soak evidence, repeated 24-hour fuzz/resource campaigns, allocator-stress tests, and targeted load scenarios according to the risks changed in that release. Longer optional campaigns remain useful engineering evidence but are not automatically a release prerequisite.
+
 *Source.* Operational requirement for long-running infrastructure services.
+
 *Note.* Memory growth caused by external factors (a primary delivering progressively larger zones across the soak period, a steadily growing population of distinct client source prefixes) is not in scope; the requirement isolates growth attributable to the server's internal state management.
+
 *Verification.* Risk-based extended-runtime testing on the Reference Hardware Profile or a documented substitute; comparison of retained post-warm-up RSS samples; allocator-exhaustion and stable-workload checks; review of fuzz and soak resource evidence for a continuing growth trend.
 
 **BDS-NFR-REL-004.** Network errors on inbound or outbound connections — malformed packets, mid-transfer connection drops, kernel buffer exhaustion, transient `EAGAIN`/`EWOULDBLOCK` conditions, ICMP unreachables, peer TCP RST, TLS handshake-level failures on XoT — MUST NOT cause process termination. Errors MUST be handled per the requirements of §4.6, §4.7, §4.8, §4.10, and §4.12; the process continues serving subsequent traffic. File-descriptor exhaustion is prevented structurally by BDS-NFR-RES-004 (startup `rlimit` check); should it occur despite that check (e.g., due to FD leak), accept failures MUST be logged at error level and MUST NOT terminate the process.
+
 *Source.* Operational requirement.
+
 *Verification.* Fault-injection tests across the enumerated failure modes; long-running tests under simulated network-error injection.
 
 **BDS-NFR-REL-005.** The server MUST be deployable under rolling-restart patterns. Specifically, the server's contribution to a successful rolling restart is:
+
 - After receipt of SIGTERM, the server MUST stop accepting new client TCP connections within 100 milliseconds (the listening TCP socket is closed); inbound connection attempts during the drain period are refused at the kernel level (TCP RST in response to SYN), allowing load balancers and clients to fail over to other instances promptly.
 - In-flight client queries MUST be served to completion within the grace period of BDS-NFR-REL-001; no in-flight query MUST be dropped without response unless it exceeds the grace period.
 - The metrics endpoint health probe (`/readyz` per BDS-NFR-OBS-004) MUST report **draining** within 100 milliseconds of SIGTERM receipt, signalling to orchestrators that the instance is leaving service.
 
 Whether end-to-end service continuity is achieved depends on the orchestrator's deployment strategy and the client population's retry behaviour, both outside the server's control.
+
 *Source.* Operational requirement; container-native deployment.
+
 *Verification.* Rolling-restart tests in a representative orchestrator environment; instrumented measurement of listen-socket-close latency and `/readyz` state-transition latency.
 
 **BDS-NFR-REL-006.** Under inbound query load exceeding the server's serving capacity (BDS-NFR-PERF-001), the server MUST exhibit graceful degradation:
+
 - UDP queries beyond capacity MAY be dropped at the OS kernel socket buffer level (the kernel's standard behaviour when the receive buffer fills); the server MUST NOT introduce application-level queueing of unbounded depth on the UDP query path.
 - TCP connection accepts beyond BDS-FR-TCP-005 MUST be refused at the kernel level (the listen-socket backlog is configured per BDS-FR-TCP-005 and the kernel refuses excess SYNs); the server MUST NOT accept and immediately close connections in a busy loop.
 - In-flight queries already accepted MUST continue to be served correctly. UDP query work MUST remain on the bounded receive-and-response path without adding an unbounded application queue. TCP query work MUST remain bounded by the configured connection count, per-connection in-flight limit, read timeout, write timeout, and drain grace period. BoronDNS does not define a separate per-query CPU-processing timeout parameter.
 - The server MUST NOT exhibit cascade failure: a transient overload episode MUST result in transient degraded performance, not in a persistent unhealthy state requiring restart.
 
 *Source.* Operational requirement; protection against cascading failures in anycast and load-balanced deployments.
+
 *Verification.* Overload-injection tests at 1.5×, 2×, and 5× the throughput of BDS-NFR-PERF-001; observation of UDP drop counters via per-CPU `netstat`, TCP accept refusal at the kernel level via SYN-flood-style tests, in-flight query completion under load, and post-overload recovery to baseline performance.
 
 **BDS-NFR-REL-007.** The server's correct operation requires the system clock to be synchronised within configurable tolerance windows. Specifically:
+
 - TSIG message verification per BDS-FR-TSIG-008 tolerates clock difference up to the configured TSIG fudge value (parameter `tsig.fudge_seconds`, default 300 seconds per BDS-FR-TSIG-012). Operators valuing stricter authentication MAY reduce this; modern infrastructures running NTP or PTP typically maintain clock skew well below 1 second, and a fudge value of 5–30 seconds is commonly operationally viable.
 - DNS Cookie timestamp validation per BDS-FR-COOKIE-007 tolerates Server Cookie timestamps within configurable past and future windows (parameters `cookie.timestamp_past_tolerance_seconds`, default 3600; `cookie.timestamp_future_tolerance_seconds`, default 300).
 - All these tolerance windows MUST be configurable per §6.2; the defaults are chosen to accommodate environments with relatively loose time synchronisation, while supporting tightening in environments with NTP/PTP-synchronised clocks.
@@ -2580,7 +3305,9 @@ Whether end-to-end service continuity is achieved depends on the orchestrator's 
 Clock drift exceeding the configured tolerances will cause authentication failures (BADTIME from TSIG, invalid Server Cookie from BDS-FR-COOKIE-007 case (c)), but MUST NOT cause process malfunction; the server MUST distinguish clock-related authentication failures from key-mismatch failures in log entries and per-zone metrics to support operator diagnosis.
 
 Clock synchronisation itself is the operator's responsibility (the server does not embed an NTP client); the Operator Deployment Guide per BDS-NFR-MAINT-009 MUST document the clock-synchronisation requirement and recommended practices.
+
 *Source.* RFC 8945 §10.4 (TSIG time-window discussion); RFC 9018 §4.3 (Server Cookie timestamp); operational practice in production DNS deployments.
+
 *Verification.* Tests with deliberate clock-skew injection across the configured tolerance boundaries; log inspection confirming distinct logging of clock-related vs key-related authentication failures.
 
 ## 5.3 Security
@@ -2588,33 +3315,59 @@ Clock synchronisation itself is the operator's responsibility (the server does n
 The area code **SEC** is allocated.
 
 **BDS-NFR-SEC-001.** The implementation MUST satisfy BDS-INV-006: Rust's safe subset is used for all code processing data received from the network; `unsafe` blocks are confined to documented, justified exceptions.
+
 *Source.* BDS-INV-006.
+
 *Verification.* Continuous first-party unsafe-boundary audit plus release-review transitive unsafe dependency enumeration and per-block review of all first-party `unsafe` code.
 
 **BDS-NFR-SEC-002.** Wire-format parsers — DNS message, EDNS option, RR-type-specific decoders, TSIG verification input, AXFR/IXFR stream parser — MUST be subject to continuous fuzz testing using `cargo-fuzz` or equivalent. Each release MUST be preceded by a minimum of 24 hours of fuzz testing per parser with no resulting crash, panic, or memory-safety finding.
+
 *Source.* Defensive engineering; aligned with the project's security thesis.
+
 *Verification.* CI pipeline integration of fuzz tests; release-process documentation.
 
 **BDS-NFR-SEC-003.** Cryptographic key material — TSIG shared secrets, XoT client TLS private keys, DNS Cookie secrets — MUST be handled per the requirements of BDS-FR-TSIG-006, BDS-FR-XOT-007, and BDS-FR-COOKIE-004 respectively. This NFR consolidates those security guarantees into the cross-cutting security inventory; the cited functional requirements are authoritative. In summary, none of these materials may appear in any log entry at any verbosity level, in error messages or diagnostic output, and the server MUST zero in-memory key material at process termination.
+
 *Source.* BDS-FR-TSIG-006; BDS-FR-XOT-007; BDS-FR-COOKIE-004; standard cryptographic key handling.
+
 *Verification.* Static analysis of log-statement contents; static analysis of error-formatting code paths; memory inspection at controlled shutdown.
 
-**BDS-NFR-SEC-004.** The server MUST be designed to run as an unprivileged operating-system user. Where binding to privileged ports (53, 853) is required, this MUST be achieved via OS-level capabilities (Linux `CAP_NET_BIND_SERVICE`) or socket activation from a supervisor, not by running the server process as root. The server MUST NOT require any capability beyond `CAP_NET_BIND_SERVICE` (per BDS-NFR-PORT-003); other capabilities (e.g., `CAP_SYS_ADMIN`, `CAP_NET_RAW`) MUST NOT be required. Where the server is invoked as root (a deployment-side decision outside its control), the server MUST drop privileges to a configurable unprivileged user (parameter `process.run_as_user`) before beginning to process untrusted input, and the privilege drop MUST be irrevocable (`setresuid` with all three IDs set to the unprivileged user, or equivalent).
+**BDS-NFR-SEC-004.** The default socket backend MUST be designed to run as an
+unprivileged operating-system user. Binding privileged ports MUST use OS-level
+capabilities (Linux `CAP_NET_BIND_SERVICE`) or supervisor-provided sockets,
+without requiring the process to remain root. The default socket backend MUST
+NOT require any capability beyond `CAP_NET_BIND_SERVICE`. When invoked as root,
+the server MUST drop privileges irrevocably to `process.run_as_user` before
+processing untrusted input.
+
+The experimental AF_XDP profile (§C.6.1) additionally needs permission to create
+AF_XDP sockets and load/attach its kernel redirect program. The default
+least-privilege deployment guarantee does not claim those operations work with
+`CAP_NET_BIND_SERVICE` alone. Operators must use the separately documented XDP
+deployment procedure and account for its larger privilege boundary.
+
 *Source.* Standard security practice; least-privilege principle; resolution of v0.2 C.5 decision item.
+
 *Verification.* Deployment tests confirming non-root execution viability; privilege-drop tests when the server is invoked as root.
 
 **BDS-NFR-SEC-005.** The server MUST NOT listen on any TCP or UDP port beyond those required for configured DNS query service (UDP/53, TCP/53), the optional health and metrics endpoint per §6.4, and (where the metrics endpoint is configured to be a Unix domain socket rather than a TCP socket) the corresponding Unix domain socket path. Outbound XoT connections do not require listening sockets. The server MUST NOT open any administrative or debugging port at any time, in accordance with BDS-INV-005 and BDS-NEG-011. The server MUST NOT create or listen on Unix domain sockets beyond those required for the metrics endpoint when that endpoint is so configured.
+
 *Source.* Defensive engineering; BDS-INV-005.
+
 *Verification.* Runtime network-layer and filesystem inspection confirming bound ports and any Unix sockets match configuration.
 
-**BDS-NFR-SEC-006.** Third-party Rust crates depended on by the server MUST be from well-maintained sources, subjected to security review at adoption time, and tracked against ongoing security advisories. The dependency set MUST be minimised consistent with functional requirements. Specific crate choices, with security justification, are recorded in the Architecture Document. Continuous monitoring MUST include an advisory/license/source gate such as `cargo deny check` or `cargo audit` plus equivalent license/source checks. In the current private-repository Engineering MVP profile this gate is `scripts/check.sh`; formal SRS release acceptance requires retained CI or release-gate logs showing the dependency gate on the accepted commit, with failures on High/Critical unmitigated advisories and on policy-disallowed licenses or sources.
+**BDS-NFR-SEC-006.** Third-party Rust crates depended on by the server MUST be from well-maintained sources, subjected to security review at adoption time, and tracked against ongoing security advisories. The dependency set MUST be minimised consistent with functional requirements. Specific crate choices, with security justification, are recorded in the Architecture Document. Continuous monitoring MUST include an advisory/license/source gate such as `cargo deny check` or `cargo audit` plus equivalent license/source checks. The local gate is `scripts/check.sh`; formal SRS release acceptance requires retained CI or release-gate logs showing the dependency gate on the accepted commit, with failures on High/Critical unmitigated advisories and on policy-disallowed licenses or sources.
+
 *Source.* Project cryptographic-dependency policy; standard supply-chain security practice.
+
 *Verification.* Dependency-gate execution observed in local continuous logs, CI logs, or release-gate evidence; review of advisories at each release.
 
 **BDS-NFR-SEC-007.** The project MUST publish a `SECURITY.md` vulnerability-intake policy in the primary repository and reference it from the README. The policy MUST identify a private reporting contact; describe the current, superseded, prerelease, development, and internal-build maintenance posture; define the report scope; distinguish vulnerability intake from a support contract; state whether response, remediation, hotfix, backport, disclosure, or CVE commitments exist; and explain how report-specific confidentiality may be agreed.
 
 The policy MUST NOT claim a response time, remediation time, maintained release branch, default embargo, or other service commitment unless that commitment has been explicitly approved and operationally resourced. The BoronDNS 1.0 public-beta posture requires no fixed response or remediation deadline, no default disclosure window, no hotfix or backport promise, and no CVE promise. The policy MUST be reviewed for each public release and updated when the actual maintenance model changes.
+
 *Source.* Truthful vulnerability intake for publicly distributed infrastructure software without representing unavailable support capacity.
+
 *Verification.* Repository inspection at release time; README-link check; comparison of policy statements with the release and maintenance model approved in the project decision register.
 
 ### Security additions from the v0.8 CIA threat-model analysis
@@ -2622,38 +3375,55 @@ The policy MUST NOT claim a response time, remediation time, maintained release 
 The following requirements (BDS-NFR-SEC-008 through BDS-NFR-SEC-015) were introduced in v0.8 as a result of a Confidentiality / Integrity / Availability (CIA) threat-model analysis of the system, conducted in conjunction with the introduction of the Zone Provisioning subsystem (§4.20). The threat model considered the system both as it stands and with catalog-zone provisioning enabled; requirements herein are stated as applying to the relevant configured zone source(s).
 
 **BDS-NFR-SEC-008.** *(Confidentiality of key material at rest in configuration.)* The configuration loader MUST accept TSIG shared secrets — both for regular zone-transfer TSIG keys (§4.9) and for the catalog-zone TSIG key (BDS-FR-PROV-005, BDS-NFR-SEC-010) — through the inline `secret` and filesystem `secret_file` sources defined by BDS-IF-CONF-004. Exactly one source MUST be configured for each static TSIG key. The configuration MAY also name an optional plaintext filesystem `[secret_store]` root per BDS-IF-CONF-013; that root contains reloadable TSIG keys and named XoT profiles referenced by key/profile name from static configuration or catalog member transfer metadata. The secret-store root path is static configuration, but the validated key/profile snapshot loaded from that root is runtime key material and MAY be refreshed by explicit control-plane operations without re-reading general configuration. Production operator documentation (per BDS-NFR-MAINT-009) MUST recommend file-backed secret provisioning for deployments that use Kubernetes Secrets, Vault Agent templates, or similar external secret-store projections. Inline secrets remain supported for small deployments and tests, but they MUST be redacted from config dumps, structured logs, and validation errors. Where a secret is loaded from a file, the temporary in-memory buffer used to read the file MUST be zeroized or otherwise dropped through an equivalent zeroizing wrapper after the secret has been copied to the TSIG key store.
+
 *Source.* CIA-C1 threat analysis; standard cryptographic key-handling hygiene; BDS-FR-TSIG-006.
+
 *Verification.* Configuration tests for inline, `secret_file`, and secret-store-backed TSIG keys; startup failures for missing, unreadable, world-readable, invalid, or mixed-source secret files; secret-store reload tests confirming failed reloads retain the previous validated snapshot; config-dump and validation-error tests confirming secret redaction; code review confirming file-read buffers use a zeroizing wrapper or equivalent.
 
 **BDS-NFR-SEC-009.** *(Integrity — transfer authentication advisory.)* For every configured (zone, primary) tuple where TSIG authentication is NOT configured per §4.9, the server MUST emit a warning-level log entry at process startup identifying the affected tuple and noting that the zone transfer is unauthenticated. The server MUST additionally expose a configuration parameter `transfer.require_tsig` (default `false` for backward compatibility; the schema MUST recommend setting it to `true` for production deployments). Where `transfer.require_tsig = true`, the server MUST refuse to start if any configured static zone lacks a configured TSIG key, with a startup-validation failure per BDS-IF-CONF-005. The earlier draft name `zones.require_tsig` is intentionally not used because TOML already uses `[[zones]]` as the zone-array table.
+
 *Source.* CIA-I1 threat analysis; RFC 8945 §1.
+
 *Verification.* Tests with mixed-TSIG configurations and verification of warning emission; tests with `require_tsig = true` and incomplete TSIG configuration expecting startup failure.
 
 **BDS-NFR-SEC-010.** *(Integrity — mandatory catalog-zone authentication.)* For every `[[catalog_zones]]` entry per §4.20.2, TSIG authentication of the catalog-zone transfer (BDS-FR-PROV-005) is MANDATORY, not optional. The server MUST refuse to start if a catalog zone's `tsig_key` is unset or references a non-existent key, with a startup-validation failure per BDS-IF-CONF-005 identifying the missing configuration. The TSIG-`require_tsig` flag of BDS-NFR-SEC-009 does NOT govern catalog zones; the catalog zone's TSIG requirement is unconditional. Catalog-derived member transfers MUST inherit a TSIG key by default. A local per-catalog legacy policy MAY allow unsigned member AXFR only when explicitly configured by the operator and only for private-address member primaries; such a policy MUST NOT relax authentication of the catalog transfer itself. Additionally, if XoT (§4.10) is not configured for a catalog primary, the configuration validator MUST emit a warning per BDS-IF-CONF-008 noting that catalog contents traverse the network in cleartext (the TSIG MAC authenticates the contents but does not encrypt them).
+
 *Source.* CIA-IX2 threat analysis; the catalog zone is a cross-cutting integrity-critical artifact whose compromise affects all member zones.
+
 *Note.* This requirement is intentionally stricter than the general zone-transfer TSIG posture (which is operator-elected per BDS-NFR-SEC-009). The catalog zone's blast-radius asymmetry justifies the asymmetry in the requirement.
+
 *Verification.* Tests starting the server with a catalog zone without a TSIG key (expecting startup failure with a clear diagnostic); tests with catalog TSIG configured but XoT absent (expecting startup warning); tests with both configured (expecting clean startup).
 
 **BDS-NFR-SEC-011.** *(Integrity — bounded catalog member transfer metadata.)* For catalog-derived member zones, the primary-server coordinates used for member-zone transfers (per BDS-FR-PROV-003) MUST be inherited from the statically configured `[[catalog_zones]]` entry unless the operator explicitly enables the BoronDNS member transfer extension profile per BDS-FR-PROV-014 and BDS-IF-CONF-013. The ordinary RFC 9432 §5.1 `primaries.<unique-id>.zones.<catalog-apex>` property MUST NOT be honored. When the extension profile is enabled, catalog-provided transfer metadata MUST be limited to member primary addresses, transfer transport/port/server-name hints, TSIG key-name references, and NOTIFY source addresses. The catalog MUST NOT carry raw TSIG shared secrets, XoT client private keys, client certificates, or trust anchors. Referenced TSIG keys and XoT profiles MUST resolve through static configuration or the configured reloadable secret store.
+
 *Source.* CIA-IX3 threat analysis; deliberate security narrowing of the RFC 9432 catalog mechanism; operational requirement for catalog-driven secondary-service provisioning.
+
 *Verification.* Code review of the catalog-property processing path confirming ordinary RFC 9432 `primaries` properties are ignored; tests with extension records disabled and enabled; tests confirming unsupported public unsigned member AXFR plans are rejected; tests confirming secret material is resolved by reference rather than accepted from catalog DNS data.
 
 **BDS-NFR-SEC-012.** *(Availability — catalog SPOF mitigation.)* The `[[catalog_zones]]` configuration MUST permit specification of multiple primary servers for each catalog zone (`primaries` or explicit `transfer_primaries`, per BDS-IF-CONF-013), with selection semantics identical to the multi-primary behaviour for regular zones per §4.16. This permits operators to mitigate the single-point-of-failure character of a single catalog primary.
+
 *Source.* CIA-AX1 threat analysis; standard reliability practice for critical configuration sources.
+
 *Verification.* Tests with multi-primary catalog configurations under various primary-availability scenarios.
 
 **BDS-NFR-SEC-013.** *(Availability — catalog resource exhaustion bound.)* The number of member zones derived from catalog zones MUST be bounded by a configurable maximum (`max_member_zones` on each `[[catalog_zones]]` entry or equivalent, per BDS-IF-CONF-013, default 10,000). Catalog contents specifying member zones beyond this limit MUST cause the excess PTR records to be ignored after deterministic canonical member-zone ordering (the first N in that order accepted, the remainder dropped) and an error-level log entry to be emitted naming the limit and the count of dropped entries. The configured limit MUST be enforced jointly with BDS-NFR-RES-003 (10,000 zones at 16 GiB RAM); operators raising one should consider raising the other.
+
 *Source.* CIA-AX2 threat analysis; defence against a compromised or misconfigured catalog primary/source.
+
 *Verification.* Tests with synthetic catalogs exceeding the limit; verify cap enforcement, error logging, and continued operation with the accepted subset.
 
 **BDS-NFR-SEC-014.** *(Availability — slow-transfer tarpit defence.)* Every individual AXFR or IXFR transfer session — both regular zone transfers (§4.6, §4.7) and each catalog zone's own transfer — MUST be subject to a configurable per-session maximum duration (parameter `transfer.session_timeout_seconds`, default 300 seconds). When the timeout expires, the session MUST be aborted as per the normal abort path of §4.6 or §4.7 (the session counts as a failure for state-machine accounting). The timeout is independent of the connection-level idle timeouts of §4.12 and applies to the wall-clock duration of the transfer regardless of activity. This bounds the resource cost of a hostile or pathologically slow primary occupying the limited concurrent-transfer slots of BDS-FR-AXFR-022.
+
 *Source.* CIA-AX3 threat analysis; defence against TCP-slow-loris-style attacks adapted to zone transfer.
+
 *Verification.* Tests with a slow primary emulator (deliberately introducing delays in AXFR response stream); verify session abort at the configured timeout; verify the transfer slot is released for use by other transfers; verify state-machine accounting treats the timeout as a failure.
 
 **BDS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation and clash handling.)* Every candidate member-zone name derived from a catalog zone's PTR records MUST pass the structural validation required by RFC 9432 §4.1 and BDS-FR-PROV-013 before being surfaced to the zone manager per BDS-FR-PROV-007. BoronDNS MUST NOT apply LDH host-name restrictions, blanket IANA Special-Use Domain Name exclusions, or wildcard-label exclusions to catalog member names merely because of their spelling: RFC 9432 §4.1 represents member zones in PTR RDATA so all valid DNS domain names can be represented, and its examples include `example.com.`, `example.net.`, and `example.org.`. IANA Special-Use names and their subdomains are special-purpose names, not malformed DNS names.
 
 If a structurally valid incoming member zone name clashes with an existing zone name from a configured catalog zone, another already-applied catalog member, or an otherwise configured zone, BoronDNS MUST ignore the incoming instance and SHOULD log an error per RFC 9432 §5.2. Existing configured zones and previously applied catalog-owned zones MUST NOT be replaced by the clashing incoming instance, regardless of canonical catalog-name ordering. Removing the accepted instance MUST NOT promote a previously ignored stale listing without a new change from that catalog. Optional operator allow-lists or deny-lists for admissible catalog member names may be introduced as explicit future configuration, but no implicit special-use or wildcard rejection is part of the default RFC 9432 profile.
+
 *Source.* RFC 9432 §4.1, §5.2, §7; IANA Special-Use Domain Names registry; RFC 2606; RFC 6761.
+
 *Verification.* Tests with malformed member PTR structures/RDATA and duplicate PTR targets; tests proving RFC 9432 example member names and IANA Special-Use names are structurally accepted; tests proving configured-zone/catalog-zone name clashes are ignored with an operator-visible error; multi-catalog tests proving first-applied ownership and no stale automatic takeover. *Updated in v0.9.1.*
 
 ## 5.4 Maintainability
@@ -2661,26 +3431,37 @@ If a structurally valid incoming member zone name clashes with an existing zone 
 The area code **MAINT** is allocated.
 
 **BDS-NFR-MAINT-001.** The release process SHOULD measure the first-party Rust source-line count, excluding tests, dependencies, and generated code, as a maintainability trend. No fixed line-count range is a release criterion: functionality, reviewable module boundaries, documentation, testing, and automated unused-code checks are the relevant controls. Measurements and any material growth rationale belong in the Architecture Document or retained release evidence, not necessarily in public release notes.
+
 *Source.* Project maintainability target.
+
 *Verification.* Source-line measurement using `tokei` or equivalent; Architecture Document or retained-evidence inspection.
 
 **BDS-NFR-MAINT-002.** The codebase MUST be organised into clearly named, single-purpose production modules with explicit review boundaries. Every first-party production Rust source module MUST appear in the Architecture Document's module map, and every mapped module MUST correspond to current production source. Each major functional area of §4 MUST be mappable to one or more identifiable modules; support-tool modules MUST be labelled separately so they do not silently expand the server's protocol scope. The release process MUST record the discovered module count, but the count is an inventory signal rather than an acceptance range: splitting or merging modules is justified by locality of behavior, ownership boundaries, and reviewability rather than an arbitrary numeric target.
+
 *Source.* Maintainability and auditability design principle.
+
 *Verification.* A release-time audit discovers first-party production Rust source independently, excludes test-only modules, fails on either missing or stale Architecture Document map entries, records the resulting module count, and confirms the §4 functional-area mapping by code review.
 
 **BDS-NFR-MAINT-003.** Every `unsafe` block in first-party Rust code MUST carry a comment stating the reason `unsafe` is necessary and the invariants on which its soundness depends, per BDS-INV-006.
+
 *Source.* BDS-INV-006.
+
 *Verification.* Static analysis confirming each `unsafe` block has an accompanying comment satisfying the form.
 
-**BDS-NFR-MAINT-004.** Implementation of functional requirements of §4 MUST include code-level comments referencing the requirement identifier (e.g., `// Implements BDS-FR-CORE-014: AA bit setting`) at the principal site implementing each requirement. Where a requirement is implemented across multiple sites, at least one site per requirement MUST carry the reference. The Appendix A traceability matrix is the canonical mapping; in-code references aid review and serve as cross-validation against the matrix. The active continuous gate for the project stage MUST verify that every functional requirement identifier in §4 appears as a code-level reference in at least one source file; missing references MUST fail that gate. During the private-repository Engineering MVP profile, this gate is `scripts/check.sh`; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record MUST cover the accepted commit.
+**BDS-NFR-MAINT-004.** Implementation of functional requirements of §4 MUST include code-level comments referencing the requirement identifier (e.g., `// Implements BDS-FR-CORE-014: AA bit setting`) at the principal site implementing each requirement. Where a requirement is implemented across multiple sites, at least one site per requirement MUST carry the reference. The Appendix A traceability matrix is the canonical mapping; in-code references aid review and serve as cross-validation against the matrix. The active continuous gate for the project stage MUST verify that every functional requirement identifier in §4 appears as a code-level reference in at least one source file; missing references MUST fail that gate. The local gate is `scripts/check.sh`; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record MUST cover the accepted commit.
+
 *Source.* Maintainability; review efficiency; auditable implementation traceability.
+
 *Verification.* Active-gate scan across the source tree for each requirement identifier in §4; gate failure on missing references.
 
 **BDS-NFR-MAINT-005.** The build process MUST produce deterministic, reproducible binaries given a fixed source tree and pinned dependency set. The reproducibility approach (e.g., `cargo build --locked`, container build with pinned base image and tooling) is recorded in the Architecture Document. Two independent builds from the same commit and the same toolchain MUST produce bit-identical binaries.
+
 *Source.* Supply-chain security; auditable releases.
+
 *Verification.* Two independent builds from the same source produce bit-identical binaries.
 
 **BDS-NFR-MAINT-006.** The server's externally observable interfaces MUST be considered stable under semantic versioning. The interfaces in scope of this stability commitment are:
+
 - the configuration schema per BDS-IF-CONF-001 and BDS-IF-CONF-002;
 - the command-line interface (process invocation arguments);
 - the process exit codes;
@@ -2690,19 +3471,27 @@ The area code **MAINT** is allocated.
 - the health endpoint paths and response structure per BDS-NFR-OBS-004.
 
 Removal or semantic change of any element of these interfaces requires a major-version increment after the public-beta compatibility baseline is declared stable. During the 1.0 public-beta support posture, documented breaking changes MAY be made when operationally necessary, but MUST be identified in the interface compatibility policy or release notes. Additions, deprecations, and breaking changes are maintained in the canonical interface compatibility documentation; public release notes need mention only operator-relevant changes.
+
 *Source.* Operational stability for in-place upgrades; semantic versioning practice; coordination with BDS-IF-CONF-002.
+
 *Verification.* Interface-policy review and CI-integrated interface-diff checks against the previous accepted baseline where one exists.
 
 **BDS-NFR-MAINT-007.** Unit test coverage for first-party Rust code MUST be at least 70% line coverage as measured by `cargo-llvm-cov` or an equivalent coverage tool. Wire-format parsers (DNS message parser, EDNS option parser, RR-type decoders, TSIG verifier, AXFR/IXFR stream parser, DNS Cookie cryptographic computation, TLS/X.509 handling for XoT) MUST individually achieve at least 85% line coverage. Coverage is measured at release time and recorded in release notes alongside the LOC measurement of BDS-NFR-MAINT-001.
+
 *Source.* Maintainability; defensive engineering; aligned with BDS-NFR-SEC-002 (fuzz testing applies orthogonally and is not a substitute for unit-test coverage).
+
 *Note.* The 70% / 85% thresholds are achievable for well-structured Rust code; coverage tools measure executed lines under tests, not branches, so achievable percentages are higher than equivalent branch-coverage targets.
+
 *Verification.* CI-integrated coverage measurement; release-notes inspection.
 
-**BDS-NFR-MAINT-008.** Formal SRS MVP and public release binaries and container images MUST be cryptographically signed. The signing mechanism MUST be either Sigstore/Cosign (preferred) or detached OpenPGP signatures with a clearly published signing key; the choice is recorded in the Architecture Document. Signature verification instructions MUST appear in the project's release documentation. The signing key's public part MUST be published in the project repository under `SECURITY.md` or an equivalent prominent location when detached OpenPGP is used. Private Engineering MVP builds and test archives MAY be unsigned only when explicitly labelled as unsigned/internal; such artifacts MUST NOT be used as evidence for this requirement and MUST NOT be presented as accepted formal SRS MVP or public release artifacts. Key rotation MUST follow a documented schedule for any long-lived signing key material.
+**BDS-NFR-MAINT-008.** Full SRS acceptance and public release binaries and container images MUST be cryptographically signed. The signing mechanism MUST be either Sigstore/Cosign (preferred) or detached OpenPGP signatures with a clearly published signing key; the choice is recorded in the Architecture Document. Signature verification instructions MUST appear in the project's release documentation. The signing key's public part MUST be published in the project repository under `SECURITY.md` or an equivalent prominent location when detached OpenPGP is used. Private current implementation builds and test archives MAY be unsigned only when explicitly labelled as unsigned/internal; such artifacts MUST NOT be used as evidence for this requirement and MUST NOT be presented as accepted full SRS acceptance or public release artifacts. Key rotation MUST follow a documented schedule for any long-lived signing key material.
+
 *Source.* Supply-chain security; release artifact integrity.
+
 *Verification.* Release-process inspection; signature verification by a third party at release time.
 
 **BDS-NFR-MAINT-009.** An **Operator Deployment Guide** MUST be maintained as a project deliverable, separate from this SRS. The Guide MUST cover at minimum:
+
 - installation procedures for each deployment mode of §2.4 (native process, OCI container, VM image);
 - configuration reference with worked examples for typical scenarios (single-zone single-primary; multi-zone multi-primary; TSIG-protected; XoT-protected; DNSSEC-served);
 - TSIG and XoT key/certificate provisioning workflows including the secure-handling expectations of BDS-FR-TSIG-006, BDS-FR-XOT-007, and BDS-FR-COOKIE-004;
@@ -2715,7 +3504,9 @@ Removal or semantic change of any element of these interfaces requires a major-v
 - the vulnerability-disclosure contact per BDS-NFR-SEC-007.
 
 The Guide MUST be updated at each release to reflect introduced features and changed defaults.
+
 *Source.* Operational deliverable necessary for safe public-beta evaluation and deployment.
+
 *Verification.* Document review at each release; optional external operator review per §7.1 when available.
 
 ## 5.5 Portability
@@ -2723,25 +3514,40 @@ The Guide MUST be updated at each release to reflect introduced features and cha
 The area code **PORT** is allocated.
 
 **BDS-NFR-PORT-001.** The server MUST build and run on current LTS releases of major Linux distributions: Ubuntu LTS, Debian stable, Red Hat Enterprise Linux / Rocky Linux / AlmaLinux current major version, and Alpine current release. No distribution-specific configuration MUST be required.
+
 *Source.* Operational requirement.
+
 *Verification.* Per-distribution smoke tests in CI or retained release-gate
 automation evidence.
 
 **BDS-NFR-PORT-002.** The server MUST build and run on the x86_64 (amd64) and aarch64 (arm64) processor architectures. Additional architectures MAY be supported on a best-effort basis without commitment.
+
 *Source.* Operational requirement; modern Linux server architecture diversity.
+
 *Verification.* Per-architecture build and smoke-test CI pipelines or retained
 release-gate automation evidence.
 
-**BDS-NFR-PORT-003.** The server MUST be runnable in OCI-compatible container runtimes (Docker, Podman, containerd, CRI-O). The published container image MUST be runnable in Kubernetes without privileged mode, without host networking, and without escalated capabilities beyond `CAP_NET_BIND_SERVICE` (where required per BDS-NFR-SEC-004).
+**BDS-NFR-PORT-003.** The server MUST be runnable in OCI-compatible container
+runtimes (Docker, Podman, containerd, CRI-O). With the default socket backend,
+the published image MUST run in Kubernetes without privileged mode, host
+networking, or capabilities beyond `CAP_NET_BIND_SERVICE` where needed. This
+guarantee does not cover the experimental AF_XDP deployment profile, whose NIC,
+network, and privilege requirements are specified separately (§C.6.1).
+
 *Source.* Operational requirement.
+
 *Verification.* Container deployment tests in representative runtimes.
 
 **BDS-NFR-PORT-004.** The server MUST support both IPv4 and IPv6 for all network operations: client query service, zone-transfer initiation toward primaries, NOTIFY reception, XoT.
+
 *Source.* Operational requirement; modern dual-stack expectation.
+
 *Verification.* Per-address-family functional tests across all network operations.
 
 **BDS-NFR-PORT-005.** The server MUST NOT depend on systemd, sysvinit, OpenRC, or any specific init system; on distribution-specific package management; or on distribution-specific filesystem layouts beyond those mandated by POSIX. The server's operation MUST be agnostic to the supervising process.
+
 *Source.* Portability; container-native design.
+
 *Verification.* Code review for init-system-specific or distribution-specific dependencies.
 
 ## 5.6 Observability
@@ -2749,16 +3555,21 @@ release-gate automation evidence.
 The area code **OBS** is allocated.
 
 **BDS-NFR-OBS-001.** The server MUST emit log entries to stdout and stderr in a structured format (JSON or logfmt; the choice is configurable, default JSON). Each entry MUST include at minimum: a timestamp in RFC 3339 format, a level (debug / info / warning / error), a message, and contextual key-value pairs identifying the affected zone, peer IP, request identifier, or other relevant entity.
+
 *Source.* Operational requirement; log-ingestion ecosystem compatibility.
+
 *Verification.* Log output inspection; parser-conformance tests against the chosen format.
 
 **BDS-NFR-OBS-002.** The server MUST support configurable log verbosity at the process level, with verbosity levels following the hierarchy error < warning < info < debug. The default verbosity MUST be info.
+
 *Source.* Operational requirement.
+
 *Verification.* Configuration tests across all levels.
 
 **BDS-NFR-OBS-003.** The server MUST expose its in-memory counters — the query-handling counters of BDS-FR-QRY-024, the RRL counters of BDS-FR-RRL-012, the NOTIFY counters of §4.8, the TSIG counters per §4.9, the transfer-session counters per §4.6 and §4.7, the cookie counters of BDS-FR-COOKIE-011 — via a metrics endpoint per §6.4. The exposition format MUST be compatible with the Prometheus text exposition format 0.0.4 and MUST use `Content-Type: text/plain; version=0.0.4; charset=utf-8`.
 
 Metric names MUST follow Prometheus naming conventions:
+
 - the first-party project prefix `borondns_` MUST be applied to every metric;
 - stable SRS-facing families MAY retain the narrower `borondns_secondary_`
   prefix where explicitly named in this section or in the interface contract;
@@ -2769,7 +3580,9 @@ Metric names MUST follow Prometheus naming conventions:
 - the canonical help text MUST be provided via the `# HELP` directive.
 
 Label cardinality MUST be bounded: per-source-prefix labels use the same /24 (IPv4) / /56 (IPv6) granularity as RRL accounting (BDS-FR-RRL-002), capped per BDS-FR-RRL-010 (configurable, default 100,000 distinct prefixes).
+
 *Source.* Operational requirement; ecosystem compatibility; Prometheus text exposition format 0.0.4 and naming conventions.
+
 *Verification.* Endpoint inspection; format-parsing tests against Prometheus text-format consumers; naming-convention conformance review.
 
 **BDS-NFR-OBS-004.** The server MUST expose two separate health endpoints per §6.4, following Kubernetes liveness-vs-readiness conventions:
@@ -2782,12 +3595,17 @@ Label cardinality MUST be bounded: per-source-prefix labels use the same /24 (IP
   - **draining** (HTTP 503): SIGTERM has been received and graceful shutdown is in progress per BDS-NFR-REL-001 and BDS-NFR-REL-005.
 
 State transitions MUST be observable on `/readyz` within 100 milliseconds of the actual state change (e.g., the transition to **draining** within 100 ms of SIGTERM receipt per BDS-NFR-REL-005).
+
 *Source.* Operational requirement; orchestrator-friendly health probing; Kubernetes liveness/readiness pattern.
+
 *Note.* The two-endpoint split follows the dominant orchestration convention and avoids the ambiguity of "starting" vs "draining" both reporting non-ready while requiring different operator responses. `/healthz` is additionally supported as a readiness alias per BDS-IF-HEALTH-002.
+
 *Verification.* Endpoint inspection across state transitions; orchestrator-integration tests confirming correct liveness vs readiness behaviour under SIGTERM, LOADING zones, and EXPIRED zones.
 
 **BDS-NFR-OBS-005.** The metrics endpoint MUST expose per-zone status as Prometheus-format metrics: zone state (LOADING / ACTIVE / EXPIRED per BDS-FR-ZONE-006, as a `borondns_secondary_zone_state` gauge with a `state` label), currently held SOA serial (as `borondns_secondary_zone_soa_serial`), Unix timestamp of most recent successful refresh (as `borondns_secondary_zone_last_refresh_seconds`), Unix timestamp of next scheduled refresh (as `borondns_secondary_zone_next_refresh_seconds`), count of refresh failures since the most recent success (as `borondns_secondary_zone_refresh_failures`), and count of queries served for the zone since process start (as `borondns_secondary_queries_total{zone="..."}`).
+
 *Source.* Operational requirement.
+
 *Verification.* Per-zone metric inspection.
 
 **BDS-NFR-OBS-006.** The metrics endpoint MUST expose a build-information metric:
@@ -2795,12 +3613,15 @@ State transitions MUST be observable on `/readyz` within 100 milliseconds of the
 borondns_secondary_build_info{version="<version>",commit="<commit>",rust_version="<rustc-version>",build_timestamp="<build-timestamp>"} 1
 ```
 The metric is a gauge with constant value 1, carrying the version, build commit hash, build timestamp, and Rust compiler version as labels. The labels' values are populated at build time and MUST be embedded in the binary; runtime modification MUST NOT be possible.
+
 *Source.* Operational practice; standard convention for build metadata exposition.
+
 *Verification.* Endpoint inspection; label-value verification against the actual build artifact metadata.
 
 **BDS-NFR-OBS-007.** Query response latency MUST be exposed as a Prometheus histogram metric (`borondns_secondary_query_duration_seconds`), with bucket boundaries operator-configurable (parameter `metrics.latency_histogram_buckets`, default `[0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]` seconds = 100 µs, 250 µs, 500 µs, 1 ms, 2.5 ms, 5 ms, 10 ms, 25 ms, 100 ms).
 
 Separate histogram series MUST be maintained for the following query categories, expressed as label values on the `query_category` label:
+
 - `udp_direct`: UDP queries answered without CNAME chain expansion;
 - `udp_cname_chain`: UDP queries with CNAME or DNAME chain expansion;
 - `tcp_direct`: TCP queries answered without CNAME chain expansion;
@@ -2809,7 +3630,9 @@ Separate histogram series MUST be maintained for the following query categories,
 - `cookie_validated`: queries with valid Server Cookie (BDS-FR-COOKIE-007 case (d)).
 
 A per-zone disaggregated variant SHOULD be available via a `zone` label, subject to label-cardinality bounds (recommended: omit the `zone` label for deployments serving more than 1,000 zones to avoid label explosion). The label inclusion is operator-configurable (parameter `metrics.latency_histogram_per_zone`, default `false`).
+
 *Source.* Operational requirement; BDS-NFR-PERF-002 and BDS-NFR-PERF-003 verification depends on a histogram metric.
+
 *Verification.* Endpoint inspection; histogram-percentile calculation against the published buckets.
 
 **BDS-NFR-OBS-008.** *(Catalog-zone observability.)* When `[[catalog_zones]]` are configured per §4.20.2, the metrics endpoint MUST expose the current catalog membership known to the process using:
@@ -2820,12 +3643,16 @@ borondns_catalog_member_info{catalog_zone="<catalog-apex>",zone="<member-apex>",
 
 The `catalog_zone` label is the catalog apex; the `zone` label is the member-zone apex named by the catalog; `managed="true"` means the member is dynamically served by the catalog path; and `managed="false"` means the catalog listed the zone but a static `[[zones]]` entry already owns that apex. When no catalog membership is known, no `borondns_catalog_member_info{...}` samples are emitted. Help/type metadata for the metric MAY still be present in the Prometheus text response.
 
-Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply: zone state, SOA serial, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures, and AXFR/IXFR transfer-session counters. This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events in the Engineering MVP profile; those events are covered by structured logs and the generic transfer/zone metrics unless a future release explicitly promotes a richer catalog metric catalogue.
+Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply: zone state, SOA serial, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures, and AXFR/IXFR transfer-session counters. This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events in the current implementation profile; those events are covered by structured logs and the generic transfer/zone metrics unless a future release explicitly promotes a richer catalog metric catalogue.
+
 *Source.* Operational requirement for RFC 9432 membership visibility; standard practice for operationally significant subsystems.
+
 *Verification.* Endpoint inspection with catalog membership present and absent; functional tests covering `managed="true"` and `managed="false"` samples; inspection confirming catalog-managed zones appear in ordinary zone and transfer metrics after insertion into the zone-state machine.
 
-**BDS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses that fail closed because the configured NSEC3 iteration cap prevents correct denial-proof construction. The Engineering MVP implementation metric is `borondns_dnssec_nsec3_iterations_exceed_cap_total`. This counter intentionally has no `zone` label in the current profile: the diagnostic signal is global, and per-zone attribution is provided by retained query artifacts rather than high-cardinality runtime metrics. The counter is driven by the lookup-time cap observation, not by serialized EDE options, so affected SERVFAIL responses are counted even when `edns.extended_dns_errors = "off"`.
+**BDS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses that fail closed because the configured NSEC3 iteration cap prevents correct denial-proof construction. The current implementation implementation metric is `borondns_dnssec_nsec3_iterations_exceed_cap_total`. This counter intentionally has no `zone` label in the current profile: the diagnostic signal is global, and per-zone attribution is provided by retained query artifacts rather than high-cardinality runtime metrics. The counter is driven by the lookup-time cap observation, not by serialized EDE options, so affected SERVFAIL responses are counted even when `edns.extended_dns_errors = "off"`.
+
 *Source.* BDS-FR-DNSSEC-014; BDS-FR-EDNS-018.
+
 *Verification.* Metric endpoint inspection after queries that exceed the configured NSEC3 iteration cap with `edns.extended_dns_errors = "off"` and with the minimal EDE profile enabled. *Added in v0.9.*
 
 ## 5.7 Resource Limits
@@ -2833,35 +3660,49 @@ Catalog zones and their member zones MUST also appear in the ordinary zone-state
 The area code **RES** is allocated.
 
 **BDS-NFR-RES-001.** The published container image MUST NOT exceed 20 megabytes uncompressed.
+
 *Source.* Project release artifact size target.
+
 *Verification.* Image size measurement at release time.
 
 **BDS-NFR-RES-002.** Memory consumption per zone SHOULD scale approximately linearly with the number of records in the zone, with a target per-record overhead (including indices and metadata) of less than 500 bytes.
+
 *Source.* Operational requirement; informed by typical secondary deployment sizing.
+
 *Note.* For the current straightforward in-memory implementation recorded in
 the Architecture Document, the 500-byte target is aspirational and may not be
-met; verification at the formal SRS MVP release gate is performed against the
-actual measured value, with the value recorded in release notes. The post-MVP
+met; verification at the full SRS acceptance release gate is performed against the
+actual measured value, with the value recorded in release notes. The future
 packed-binary zone store of Appendix C.6.2, once introduced, is expected to meet
 or substantially exceed this target. Operators sizing memory for large
 zone-count deployments should consult the actual per-release figure.
+
 *Verification.* Memory profiling with zones of varying record counts on the Reference Hardware Profile.
 
 **BDS-NFR-RES-003.** The server MUST support concurrent service of at least 10,000 zones with a combined record count up to 10 million records on a host with 16 GiB of available memory.
+
 *Source.* Operational requirement; large-secondary deployment sizing.
+
 *Verification.* Capacity benchmarking with synthetic zone sets at the specified scale, on hardware allocated 16 GiB of RAM (a constrained subset of the Reference Hardware Profile; the Profile's full 192 GiB is not required for this test).
 
 **BDS-NFR-RES-004.** The server's steady-state file-descriptor consumption MUST be bounded by approximately 2 × (the configured concurrent client TCP connection limit per BDS-FR-TCP-005 + the configured concurrent outbound TCP connection limit + 100 reserve for listening sockets and process overhead). The server MUST verify at startup that the OS-provided file-descriptor `rlimit` is sufficient for the configured limits, and MUST fail to start with a clear error message if not. The 2× factor accounts for the implementation possibly using two file descriptors per logical connection (e.g., one for socket I/O, one for an event-notification ancillary).
+
 *Source.* Operational requirement.
+
 *Verification.* Startup checks under varied `rlimit` settings; runtime file-descriptor count inspection.
 
 **BDS-NFR-RES-005.** The total number of concurrent zone-transfer sessions (AXFR plus IXFR) MUST be bounded by the limit established in BDS-FR-AXFR-022, with the default of 4.
+
 *Source.* BDS-FR-AXFR-022.
+
 *Note.* This NFR is a re-statement of the functional limit of BDS-FR-AXFR-022 for completeness of the resource-limit catalogue; no additional normative content is introduced here. The functional requirement is authoritative.
+
 *Verification.* Per BDS-FR-AXFR-022.
 
 **BDS-NFR-RES-006.** At zero query load — i.e., no inbound queries arriving for at least 60 consecutive seconds — with all zones in ACTIVE state, configured for 1,000 zones each holding 1,000 records (one million records total), on the Reference Hardware Profile, the server's CPU consumption MUST remain below 1% of one CPU core averaged over a 5-minute window. This bounds the cost of background tasks: refresh-timer scheduling, metrics aggregation, log emission, and connection-pool reaping. The bound on idle CPU consumption is operationally significant because in anycast deployments many instances run continuously; an idle-CPU cost above 1% multiplied by many instances becomes a meaningful aggregate.
+
 *Source.* Operational requirement; anycast deployment economics.
+
 *Verification.* Idle CPU measurement on the Reference Hardware Profile with the specified zone count and no inbound query load, sustained for at least 1 hour after warm-up; 5-minute moving averages of process CPU time computed via `/proc/<pid>/stat` or equivalent.
 
 # 6. External Interfaces
@@ -2877,43 +3718,59 @@ The category identifier is **IF**; each subsection allocates its own area code p
 The area code **NET** is allocated.
 
 **BDS-IF-NET-001.** The server MUST bind UDP and TCP listening sockets at startup for DNS query service. Bind addresses MUST be configurable per §6.2. The default bind addresses MUST be 0.0.0.0 (IPv4 wildcard) and `::` (IPv6 wildcard), and the default port MUST be 53.
+
 *Source.* Operational requirement; RFC 1035 §4.2.
+
 *Verification.* Network-layer inspection after startup confirming bound sockets match configuration.
 
 **BDS-IF-NET-002.** The server MUST support binding to multiple specific addresses simultaneously, including arbitrary combinations of IPv4 and IPv6 addresses. Independent UDP and TCP listening sockets MUST be created per (address, transport) tuple as required by the operating system.
+
 *Source.* Operational requirement; anycast and multi-interface deployment.
+
 *Verification.* Configuration tests with multi-address bind specifications.
 
 **BDS-IF-NET-003.** The server MUST initiate outbound TCP connections for zone-transfer queries (§4.6, §4.7), SOA poll queries (§4.16), and XoT connections (§4.10) from a source address selected by the operating system, unless an outbound source address is explicitly configured per zone or per primary.
+
 *Source.* Operational requirement.
+
 *Verification.* Network-layer inspection of outbound connections.
 
 **BDS-IF-NET-004.** At startup, if any required listening socket fails to bind — for reasons including port already in use, permission denied, or address unavailable — the server MUST log the failure at error level identifying the affected (address, port, transport) tuple, and MUST exit with non-zero status code. The server MUST NOT continue operating with a partial set of listening sockets.
+
 *Source.* Fail-fast configuration discipline.
+
 *Verification.* Tests with conflicting bind addresses confirming exit behaviour.
 
 **BDS-IF-NET-005.** The server MUST support the configuration of distinct logical interface roles, each bound to a separate set of addresses:
 
 - **DNS query interface** (`interface.dns`): the address or addresses on which the server receives and answers DNS queries (UDP and TCP, default port 53). This is the high-traffic, externally reachable interface. It MUST be possible to configure it independently of the other interfaces. The DNS query interface also receives inbound NOTIFY messages from primaries (NOTIFY is delivered to UDP/53 or TCP/53 per RFC 1996).
 - **Management interface** (`interface.mgmt`): the address or addresses associated with operator-facing access. The health and metrics endpoint of §6.4 binds to this address by default; the operator MAY override the health endpoint's bind address via the explicit `health.bind_address` configuration parameter (see BDS-IF-HEALTH-001), in which case the override takes precedence. The management interface MUST NOT bind the DNS query port (53) unless the operator explicitly sets `interface.dns` and `interface.mgmt` to the same address, which signals intentional co-location.
-- **Transfer interface** (`interface.transfer`) *(optional)*: the source address used for ALL outbound DNS-protocol traffic the secondary initiates toward configured primaries: AXFR queries, IXFR queries, SOA poll queries, and XoT-tunnelled variants of these. When configured, the server MUST bind outbound transfer sockets to this address. When omitted, the operating system selects the outbound source address as per BDS-IF-NET-003. The name reflects the broader scope (formerly `interface.xot` in v0.2–v0.4, which misleadingly suggested XoT-only applicability); the renaming is a schema breaking change recorded in the v0.5 revision history and addressed prior to the formal SRS MVP release. The old key name `interface.xot` MUST NOT be silently accepted by the configuration parser; if present, the parser MUST emit an error and exit per BDS-IF-CONF-005, directing the operator to the new name.
+- **Transfer interface** (`interface.transfer`) *(optional)*: the source address used for ALL outbound DNS-protocol traffic the secondary initiates toward configured primaries: AXFR queries, IXFR queries, SOA poll queries, and XoT-tunnelled variants of these. When configured, the server MUST bind outbound transfer sockets to this address. When omitted, the operating system selects the outbound source address as per BDS-IF-NET-003. The name reflects the broader scope (formerly `interface.xot` in v0.2–v0.4, which misleadingly suggested XoT-only applicability); the renaming is a schema breaking change recorded in the v0.5 revision history and addressed prior to the full SRS acceptance release. The old key name `interface.xot` MUST NOT be silently accepted by the configuration parser; if present, the parser MUST emit an error and exit per BDS-IF-CONF-005, directing the operator to the new name.
 
 All three interface roles MAY be satisfied by the same address (wildcard or specific), which reproduces the single-interface behaviour and is the default. Separate addresses become effective only when configured explicitly.
+
 *Source.* Operational requirement for production deployments; performance and security isolation between query, management, and transfer traffic planes. Decisions recorded in DTK review sessions 24 May 2026 (v0.2 introduction; v0.5 rename and clarifications).
+
 *Verification.* Configuration tests with separate bind addresses per role; network-layer inspection confirming DNS traffic reaches only the DNS interface, health/metrics traffic reaches only the management interface (modulo the optional `health.bind_address` override), and outbound transfer traffic uses the configured transfer interface; error-emission tests confirming the obsolete `interface.xot` key is rejected.
 
 **BDS-IF-NET-006.** The DNS query interface MUST NOT suppress ICMPv4 Fragmentation Needed messages (type 3, code 4) or ICMPv6 Packet Too Big messages (type 2) destined for addresses on that interface. In the current kernel-managed socket deployment model, these messages are generated and processed by the host operating system; the server has no application-level ICMP handling to implement. The server's Operator Deployment Guide MUST explicitly document this requirement so that operators configuring host-level or infrastructure firewalls on the DNS query interface do not inadvertently suppress these message types, which would break Path MTU Discovery and degrade or block large EDNS responses over UDP.
-*Source.* RFC 8900 (IP Fragmentation Considered Fragile); RFC 4821 (Packetisation Layer Path MTU Discovery); operational requirement for EDNS0 UDP response delivery. The requirement is documentation-enforcement, not application code, in the formal SRS MVP; it preponderantly becomes implementation-level in any future kernel-bypass (XDP) variant — see Appendix C.6.
+
+*Source.* RFC 8900 (IP Fragmentation Considered Fragile); RFC 4821 (Packetisation Layer Path MTU Discovery); operational requirement for EDNS0 UDP response delivery. The requirement is documentation-enforcement, not application code, in the full SRS acceptance; it preponderantly becomes implementation-level in any future kernel-bypass (XDP) variant — see Appendix C.6.
+
 *Verification.* Deployment Guide review confirming explicit statement of the ICMP requirement for the DNS query interface; firewall-configuration checklist inspection.
 
 **BDS-IF-NET-007.** The configuration schema (§6.2) MUST provide an `[interfaces]` section with sub-keys `dns`, `mgmt`, and `transfer` — all optional, defaulting to wildcard / OS-selected as specified in BDS-IF-NET-005. Each key accepts a list of (address, port) pairs. The server MUST validate that addresses assigned to `dns` and `mgmt` do not overlap unless the operator explicitly sets them equal (signalling intentional co-location), emitting a warning at startup when overlap is detected. Overlapping `transfer` with `dns` or `mgmt` is permitted without warning, as the transfer interface is outbound-only and does not bind a listening socket.
+
 *Source.* BDS-IF-NET-005; BDS-IF-NET-008; BDS-IF-CONF-003 (configuration schema completeness).
+
 *Verification.* Schema validation tests covering disjoint, intentionally overlapping, and unintentionally overlapping address assignments; warning-log inspection for the overlap case; error-emission tests for the notify-vs-dns same-socket conflict.
 
-**BDS-IF-NET-008.** The formal SRS MVP configuration MUST NOT expose a fourth active **NOTIFY interface** role. NOTIFY reception is part of the DNS query interface for this release, and accepted sources are restricted by the zone's configured primaries and `notify_sources`. If an operator supplies `interface.notify` or `interfaces.notify`, the configuration parser MUST reject it per BDS-IF-CONF-005 and direct the operator to receive NOTIFY on `interfaces.dns`.
+**BDS-IF-NET-008.** The full SRS acceptance configuration MUST NOT expose a fourth active **NOTIFY interface** role. NOTIFY reception is part of the DNS query interface for this release, and accepted sources are restricted by the zone's configured primaries and `notify_sources`. If an operator supplies `interface.notify` or `interfaces.notify`, the configuration parser MUST reject it per BDS-IF-CONF-005 and direct the operator to receive NOTIFY on `interfaces.dns`.
 
-A future revision MAY reintroduce a separate NOTIFY listener role if the project explicitly accepts the operational complexity and documents its firewalling, overlap, and query-handling semantics. That future work is not part of the current formal SRS MVP interface model.
-*Source.* Formal SRS MVP interface-scope decision; security isolation is provided by source authorization, TSIG where configured, and network firewalling around the DNS listener rather than by a fourth configured listener role.
+A future revision MAY reintroduce a separate NOTIFY listener role if the project explicitly accepts the operational complexity and documents its firewalling, overlap, and query-handling semantics. That future work is not part of the current full SRS acceptance interface model.
+
+*Source.* Full SRS acceptance interface-scope decision; security isolation is provided by source authorization, TSIG where configured, and network firewalling around the DNS listener rather than by a fourth configured listener role.
+
 *Verification.* Configuration tests with `interface.notify` and `interfaces.notify` present; verify both are rejected. Runtime tests verify authorized NOTIFY messages are accepted on DNS listeners.
 
 ## 6.2 Configuration Interface
@@ -2921,49 +3778,66 @@ A future revision MAY reintroduce a separate NOTIFY listener role if the project
 The area code **CONF** is allocated.
 
 **BDS-IF-CONF-001.** All operational configuration MUST be supplied via a single TOML-formatted configuration file, the path of which is specified to the process at startup via a command-line argument (default path: `/etc/borondns-secondary/config.toml`). Include-directive composition across multiple files is NOT supported (TOML does not define such a mechanism natively, and various ad-hoc extensions exist that this server does not adopt). Operators requiring multi-file configuration management SHOULD use external templating tools (Helm, Jinja, Ansible templates, Kustomize) to produce the single canonical file before passing it to the server. This constraint preserves the configuration model's simplicity and avoids the precedence-resolution and circular-include edge cases that include-directive systems require.
+
 *Source.* BDS-INV-005; operational simplicity.
+
 *Note.* TOML is selected for ecosystem alignment with the Rust toolchain (Cargo). YAML and JSON are alternative formats; TOML's restricted, unambiguous syntax avoids the YAML edge cases (Norway-problem booleans, indentation-sensitive structure, multiple parser implementations producing different results) that have produced production incidents in other DNS server projects.
+
 *Verification.* Configuration parsing tests; round-trip tests confirming idempotent serialisation where applicable; tests confirming any include-like directive is rejected as an unknown key.
 
 **BDS-IF-CONF-002.** The configuration schema MUST be documented in a versioned schema specification maintained alongside the project. Schema changes between server versions MUST follow a backward-compatibility policy: addition of new optional fields is permitted at any release; removal or semantic change of existing fields requires a major-version increment per semantic versioning.
+
 *Source.* Operational stability for in-place upgrades.
+
 *Verification.* Schema documentation maintained per project release;
 version-compatibility tests in the active continuous gate or retained
 release-gate automation evidence.
 
 **BDS-IF-CONF-003.** The configuration MUST be capable of expressing, at minimum:
+
 - the set of zones designated for service, each with zone name, class, and ordered list of primary servers (IP addresses with optional port);
 - per-zone TSIG configuration: key reference and applicability (queries, transfers, NOTIFY);
 - per-(zone, primary) XoT configuration: trust anchors, expected SNI, optional client certificate;
 - TSIG key definitions: key name, algorithm, secret value (inline or by file reference per BDS-IF-CONF-004);
-- network bind configuration per BDS-IF-NET-001, BDS-IF-NET-002, and BDS-IF-NET-005 through BDS-IF-NET-008, including the `[interfaces]` section with `dns`, `mgmt`, and `transfer` sub-keys; the active formal SRS MVP configuration MUST NOT expose a fourth `notify` role, because NOTIFY reception is part of `interfaces.dns` per BDS-IF-NET-008; network interface bindings MUST be expressed as IP addresses (literal IPv4 or IPv6), not as interface names (`eth0`, `ens192`, etc.); operators who want to bind to "whatever address is currently on eth0" SHOULD resolve the address at configuration-generation time via a template tool or wrapper script, avoiding the OS-portability concern of interface naming conventions;
+- network bind configuration per BDS-IF-NET-001, BDS-IF-NET-002, and BDS-IF-NET-005 through BDS-IF-NET-008, including the `[interfaces]` section with `dns`, `mgmt`, and `transfer` sub-keys; the active full SRS acceptance configuration MUST NOT expose a fourth `notify` role, because NOTIFY reception is part of `interfaces.dns` per BDS-IF-NET-008; network interface bindings MUST be expressed as IP addresses (literal IPv4 or IPv6), not as interface names (`eth0`, `ens192`, etc.); operators who want to bind to "whatever address is currently on eth0" SHOULD resolve the address at configuration-generation time via a template tool or wrapper script, avoiding the OS-portability concern of interface naming conventions;
 - logging configuration per §6.3;
 - health and metrics endpoint configuration per §6.4;
 - tunable parameters (timeouts, limits, RRL thresholds, jitter, keepalive intervals) with override of defaults.
 
 *Source.* The configuration prerequisites stated by §4 requirements; operational completeness.
+
 *Verification.* Schema completeness review against the enumerated categories.
 
 **BDS-IF-CONF-004.** TSIG shared secrets and XoT client TLS private keys MAY be specified inline within the configuration file or by reference to a separate file path. Where referenced by file path, the server MUST verify at startup that the referenced file is readable by the server process and is not world-readable (file mode permitting access by the "other" class). Either failure MUST prevent startup with a clear error message.
 
 Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Manager, Kubernetes Secrets API) is NOT supported in this version. Operators using such stores SHOULD project secrets into the filesystem (e.g., Kubernetes Secret volume mounts at well-known paths, Vault Agent template rendering to a tmpfs location) and reference them by file path. This pattern is operationally well-supported across all major secret-store integrations and avoids embedding multiple secret-store client libraries in the server, which would expand the dependency surface and the security review surface beyond the project's minimal-codebase target.
+
 *Source.* BDS-FR-TSIG-006; BDS-FR-XOT-007; BDS-FR-COOKIE-004; operational security for key material.
+
 *Note.* The world-readable check (POSIX file mode "other" class) is Linux-specific. Per BDS-NFR-PORT-001 the target platform is Linux; portability to other operating systems would require this check to be redefined or relaxed for the target's permission model.
+
 *Verification.* Startup tests with various secret-file permission modes; verify external-secret-store integration is achievable via file-path projection.
 
 **BDS-IF-CONF-005.** The server MUST validate the entire configuration at startup before binding any listening sockets. Validation MUST include schema conformance, TSIG algorithm support per §4.9, XoT trust-anchor parseability per §4.10, network-address parseability, and value-range checks for numeric parameters (port numbers, timeout values, rate limits). Any validation failure MUST cause the server to log a clear error message identifying the specific configuration defect and exit with non-zero status; the server MUST NOT begin partial operation with partially valid configuration.
+
 *Source.* Fail-fast configuration discipline; BDS-INV-005.
+
 *Verification.* Tests with deliberately invalid configurations across each validation category.
 
 **BDS-IF-CONF-006.** The server SHOULD also accept a documented subset of configuration parameters via environment variables. Where supported, environment variables MUST take precedence over the corresponding configuration file value. Not every configuration parameter requires an environment-variable equivalent; the supported subset is documented per BDS-IF-CONF-002.
+
 *Source.* Container-native operational convenience.
+
 *Verification.* Tests confirming environment-variable precedence for supported parameters.
 
 **BDS-IF-CONF-007.** The server MUST NOT install a SIGHUP handler that re-reads configuration, in accordance with BDS-INV-005 and BDS-NEG-011. Configuration changes are applied only by process restart.
+
 *Source.* BDS-INV-005; BDS-NEG-011.
+
 *Verification.* SIGHUP signal tests confirming no configuration change behaviour.
 
 **BDS-IF-CONF-008.** The server SHOULD detect operationally suspicious but technically valid configurations and emit warning-level log entries at startup describing each concern, WITHOUT preventing startup. The catalogue of suspicious patterns the server SHOULD detect includes at minimum:
+
 - TSIG fudge value larger than 60 seconds (RFC 8945 §10.4 recommends short fudges; per BDS-NFR-REL-007 operationally typical is 5–30 seconds);
 - SOA REFRESH or RETRY values approaching the maximum effective ceiling of BDS-FR-ZSM-011 (suggesting the operator may have intended a smaller value);
 - RRL allowlist (BDS-FR-RRL-006) containing `0.0.0.0/0` or `::/0` (effectively disabling RRL);
@@ -2975,17 +3849,23 @@ Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Man
 - `chaos.version` configured to a precise build-version-shaped value, making an operator-visible software-build disclosure choice.
 
 The exhaustive list and individual messages are part of the Operator Deployment Guide per BDS-NFR-MAINT-009. Warnings MUST be emitted as structured log entries with distinct categorisation (e.g., `category: configuration_warning`) to support operator filtering and orchestrator gating. The server MUST also expose a configuration-warning count via the metrics endpoint per BDS-NFR-OBS-005, allowing operators to alert on the count being non-zero.
-*Source.* Operational requirement; resolution of v0.4 audit finding about non-aborting configuration concerns.
+
+*Source.* Operational requirement.
+
 *Verification.* Tests with deliberate suspicious configurations across each enumerated pattern; verify warning emission, structured categorisation, and metric counter increment; verify the server starts despite the warnings.
 
 **BDS-IF-CONF-009.** The server MUST support a `--dump-config` command-line invocation mode that reads and validates the configuration (including environment-variable overrides per BDS-IF-CONF-006) and emits the effective configuration to standard output in canonical TOML form, then exits with code 0. The dumped configuration MUST have all configured secret material redacted: TSIG shared secrets replaced with the literal `<redacted>`, XoT private key contents replaced with `<redacted>`, and configured DNS Cookie Server Secret material replaced with `<redacted>`. File-path references to secret files MUST be preserved verbatim (paths are not secret). The configuration-warning catalogue of BDS-IF-CONF-008 MUST be evaluated and any triggered warnings emitted to standard error before the configuration dump.
 
 This mode MUST NOT bind any sockets, MUST NOT contact any primary, MUST NOT initiate any transfer, and MUST NOT open any file other than the configuration file and the secret files referenced by it.
-*Source.* Operational requirement; resolution of v0.4 audit finding about effective-configuration dump.
+
+*Source.* Operational requirement.
+
 *Verification.* Tests with various configurations including env-var overrides; verify dumped output matches the effective configuration, secrets are redacted, and exit code is 0; verify no socket binding or network activity occurs during dump.
 
 **BDS-IF-CONF-010.** The server MUST support a `--validate-config` command-line invocation mode that performs the full configuration validation of BDS-IF-CONF-005 against a configuration file specified on the command line (or the default path), then exits with code 0 if valid and the appropriate non-zero exit code per BDS-IF-PROC-001 if invalid, with diagnostic output to standard error. Warning-level concerns per BDS-IF-CONF-008 MUST be emitted to standard error but MUST NOT cause non-zero exit. This mode MUST NOT bind any sockets, MUST NOT contact any primary, and MUST NOT perform any operation other than configuration file reading and validation.
-*Source.* Operational requirement; CI/CD pipeline pre-deployment validation; resolution of v0.4 audit finding about standalone configuration validation.
+
+*Source.* Operational requirement; CI/CD pipeline pre-deployment validation.
+
 *Verification.* Tests with valid configurations (expecting exit 0), invalid configurations across each validation category (expecting exit 2 per BDS-IF-PROC-001), and configurations triggering warnings (expecting exit 0 with diagnostic output).
 
 **BDS-IF-CONF-011.** Configuration parameter names within the TOML configuration file MUST follow a uniform convention:
@@ -2997,10 +3877,13 @@ This mode MUST NOT bind any sockets, MUST NOT contact any primary, MUST NOT init
 - Boolean parameters named with a verb form indicating the affirmative (e.g., `rrl.enabled = true`, NOT `rrl.disable = false`).
 
 The complete naming convention, plus the per-parameter type and default value, is part of the schema documentation maintained per BDS-IF-CONF-002. The schema MUST also document the operator-facing parameter name for each NFR-introduced parameter referenced in §5 (e.g., `shutdown.grace_period_seconds`, `tsig.fudge_seconds`, `cookie.timestamp_past_tolerance_seconds`, `health.metrics_rate_limit_per_minute`, etc.).
-*Source.* Operational requirement; resolution of v0.4 audit finding about configuration parameter naming consistency.
+
+*Source.* Operational requirement.
+
 *Verification.* Schema documentation review confirming uniform conformance; configuration parsing tests rejecting parameters violating the convention as unknown keys per the schema.
 
 **BDS-IF-CONF-012.** Environment variable names corresponding to configuration parameters per BDS-IF-CONF-006 MUST follow the pattern `BORONDNS_<SECTION>_<KEY>`, with both `<SECTION>` and `<KEY>` uppercased and dots replaced by underscores. Examples:
+
 - `[tsig] fudge_seconds = 300` becomes `BORONDNS_TSIG_FUDGE_SECONDS=300`.
 - `[shutdown] grace_period_seconds = 30` becomes `BORONDNS_SHUTDOWN_GRACE_PERIOD_SECONDS=30`.
 - `[health] metrics_rate_limit_per_minute = 60` becomes `BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE=60`.
@@ -3008,7 +3891,9 @@ The complete naming convention, plus the per-parameter type and default value, i
 Where a configuration parameter is nested deeper than two levels (per-zone or per-key tables), environment-variable equivalents are NOT supported; such parameters are configured only via the file.
 
 Unrecognised environment variables matching the `BORONDNS_*` pattern but not corresponding to any known configuration parameter MUST be detected at startup and emitted as warnings per BDS-IF-CONF-008 (likely operator typo), but MUST NOT prevent startup. Environment variables not matching the `BORONDNS_*` pattern are ignored regardless of content.
-*Source.* Operational requirement; resolution of v0.4 audit finding about environment variable naming.
+
+*Source.* Operational requirement.
+
 *Verification.* Configuration tests with each parameter overridden via the corresponding `BORONDNS_*` environment variable; tests with deliberately misspelled `BORONDNS_*` variables (expecting warning); tests with non-`BORONDNS_*` variables (expecting silent ignore).
 
 **BDS-IF-CONF-013.** *(Zone Provisioning configuration schema.)* The configuration MUST express explicit secondary zones via `[[zones]]` and RFC 9432 catalog zones via `[[catalog_zones]]`. This schema intentionally avoids a single wrapper subtree because TOML already has natural array tables for repeatable zone definitions and because explicit zones and catalog zones may coexist in the same process. The schema is:
@@ -3043,6 +3928,7 @@ path = "/etc/borondns-secondary/secrets"
 ```
 
 The configuration validator (per BDS-IF-CONF-005) MUST verify:
+
 - at least one `[[zones]]` or `[[catalog_zones]]` entry is present;
 - each `[[zones]]` entry has an absolute apex name and at least one `primaries` or `transfer_primaries` target;
 - each `[[catalog_zones]]` entry has an absolute catalog apex name, at least one catalog transfer target (`primaries`, `transfer_primaries`, or explicit `catalog_*` equivalent), and a catalog TSIG key reference (`tsig_key` or `catalog_tsig_key`);
@@ -3054,26 +3940,39 @@ The configuration validator (per BDS-IF-CONF-005) MUST verify:
 - catalog member transfers MAY be unsigned only when an explicit local per-catalog legacy member-transfer policy allows it and the member primary address is private.
 
 The interaction with TSIG and XoT key material is by reference. Startup keys can be defined in the separately-defined `[[tsig_keys]]` table. Runtime TSIG key names and named XoT profiles may also resolve through the optional `[secret_store]` filesystem snapshot root when it is configured. The secret-store path itself remains static configuration.
+
 *Source.* §4.20; BDS-NFR-SEC-010 through BDS-NFR-SEC-013; BDS-FR-PROV-014.
+
 *Verification.* Configuration round-trip tests for explicit-zone, catalog-zone, mixed configurations, split catalog/member transfer fields, secret-store-backed key/profile references, and legacy private unsigned-member policy; tests for each validator condition expecting startup failure with a clear diagnostic in each case.
 
 **BDS-IF-CONF-014.** After applying environment-variable overrides per BDS-IF-CONF-012 to the configuration parsed from the TOML configuration file per BDS-IF-CONF-001, the configuration validator (per BDS-IF-CONF-005) MUST re-run all structural and cross-field validation against the post-override configuration. Environment-variable overrides MUST NOT bypass the validation envelope established at TOML parse time: a value that would have been rejected if present in the TOML file (e.g., a numeric value below an established minimum, a string outside an enumerated set, a cross-field combination violating a stated constraint) MUST equally be rejected when supplied via environment variable. The process MUST fail to start with a clear diagnostic identifying the offending parameter name (including its `BORONDNS_*` environment variable spelling), the supplied value, and the constraint that was violated.
+
 *Source.* Resolution of Alpha audit finding F4 (environment-override post-validation gap); coherence with BDS-IF-CONF-005 validation envelope.
+
 *Note.* The original TOML-only validation occurred before environment-variable overrides were applied, allowing an override to place a structurally valid TOML configuration into an out-of-envelope state. This requirement closes that gap. Implementations MAY satisfy this requirement by structuring the validator as a single function over the post-merge configuration value, rather than running the validator twice.
+
 *Verification.* Tests with TOML configurations that validate cleanly and environment-variable overrides that introduce out-of-envelope values; verify startup failure with the expected diagnostic. *Added in v0.9.*
 
 **BDS-IF-CONF-015.** The server MUST accept a configurable maximum NSEC3 iteration count (per BDS-FR-DNSSEC-014) under the `[dnssec]` configuration subtree or equivalent. The parameter name MUST be `nsec3_max_iterations`, an unsigned integer in the inclusive range 0–65535. The default value MUST be 100, an BoronDNS compatibility default informed by RFC 9276 Appendix A deployment measurements for legacy NSEC3 zones. Where the configured value exceeds 100, the configuration warning `nsec3_iterations_large` MUST be emitted at startup per BDS-IF-CONF-008, recording the configured value, the project compatibility default, and the RFC 9276 §3.1 recommendation of zero iterations for NSEC3 zone publishers.
+
 *Source.* BDS-FR-DNSSEC-014; RFC 9276 §2.3, §3.1, Appendix A.
+
 *Note.* A value of 0 means that negative queries requiring an NSEC3 chain with a nonzero iteration count fail closed with SERVFAIL; positive responses remain available. This is the strictest setting and is consistent with RFC 9276's recommendation that new NSEC3 deployments use zero iterations.
+
 *Verification.* Configuration round-trip tests across the range; warning emission test for values above 100; tests for the boundary values (0, 100, 101). *Added in v0.9.*
 
-**BDS-IF-CONF-016.** The Engineering MVP configuration MUST NOT provide a parameter that relaxes the strict out-of-zone owner-name rejection of BDS-FR-AXFR-012. Unknown transfer-owner relaxation keys, including a `[transfer]` key named `accept_out_of_zone_glue`, MUST be rejected by configuration validation per BDS-IF-CONF-005 rather than silently accepted. Future support for external glue would require a specified published-zone representation and end-to-end transfer-to-serving tests before any configuration key is exposed.
+**BDS-IF-CONF-016.** The current implementation configuration MUST NOT provide a parameter that relaxes the strict out-of-zone owner-name rejection of BDS-FR-AXFR-012. Unknown transfer-owner relaxation keys, including a `[transfer]` key named `accept_out_of_zone_glue`, MUST be rejected by configuration validation per BDS-IF-CONF-005 rather than silently accepted. Future support for external glue would require a specified published-zone representation and end-to-end transfer-to-serving tests before any configuration key is exposed.
+
 *Source.* BDS-FR-AXFR-012; BDS-FR-AXFR-025.
+
 *Note.* Catalog-zone member discovery and per-member transfer-primary metadata do not require accepting out-of-zone RR owners inside member-zone AXFR/IXFR streams.
+
 *Verification.* Configuration tests with unknown `[transfer]` keys; AXFR/IXFR parser tests confirming out-of-zone owner names are rejected; publication-boundary tests per BDS-FR-AXFR-025. *Added in v0.9 as a compatibility candidate; revised to a no-relaxation policy before release acceptance.*
 
 **BDS-IF-CONF-017.** The server MUST accept a configurable Extended DNS Errors profile under the `[edns]` configuration subtree or equivalent. The parameter name MUST be `extended_dns_errors`; accepted values are `off` and `minimal`. The default value MUST be `off`. The `minimal` value enables only the bounded diagnostic mappings specified in BDS-FR-EDNS-018 and MUST NOT enable arbitrary policy disclosure or free-form EXTRA-TEXT.
+
 *Source.* BDS-FR-EDNS-018; RFC 8914 §2.
+
 *Verification.* Configuration round-trip tests for both values; environment-override tests; wire-format tests confirming that `off` suppresses EDE and `minimal` enables only the specified mappings. *Added in v0.9.*
 
 **BDS-IF-CONF-018.** The server MUST accept optional CHAOS-class self-identification values under a `[chaos]` configuration subtree. The schema is:
@@ -3091,8 +3990,11 @@ hostname = ""
 ```
 
 The configuration validator (per BDS-IF-CONF-005) MUST verify that `chaos.version` and `chaos.hostname`, when present, are strings whose encoded value fits in one DNS TXT character-string (0 through 255 octets). The `[chaos]` section itself is optional. Where `chaos.version` is configured to a precise build-version-shaped value, for example a semantic-version prefix matching `^[0-9]+\.[0-9]+\.[0-9]+`, the server SHOULD emit the `chaos_version_discloses_build` startup warning per BDS-IF-CONF-008. The warning is informational and MUST NOT prevent startup.
+
 *Source.* §4.21; BDS-FR-CHAS-001; BDS-FR-CHAS-002.
+
 *Note.* `BDS-IF-CONF-017` is allocated to the bounded Extended DNS Errors profile. The CHAOS configuration requirement is therefore numbered `BDS-IF-CONF-018` to preserve identifier stability and avoid collision.
+
 *Verification.* Configuration round-trip tests across absent, empty, populated, and oversized values; environment-override tests where supported; warning emission test for build-version-shaped `chaos.version`. *Added in v0.9.1.*
 
 **BDS-IF-CONF-019.** The server MUST accept an optional zone-publication
@@ -3143,19 +4045,27 @@ and environment-override tests plus restart/corruption/publication tests.
 The area code **LOG** is allocated.
 
 **BDS-IF-LOG-001.** The server MUST write log entries to standard output and standard error: entries at the info and debug levels to stdout, entries at the warning and error levels to stderr. The server MUST NOT open, create, or write to any log file directly. Persistent log storage is the responsibility of the supervising process or log-collection infrastructure.
+
 *Source.* Container-native logging convention; BDS-INV-004 (the last-good zone cache is the only direct runtime file output).
+
 *Verification.* Log-output stream verification across log levels.
 
 **BDS-IF-LOG-002.** Log entry format MUST be either JSON or logfmt, as selected by configuration per §6.2. The default format MUST be JSON. Format selection is global to the process and applies uniformly to stdout and stderr output. The chosen format MUST conform to the structured-logging requirements of BDS-NFR-OBS-001.
+
 *Source.* BDS-NFR-OBS-001.
+
 *Verification.* Per BDS-NFR-OBS-001.
 
 **BDS-IF-LOG-003.** Log level MUST be configurable via the configuration file per §6.2 and via environment variable (`BORONDNS_LOGGING_LEVEL` or equivalent) per BDS-IF-CONF-006. The default log level MUST be info per BDS-NFR-OBS-002.
+
 *Source.* BDS-NFR-OBS-002.
+
 *Verification.* Per BDS-NFR-OBS-002.
 
 **BDS-IF-LOG-004.** The server MUST NOT integrate directly with syslog, systemd-journald, Windows Event Log, or any other host-specific logging mechanism. Operators requiring such integration are expected to use standard tools (e.g., `systemd-cat`, log shipping agents) to redirect or transform the server's standard-stream output.
+
 *Source.* Container-native logging convention; portability per §5.5.
+
 *Verification.* Code review confirming no syslog/journald linkage; dependency review confirming no such libraries.
 
 **BDS-IF-LOG-005.** Structured log entries emitted per BDS-NFR-OBS-001 MUST use a uniform set of canonical field names for the entities they describe. The canonical field set, applicable across all log emission sites, is:
@@ -3182,7 +4092,9 @@ The area code **LOG** is allocated.
 | `bytes` | integer | Where present, a byte count (transfer size, message size) |
 
 Implementations MAY add further fields beyond this canonical set; the canonical fields, when applicable to a log entry, MUST use these names and types exactly. The intent is parser interoperability: log-aggregation tooling (Elastic, Loki, Splunk) can be configured against the canonical field set without per-version reconciliation.
+
 *Source.* Operational requirement; log-aggregation ecosystem compatibility; parallel to the metric-naming convention of BDS-NFR-OBS-003.
+
 *Verification.* Static analysis of log-emission sites confirming use of canonical field names where applicable; log-parser tests against representative log corpus.
 
 **BDS-IF-LOG-006.** From process start until the configuration is successfully parsed and validated per BDS-IF-CONF-005, the server's bootstrap logging MUST use the JSON format and the `info` verbosity level, emitting at minimum the following structured entries:
@@ -3192,15 +4104,21 @@ Implementations MAY add further fields beyond this canonical set; the canonical 
 - configuration validation result: success at info level; failure at error level with the specific defect identified per BDS-IF-CONF-005.
 
 After successful configuration validation, the server applies the configured log format (per BDS-IF-LOG-002) and verbosity (per BDS-IF-LOG-003) for all subsequent emissions. Bootstrap log entries themselves are not retroactively re-formatted.
-*Source.* Operational requirement; resolution of v0.4 audit finding about logging before configuration is parsed.
+
+*Source.* Operational requirement.
+
 *Verification.* Log capture during startup confirming bootstrap entries in JSON at info level prior to configuration apply.
 
 **BDS-IF-LOG-007.** Individual log entries MUST NOT exceed a configurable maximum length (parameter `logging.max_entry_length_bytes`, default 16384 bytes). Entries exceeding the limit MUST be truncated with a clearly visible truncation marker (the string `...<truncated>` appended to the message body) and a `truncated: true` field in the structured form. Truncation at this layer is a defensive measure against accidental large emissions (e.g., a programming error attempting to log a whole zone); intentional emission of large content (zone dumps, full configuration) is performed via dedicated CLI operations (BDS-IF-CONF-009) not via the logging path.
+
 *Source.* Defensive operational engineering; protection against log aggregation pipeline saturation.
+
 *Verification.* Tests with deliberately oversized log entries; verify truncation marker and `truncated` field; verify the entry remains parseable as valid JSON or logfmt despite truncation.
 
 **BDS-IF-LOG-008.** Log emission at the `debug` level MUST use lazy message-construction: the log message string (including formatted fields) MUST NOT be constructed when the active log verbosity (per BDS-IF-LOG-003) filters out `debug` entries. The standard `tracing` crate provides this behaviour through macro-based level-check inlining; this requirement records the expectation. The hot DNS query path (BDS-FR-QRY-* requirements) MAY emit at `debug` level for per-query operational visibility without paying per-query formatting cost in production deployments (which default to `info` per BDS-NFR-OBS-002). This requirement MUST be verified at the implementation level: profiling under production-level (`info`) verbosity MUST show no measurable cost from debug-level log statements in the query path.
+
 *Source.* Performance requirement; intersection of observability and the throughput targets of §5.1.
+
 *Verification.* Profiling under `info` verbosity confirming debug-level statements have zero allocation; code review confirming use of macro-based level-check rather than runtime-formatted-then-discarded patterns.
 
 ## 6.4 Health and Metrics Endpoint
@@ -3209,10 +4127,25 @@ The area code **HEALTH** is allocated.
 
 **BDS-IF-HEALTH-001.** The server MUST expose a combined health and metrics endpoint over plain HTTP/1.1 (no TLS, no authentication). The endpoint is activated by configuration per §6.2; when not configured to be active, no HTTP listening socket MUST be opened.
 
-When activated, the endpoint bind precedence MUST be: explicit `[health]` bind address/port first, then `interface.mgmt` with the configured default health port, then localhost with the configured default health port. The concrete path, body, header, and rate-limit contract is maintained in `docs/health-metrics-interface.md`; this SRS section owns the stable requirement IDs and externally observable behavior.
+The endpoint bind precedence MUST be: an explicit `[health]` bind address/port
+pair first, then the legacy `server.health` socket, then each `interfaces.mgmt`
+IP with `health.default_port`. With none of these addresses configured, no
+management listener is opened; there is no implicit localhost listener. A
+configured management socket's port is replaced by `health.default_port`.
+The concrete path, body, header, and rate-limit contract is maintained in
+`docs/health-metrics-interface.md`; this SRS section owns the stable requirement
+IDs and externally observable behavior.
+
 *Source.* Operational requirement; orchestrator-friendly probing; resolution of v0.4 audit finding about ambiguity between `interface.mgmt` and the health endpoint's own bind configuration.
+
 *Note.* HTTP/1.1 without TLS is the dominant pattern for in-cluster service probes. Operators requiring secure exposure are expected to bind the endpoint to a private interface or deploy it behind a reverse proxy at the orchestrator level.
-*Verification.* Endpoint reachability tests across enabled and disabled configurations; tests confirming the bind address precedence (explicit override > interface.mgmt default > localhost default).
+
+*Verification.* Endpoint reachability tests across enabled and disabled
+configurations; tests confirming explicit `[health]` overrides `server.health`,
+which overrides `interfaces.mgmt`; management-port substitution; and no
+listener when no management address is configured. See `ServerConfig::health_listeners`
+and `health_listeners_use_srs_precedence` for the current implementation and
+precedence-test entry point.
 
 **BDS-IF-HEALTH-002.** When activated, the endpoint MUST serve the following GET paths:
 
@@ -3220,35 +4153,47 @@ When activated, the endpoint bind precedence MUST be: explicit `[health]` bind a
 | --- | --- |
 | `/livez` | Liveness probe per BDS-NFR-OBS-004. HTTP status 200 whenever the process is able to respond to the probe at all, regardless of zone-load or draining state. BoronDNS does not expose a server-side liveness timeout parameter. Client, reverse proxy, and orchestrator timeout configuration is outside the BoronDNS configuration model. |
 | `/readyz` | Readiness probe per BDS-NFR-OBS-004. HTTP status 200 in the ready state, HTTP 503 in not-ready, draining, or unhealthy states. |
-| `/healthz` | Readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the formal SRS MVP. |
+| `/healthz` | Readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the full SRS acceptance. |
 | `/metrics` | Prometheus text exposition format 0.0.4 metrics per BDS-NFR-OBS-003. |
 
 All other paths MUST return HTTP status 404 with a JSON body naming the requested path. Methods other than GET on known paths MUST receive HTTP status 405 with a JSON body naming the requested path. The concrete JSON body field names, stable readiness reasons, metrics content type, gzip headers, and rate-limit body are the external interface details owned by `docs/health-metrics-interface.md`.
 
 The JSON body field names are part of the externally observable interface stability commitment per BDS-NFR-MAINT-006; additions of new optional fields are permitted at minor version increments, removals or semantic changes require a major version increment.
-*Source.* Operational requirement; Kubernetes probe conventions; Prometheus scraping convention; BDS-NFR-OBS-004; resolution of v0.4 audit finding about probe body content.
+
+*Source.* Operational requirement; Kubernetes probe conventions; Prometheus scraping convention; BDS-NFR-OBS-004.
+
 *Verification.* HTTP request tests against each path and method combination; body schema validation; state-transition tests verifying `/livez` and `/readyz` exhibit independent semantics under SIGTERM and LOADING conditions; tests confirming response body field names match the specification.
 
 **BDS-IF-HEALTH-003.** The endpoint MUST be accessible without authentication. Network-layer access control — firewall rules, network policy, or binding to a private interface — is the operator's responsibility.
+
 *Source.* Operational simplicity.
+
 *Note.* This is an opinionated stance: authentication on a probe endpoint is operationally fraught (key distribution to probes, token rotation, etc.) and adds complexity disproportionate to the security benefit. The standard mitigation — bind to a private interface, or place the endpoint behind a reverse proxy that handles authentication at the orchestrator's edge — is the appropriate boundary.
+
 *Verification.* Endpoint access tests without credentials confirming response.
 
 **BDS-IF-HEALTH-004.** The endpoint MUST be served from a separate thread or asynchronous task isolated from the main DNS query-handling path, such that endpoint scraping load — including high-frequency metric scraping by aggressive Prometheus configurations — MUST NOT measurably impact DNS query latency as measured against BDS-NFR-PERF-002 and BDS-NFR-PERF-003.
+
 *Source.* Operational isolation.
+
 *Verification.* Load tests with high-frequency metrics scraping concurrent with sustained DNS query load.
 
 **BDS-IF-HEALTH-005.** Response time bounds:
+
 - The `/livez`, `/readyz`, and `/healthz` endpoints MUST start response transmission within 100 milliseconds when the management endpoint task can be scheduled and is able to answer. The probe response time is the elapsed time between TCP-level request receipt and the start of response transmission. Client, reverse proxy, and orchestrator timeout configuration is outside the BoronDNS configuration model.
 - The `/metrics` endpoint SHOULD respond within 500 milliseconds for deployments serving up to 1,000 zones. For larger deployments, the response time scales with the number of exposed metric series and any opt-in metric families that inspect active zone snapshots; the upper bound is operationally evaluated rather than normatively specified.
 - The `/metrics` endpoint MUST support response compression: when the client request carries `Accept-Encoding: gzip`, the response MUST be transmitted with `Content-Encoding: gzip`.
+
 *Source.* Operational requirement; orchestrator probe timeout discipline (Kubernetes default 1-second probe timeout).
+
 *Verification.* Probe response-time measurement under load; gzip-compressed response verification; `/metrics` response-time scaling tests across zone counts.
 
 **BDS-IF-HEALTH-006.** The `/metrics` path MUST support an operator-configurable per-source-IP rate limit (parameter `health.metrics_rate_limit_per_minute`, default 60 — i.e., one scrape per second per source on average). Requests exceeding the limit MUST receive HTTP status 429 (Too Many Requests) with a `Retry-After` header indicating seconds to wait, and a JSON body `{"error":"rate_limited","retry_after_seconds":<n>}`. The rate limit applies independently to the `/metrics` path; `/livez`, `/readyz`, and `/healthz` MUST NOT be rate-limited (probe traffic must always be permitted to reach the server even under metric-scrape overload).
 
 Rate-limit accounting is per source IP address (no prefix aggregation, as monitoring tools typically scrape from a small known set of addresses). The accounting state is bounded; entries are evicted via LRU after a configurable idle period (parameter `health.metrics_rate_limit_idle_seconds`, default 300 seconds).
-*Source.* Operational requirement; resolution of v0.4 audit finding about metrics endpoint scrape protection.
+
+*Source.* Operational requirement.
+
 *Verification.* Sustained metrics scrape at rates beyond the configured limit; verify HTTP 429 with `Retry-After`; verify probes continue to be served during the scrape rate-limiting.
 
 ## 6.5 Process Signals
@@ -3256,19 +4201,27 @@ Rate-limit accounting is per source IP address (no prefix aggregation, as monito
 The area code **SIG** is allocated.
 
 **BDS-IF-SIG-001.** The server MUST handle SIGTERM by initiating graceful shutdown in accordance with BDS-NFR-REL-001 and BDS-NFR-REL-005. The 100-millisecond signal-to-action latency of BDS-NFR-REL-005 — listening sockets closed within 100 ms of SIGTERM receipt, `/readyz` reporting `draining` within 100 ms — applies regardless of the server's load state at the moment of signal receipt.
+
 *Source.* BDS-NFR-REL-001; BDS-NFR-REL-005; container orchestrator convention.
+
 *Verification.* SIGTERM tests confirming graceful shutdown behaviour; instrumented measurement of listen-socket-close and `/readyz` transition latency.
 
 **BDS-IF-SIG-002.** The server MUST handle SIGINT identically to SIGTERM, initiating graceful shutdown.
+
 *Source.* Interactive operator convenience (Ctrl+C during foreground execution).
+
 *Verification.* SIGINT tests.
 
 **BDS-IF-SIG-003.** The server MUST NOT install a handler for SIGHUP. Receipt of SIGHUP MUST be ignored in accordance with BDS-INV-005 and BDS-NEG-011.
+
 *Source.* BDS-INV-005; BDS-NEG-011.
+
 *Verification.* SIGHUP signal tests; observe no behavioural change.
 
 **BDS-IF-SIG-004.** The server MUST NOT install handlers for SIGUSR1, SIGUSR2, SIGQUIT, or any other signal not enumerated in this subsection, with the single exception of SIGPIPE, which MUST be ignored (signal disposition set to `SIG_IGN`) to prevent process termination when stdout, stderr, or any other broken pipe condition occurs. SIGPIPE handling is not "installing a handler" in the registry-of-actions sense — it is signal disposition setup performed once at process startup. Any signal not enumerated in BDS-IF-SIG-001 through BDS-IF-SIG-003 and not covered by the SIGPIPE exception MUST follow operating-system default behaviour (typically process termination with core dump for SIGQUIT, termination for SIGUSR1 and SIGUSR2).
-*Source.* Minimal signal-handling surface; principle of least operational interface; resolution of v0.4 audit finding about SIGPIPE and consumer-death-induced server termination.
+
+*Source.* Minimal signal-handling surface; principle of least operational interface.
+
 *Verification.* Code review confirming the signal-handler registrations exactly match the enumeration of BDS-IF-SIG-001 through BDS-IF-SIG-003 plus the SIGPIPE ignore disposition; runtime tests with stdout/stderr consumers terminated mid-stream confirming the server continues operation rather than dying from SIGPIPE.
 
 ## 6.6 Process Lifecycle and Command-Line Interface
@@ -3294,10 +4247,13 @@ The area code **PROC** is allocated.
 Where a graceful path of execution leads to a deliberate non-zero exit (e.g., `--validate-config` finding an invalid configuration), the appropriate symbolic exit code MUST be used per the table above. The server MUST NOT use exit codes outside this enumeration for controlled exits. Uncaught Rust panics are process-fatal implementation bugs in the abort-on-panic release profile; panic prevention and external service-manager recovery are governed by BDS-INV-006.
 
 The exit code MUST be observable by orchestrators (Kubernetes container restart policy, systemd `Restart=` directives) and used to inform appropriate operator action: `EX_CONFIG_INVALID` and `EX_CONFIG` typically warrant configuration review rather than restart; `EX_OSERR` and `EX_CANTCREAT` typically warrant environment review (privileges, port conflicts); any future controlled `EX_SOFTWARE` path would warrant bug reporting.
-*Source.* BSD `sysexits.h` (System V/BSD UNIX programming convention); operational requirement for orchestrator-friendly process exit semantics; resolution of v0.4 audit finding about exit code convention.
+
+*Source.* BSD `sysexits.h` (System V/BSD UNIX programming convention); operational requirement for orchestrator-friendly process exit semantics.
+
 *Verification.* Exit-code tests across each enumerated failure scenario; orchestrator integration tests confirming correct interpretation.
 
 **BDS-IF-PROC-002.** The server MUST support `--version` and `-V` command-line flags that print version information to standard output and exit with code 0 (`EX_OK` per BDS-IF-PROC-001). The output format MUST include, in human-readable multi-line plain text:
+
 - the server name and version (matching the `version` label of the `borondns_secondary_build_info` metric per BDS-NFR-OBS-006);
 - the Rust compiler version used to build;
 - the build commit hash (Git short SHA or equivalent);
@@ -3316,10 +4272,13 @@ License: MIT OR Apache-2.0
 ```
 
 The server MAY support an additional `--version --json` invocation form that emits the same information in JSON for tooling integration. The flag MUST NOT bind any sockets, MUST NOT read the configuration file, and MUST NOT contact any external service.
+
 *Source.* Standard CLI convention; operational requirement for version inspection.
+
 *Verification.* `--version` and `-V` invocation tests confirming output format and exit code 0.
 
 **BDS-IF-PROC-003.** The server MUST support `--help` and `-h` command-line flags that print usage information to standard output and exit with code 0. The usage output MUST include at minimum:
+
 - the synopsis of process invocation (executable name, summary of accepted arguments and flags);
 - a description of each command-line flag with its purpose and default value where applicable;
 - a brief description of the configuration file mechanism (referencing BDS-IF-CONF-001's default path);
@@ -3327,13 +4286,17 @@ The server MAY support an additional `--version --json` invocation form that emi
 - a reference to the project's primary information source (repository URL, documentation URL).
 
 Invocation with an unrecognised flag MUST emit a brief error message to standard error and exit with code 64 (`EX_USAGE` per BDS-IF-PROC-001).
+
 *Source.* Standard CLI convention.
+
 *Verification.* `--help` and `-h` invocation tests confirming output content and exit code 0; unrecognised-flag tests confirming exit code 64.
 
 **BDS-IF-PROC-004.** The server MAY support an `--example-config` command-line invocation mode that emits a fully commented example configuration to standard output and exits with code 0. The example MUST cover all required configuration sections and the most commonly used optional sections, with inline comments documenting each parameter's purpose and default value. This invocation mode MUST NOT bind any sockets, MUST NOT read any input file, and MUST NOT contact any external service. The example output, when redirected to a file and used as configuration, MUST be a valid configuration that the server accepts under BDS-IF-CONF-005.
 
 This requirement is MAY rather than MUST because the example-configuration content is also maintained in the Operator Deployment Guide per BDS-NFR-MAINT-009. Where implemented in the binary, it serves as a quick-start convenience.
-*Source.* Operational convenience; resolution of v0.4 audit finding about example configuration generation.
+
+*Source.* Operational convenience.
+
 *Verification.* Where implemented: `--example-config` invocation produces output that, when validated per `--validate-config`, succeeds with exit code 0.
 
 # 7. Verification Strategy
@@ -3348,7 +4311,7 @@ The following methods are used, individually or in combination, to verify the re
 
 **Inspection.** Manual static code review, documentation review, and structured walkthrough by a qualified reviewer. Used for requirements verifiable by human examination of source code or static artifacts: architectural invariants, requirements concerning code structure or design discipline, prohibitions where automated detection is impractical.
 
-**Static analysis.** Automated source-code analysis by tooling, runnable without human intervention and producing build-blocking pass/fail results in the active continuous gate (`scripts/check.sh` during the private-repository Engineering MVP profile, hosted CI once enabled for release) where the tool is stable and bounded enough for the current stage. Tools in scope include: `cargo clippy` (style and common-mistake linting), first-party safe-Rust/unsafe-boundary audits per BDS-NFR-MAINT-003 and BDS-INV-006, `cargo deny` / `cargo audit` class dependency advisory checks per BDS-NFR-SEC-006, `cargo-llvm-cov` (line coverage measurement per BDS-NFR-MAINT-007), and dependency-tree audits. Transitive unsafe dependency enumeration with `cargo geiger` or an equivalent scanner is retained release-review evidence; it is not a default Engineering MVP gate when scanner completeness or runtime cost would make the local profile brittle. Distinct from manual Inspection; the bounded subset runs continuously per BDS-VER-011.
+**Static analysis.** Automated source-code analysis by tooling, runnable without human intervention and producing build-blocking pass/fail results in the active continuous gate (`scripts/check.sh` locally; the tag workflow builds releases and is not the complete validation gate) where the tool is stable and bounded enough for the current stage. Tools in scope include: `cargo clippy` (style and common-mistake linting), first-party safe-Rust/unsafe-boundary audits per BDS-NFR-MAINT-003 and BDS-INV-006, `cargo deny` / `cargo audit` class dependency advisory checks per BDS-NFR-SEC-006, `cargo-llvm-cov` (line coverage measurement per BDS-NFR-MAINT-007), and dependency-tree audits. Transitive unsafe dependency enumeration with `cargo geiger` or an equivalent scanner is retained release-review evidence; it is not a default current implementation gate when scanner completeness or runtime cost would make the local profile brittle. Distinct from manual Inspection; the bounded subset runs continuously per BDS-VER-011.
 
 **Unit test.** Automated, code-level tests of individual functions or modules in isolation. Used for parser correctness on bounded input sets, RR-type decoding, algorithmic logic (SOA serial arithmetic per RFC 1982, RRL token-bucket arithmetic), and any requirement whose verification can be made deterministic without external dependencies.
 
@@ -3374,38 +4337,49 @@ The following methods are used, individually or in combination, to verify the re
 
 **External operator review.** Optional independent deployment and verification by operators outside the project team. It is valuable supporting evidence because it exercises the deployment guide, configuration interface, and operational interfaces under conditions the project team did not design, but it is not a prerequisite for the 0.9.1 validation release or the 1.0.0 public beta.
 
-**BDS-VER-001.** Every requirement in §3 through §6 carries a *Verification* field naming the method or methods by which it is verified. These named methods MUST be drawn exclusively from the catalogue enumerated in §7.1 above (Inspection, Static analysis, Unit test, Property-based test, Integration test, Conformance test, Differential test, Interoperability test, Fuzz test, Performance test, Soak test, Operational test, Security audit, External operator acceptance). Where a requirement's *Verification* field uses informal phrasing (e.g., "code review", "endpoint inspection"), the phrasing MUST be mappable to one of the named methods; ambiguous mappings are an SRS defect requiring revision. The catalogue is the single source of truth for verification method nomenclature; ad-hoc method names introduced in §3-§6 *Verification* fields MUST NOT be used.
-*Source.* SRS internal consistency; foundation for the Test Plan's method-by-method test harness organisation.
-*Verification.* Self-referential at the SRS level (an SRS internal consistency check performed at each release as part of the SRS review process); automated verification at the Test Plan level through the traceability matrix, verification ledger, and active check scripts that confirm every requirement family has a declared method and evidence owner. Hosted CI may run those checks when enabled, but the requirement is coverage by retained verification artifacts, not a claim that current private-repository CI already verifies every individual requirement.
+**BDS-VER-001.** Every requirement in §3 through §6 carries a *Verification* field naming the method or methods by which it is verified. These named methods MUST be drawn exclusively from the catalogue enumerated in §7.1 above (Inspection, Static analysis, Unit test, Property-based test, Integration test, Conformance test, Differential test, Interoperability test, Fuzz test, Performance test, Soak test, Operational test, Security audit, External operator review). Where a requirement's *Verification* field uses informal phrasing (e.g., "code review", "endpoint inspection"), the phrasing MUST be mappable to one of the named methods; ambiguous mappings are an SRS defect requiring revision. The catalogue is the single source of truth for verification method nomenclature; ad-hoc method names introduced in §3-§6 *Verification* fields MUST NOT be used.
 
-**BDS-VER-002.** Verification evidence — test outputs, benchmark results, code-review records, fuzz-test summaries, interop test logs, security audit reports — MUST be captured by the active verification and release-evidence system for each release. In the private-repository Engineering MVP profile this is local `scripts/check.sh` plus the bounded evidence snapshot and release handoff scripts; before formal SRS release acceptance it MUST be hosted CI or an equivalent retained release-gate automation record for the accepted commit. Evidence retention period MUST be at least the longer of: (a) two years after the release; (b) the lifetime of the major version of which the release is part.
+*Source.* SRS internal consistency; foundation for the Test Plan's method-by-method test harness organisation.
+
+*Verification.* Self-referential at the SRS level (an SRS internal consistency check performed at each release as part of the SRS review process); automated verification at the Test Plan level through the traceability matrix, verification ledger, and active check scripts that confirm every requirement family has a declared method and evidence owner. Hosted CI may run those checks when enabled, but the requirement is coverage by retained verification artifacts, not a claim that the tag-build workflow already verifies every individual requirement.
+
+**BDS-VER-002.** Verification evidence — test outputs, benchmark results, code-review records, fuzz-test summaries, interop test logs, security audit reports — MUST be captured by the active verification and release-evidence system for each release. The current evidence path is local `scripts/check.sh` plus the bounded evidence snapshot and release handoff scripts; before formal SRS release acceptance it MUST be hosted CI or an equivalent retained release-gate automation record for the accepted commit. Evidence retention period MUST be at least the longer of: (a) two years after the release; (b) the lifetime of the major version of which the release is part.
+
 *Source.* Audit and reproducibility.
+
 *Verification.* Release-evidence review at release time, including CI logs or equivalent retained release-gate automation logs; sample-based retrieval of evidence from past releases.
 
 **BDS-VER-010.** Each release MUST be preceded by the verification appropriate to its declared support posture. Detailed results, requirement dispositions, interop versions, and regression records MUST be retained in the canonical repository evidence or release-workflow artifacts. Public release notes MUST identify the version, supported artifact set, public-beta posture and material operator-facing limitations, plus artifact-verification instructions. They MAY link to canonical evidence instead of copying its tables.
 
 A release with a known release-blocking failure MUST NOT proceed without an explicit project decision recorded in canonical release evidence. A limitation already classified as Deferred for the public-beta posture is not a failed release gate merely because future full-acceptance evidence remains open.
-*Source.* Release-process discipline; resolution of v0.6 audit finding about absent pre-release verification gate.
+
+*Source.* Release-process discipline.
+
 *Verification.* Review of public release notes and linked canonical release evidence.
 
 **BDS-VER-011.** Verification methods are classified by execution cadence into three categories:
-- **Continuous** — executed by the active continuous gate for the project stage, with results being build-blocking for accepted changes. During the private-repository Engineering MVP profile this gate is the local `scripts/check.sh` command; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record must cover the accepted commit. Continuous methods comprise: Static analysis, Unit test, Property-based test where present, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per BDS-NFR-SEC-006).
+
+- **Continuous** — executed by the active continuous gate for the project stage, with results being build-blocking for accepted changes. The local gate is the local `scripts/check.sh` command; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record must cover the accepted commit. Continuous methods comprise: Static analysis, Unit test, Property-based test where present, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per BDS-NFR-SEC-006).
 - **Periodic** — executed on a documented schedule independently of commits during an active release-acceptance cycle, or earlier only when the release plan explicitly promotes the run. Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per BDS-NFR-SEC-002, scheduled at least weekly during release acceptance), Performance test (weekly performance-regression run per BDS-VER-012 during release acceptance), Soak test (continuous during the soak window, with weekly snapshot reports), Differential test against current primary releases (scheduled at least monthly during release acceptance).
 - **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: the release-selected Interoperability matrix per BDS-VER-003; performance tests appropriate to the release claim; review of the risk-based BDS-NFR-REL-003 extended-runtime evidence; security review appropriate to changed attack surface; and the release decision recorded under BDS-VER-008.
 
-The classification of each requirement's verification (per its declared method per BDS-VER-001) into Continuous, Periodic, or Gate cadence MUST be recorded in the Test Plan. The active verification automation for the current project stage MUST enact the Continuous classification, and the Test Plan MUST document how Periodic and Gate classifications are scheduled, delegated, or retained when they are not yet automated. During the private-repository Engineering MVP profile, `scripts/check.sh` enacts the Continuous class; Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled. Inspection and Operational test fall under Gate cadence by default; Static analysis falls under Continuous; the remaining methods may be Continuous, Periodic, or Gate depending on the specific requirement and per-test cost.
-The periodic weekly/monthly cadences are release-acceptance-cycle obligations rather than standing private-repo calendar commitments.
-*Source.* Operational requirement; release-engineering discipline; resolution of v0.6 audit finding about CI vs gate verification distinction.
+The classification of each requirement's verification (per its declared method per BDS-VER-001) into Continuous, Periodic, or Gate cadence MUST be recorded in the Test Plan. The active verification automation for the current project stage MUST enact the Continuous classification, and the Test Plan MUST document how Periodic and Gate classifications are scheduled, delegated, or retained when they are not yet automated. `scripts/check.sh` enacts the Continuous class locally. Periodic and Gate work is retained release/operations evidence; the tag workflow does not execute the complete validation gate. Inspection and Operational test fall under Gate cadence by default; Static analysis falls under Continuous; the remaining methods may be Continuous, Periodic, or Gate depending on the specific requirement and per-test cost.
+The periodic weekly/monthly cadences are release-acceptance-cycle obligations rather than standing calendar commitments between release-acceptance cycles.
+
+*Source.* Operational requirement; release-engineering discipline.
+
 *Verification.* Test Plan review at each release confirming method-cadence classification is documented; active automation and release/operations handoff review confirming Continuous execution and Periodic/Gate scheduling or delegation are represented accurately.
 
 ## 7.2 Interoperability Matrix
 
 **BDS-VER-003.** The server MUST be tested for interoperability as a secondary against the following primary implementations, each at its current stable major release at the time of test execution:
+
 - **NSD** (NLnet Labs);
 - **Knot DNS** (CZ.NIC);
 - **BIND 9** (ISC).
 
 For each (server, primary) pair, the test matrix MUST cover:
+
 - AXFR initial load and refresh per §4.6;
 - IXFR incremental refresh including IXFR-to-AXFR fallback per §4.7;
 - NOTIFY receipt and refresh triggering per §4.8;
@@ -3413,18 +4387,22 @@ For each (server, primary) pair, the test matrix MUST cover:
 - XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT. The tested primary version and the XoT capability decision MUST be recorded per BDS-VER-013; a primary is exempt from the XoT row only when the retained version evidence shows that the tested version lacks server-side XoT support or the relevant package build disables it. Current release planning MUST NOT treat BIND 9 or Knot DNS XoT as optional when the selected test versions expose XoT configuration, and SHOULD include NSD XoT evidence when the selected NSD version exposes TLS-protected `provide-xfr`/`request-xfr` configuration.
 
 *Source.* Operational requirement for production interoperability; RFC 9103; BIND 9, Knot DNS, and NSD operator documentation for XoT-capable test-version selection. *XoT-against-BIND-9 coverage added in v0.9; NSD XoT exemption wording corrected in v0.9.1.*
+
 *Verification.* Interop test pipeline execution per the matrix.
 
 **BDS-VER-004.** The interoperability matrix MUST exercise zones of operationally representative complexity:
+
 - at least one small zone (< 1,000 records) for baseline correctness;
 - at least one medium zone (10,000–100,000 records) for typical-load behaviour;
 - at least one large zone (> 1,000,000 records) for scaling validation;
 - at least one DNSSEC-signed zone using NSEC; and one DNSSEC-signed zone using NSEC3.
 
 *Source.* Coverage of the operational range for which the server is intended.
+
 *Verification.* Test corpus inventory at release time.
 
 **BDS-VER-013.** Each interoperability test execution per BDS-VER-003 MUST record the exact primary implementation versions tested, including:
+
 - implementation name (NSD, Knot DNS, BIND 9, or other primary in the matrix);
 - exact version string (e.g., "NSD 4.10.2", "Knot DNS 3.4.0", "BIND 9.20.0");
 - the host operating system and version (e.g., "Debian 12.5", "Ubuntu 24.04.2 LTS");
@@ -3432,20 +4410,27 @@ For each (server, primary) pair, the test matrix MUST cover:
 - the timestamp of test execution.
 
 The interop pass/fail assertion is bound to this specific configuration. Re-testing against a different primary version requires a new verification run; previous results MUST NOT be assumed transitive to a different version. The recorded version information MUST be retained in verification evidence per BDS-VER-002; release notes MAY link to that evidence.
-*Source.* Reproducibility; resolution of v0.6 audit finding about interop version pinning.
+
+*Source.* Reproducibility.
+
 *Verification.* Sampling of retained interop test logs confirming version and configuration information is captured.
 
 ## 7.3 RFC Compliance Assessment
 
 **BDS-VER-005.** For each RFC listed in Appendix A and the companion traceability matrix, the project MUST maintain a clause-level traceability mapping from each requirement-bearing RFC clause to one or more requirements in §3 through §6. The current project mapping is maintained in the Appendix A companion traceability document referenced from this SRS. Compliance with an RFC is asserted only when all in-scope requirement-bearing clauses of that RFC are mapped to verifying SRS requirements, and all those SRS requirements have been verified per BDS-VER-001.
+
 *Source.* Project RFC compliance target recorded in Appendix A.
+
 *Verification.* Traceability matrix review at release time.
 
 **BDS-VER-006.** Where an RFC referenced by Appendix A contains normative clauses that fall outside this server's scope — for example, primary-side requirements within an RFC that also covers secondary-side behaviour, or resolver-side requirements within an RFC primarily about authoritative service — the traceability matrix MUST mark those clauses as out-of-scope with a brief rationale referencing BDS-INV-001 (secondary-only) or Appendix C. The RFC is then assessed for compliance limited to the in-scope clauses, and the compliance claim is documented accordingly (for example, "Compliant with RFC X, secondary-side clauses only; primary-side clauses out of scope per BDS-INV-001").
+
 *Source.* Accurate scoping of compliance claims.
+
 *Verification.* Traceability matrix review.
 
 **BDS-VER-014.** RFC compliance assertions per BDS-VER-005 and BDS-VER-006 MUST be maintained in a canonical structured primary-documentation register. Each entry MUST identify:
+
 - the RFC number and title;
 - the compliance status: **Fully Compliant**, **Partially Compliant** (with scope qualifier), **Not Compliant** (with rationale), or **Informative Only** (the RFC is referenced for guidance, not for normative compliance);
 - the scope qualifier where applicable (e.g., "secondary-side clauses only", "wire-format aspects only", "selected clauses: §N.M, §P.Q");
@@ -3453,25 +4438,29 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 - the SRS revision against which the assertion is made (the SRS version current at the release).
 
 The canonical register is `docs/rfc-compliance-assertions.md` for this repository. The Operator Deployment Guide per BDS-NFR-MAINT-009 MUST link to that register and summarize the current operator-facing posture so potential operators can assess the project's compliance posture without parsing release notes. Release notes MAY link to the canonical register. Primary documentation MUST NOT maintain a second hand-copied RFC compliance table.
-*Source.* Operator-facing transparency; resolution of v0.6 audit finding about RFC compliance assertion publication.
+
+*Source.* Operator-facing transparency.
+
 *Verification.* Cross-check that the canonical register and Operator Deployment Guide pointer are synchronized.
 
 ## 7.4 Acceptance Criteria for Release Milestones
 
-This SRS establishes Alpha and 1.0 public-beta milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's Engineering MVP may therefore include implemented post-Alpha slices while still tracking the full BDS-VER-008 release-acceptance evidence separately.
+This SRS establishes Alpha and 1.0 public-beta milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's current implementation may therefore include implemented post-Alpha slices while still tracking the full BDS-VER-008 release-acceptance evidence separately.
 
 **BDS-VER-007 — Alpha Milestone.** The Alpha milestone is achieved when the following are demonstrably satisfied:
 
 - All BDS-INV requirements (§3), including the v0.6-introduced BDS-INV-007, BDS-INV-008, BDS-INV-009;
 - Functional requirements: §4.1 (CORE) in full; §4.2 (QRY) in full, including the RFC 8482 subset-of-available-RRsets minimal-ANY policy in BDS-FR-QRY-003 through BDS-FR-QRY-007; §4.3 (NRESP) in full; §4.4 (URR) in full; §4.5 (SPOOF) in full; §4.6 (AXFR) in full; §4.8 (NOTIFY) in full; §4.11 (EDNS) in full including NSID per BDS-FR-EDNS-016/-017 and the bounded EDE profile in BDS-FR-EDNS-018; §4.12 (TCP) in full; §4.14 (RR) restricted to RFC 1035 types plus AAAA; §4.15 (ZONE) in full; §4.16 (ZSM) in full;
 - TSIG (§4.9): minimum subset sufficient for HMAC-SHA256 interop with at least one TSIG-configured primary (BDS-FR-TSIG-001, -005 through -012, -017);
-- Interface requirements: §6.1 in full — three-interface segregation per BDS-IF-NET-005 through -007, plus the BDS-IF-NET-008 prohibition on exposing a fourth active NOTIFY interface role. §6.2 (CONF) in full, including the v0.5-introduced CONF-008 (warning catalogue), CONF-009 (`--dump-config`), CONF-010 (`--validate-config`), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention). §6.3 in full, including the v0.5-introduced LOG-005 through LOG-008. §6.4 (HEALTH) in full, including `/livez`, `/readyz`, the `/healthz` readiness alias, response time bounds, and metrics rate limiting. §6.5 in full, including the v0.5-introduced SIGPIPE handling clarification. §6.6 (PROC): BDS-IF-PROC-001 (exit code convention), BDS-IF-PROC-002 (`--version`), and BDS-IF-PROC-003 (`--help`) are required for Alpha; BDS-IF-PROC-004 (`--example-config`, MAY-level) is optional in Alpha as it is for the formal SRS MVP release gate.
-- Non-functional requirements: §5.2 (REL) -001 to -005 (REL-006 overload behaviour, REL-007 clock-skew tolerance deferred to formal SRS MVP), §5.3 (SEC) -001 to -005 (SEC-006 continuous dependency audit, SEC-007 CVE policy deferred to formal SRS MVP), §5.4 (MAINT) -001, -003, -004 (MAINT-002 module organisation, MAINT-005 reproducible builds, MAINT-006 backward-compat, MAINT-007 test coverage, MAINT-008 signed releases, MAINT-009 Operator Deployment Guide deferred to formal SRS MVP), §5.5 (PORT) -001 to -004 (PORT-005 init-system independence verified at formal SRS MVP), §5.6 (OBS) -001, -002, -004, -005, -006, and -007, §5.7 (RES) -001 (container image size);
+- Interface requirements: §6.1 in full — three-interface segregation per BDS-IF-NET-005 through -007, plus the BDS-IF-NET-008 prohibition on exposing a fourth active NOTIFY interface role. §6.2 (CONF) in full, including the v0.5-introduced CONF-008 (warning catalogue), CONF-009 (`--dump-config`), CONF-010 (`--validate-config`), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention). §6.3 in full, including the v0.5-introduced LOG-005 through LOG-008. §6.4 (HEALTH) in full, including `/livez`, `/readyz`, the `/healthz` readiness alias, response time bounds, and metrics rate limiting. §6.5 in full, including the v0.5-introduced SIGPIPE handling clarification. §6.6 (PROC): BDS-IF-PROC-001 (exit code convention), BDS-IF-PROC-002 (`--version`), and BDS-IF-PROC-003 (`--help`) are required for Alpha; BDS-IF-PROC-004 (`--example-config`, MAY-level) is optional in Alpha as it is for the full SRS acceptance release gate.
+- Non-functional requirements: §5.2 (REL) -001 to -005 (REL-006 overload behaviour, REL-007 clock-skew tolerance deferred to full SRS acceptance), §5.3 (SEC) -001 to -005 (SEC-006 continuous dependency audit, SEC-007 CVE policy deferred to full SRS acceptance), §5.4 (MAINT) -001, -003, -004 (MAINT-002 module organisation, MAINT-005 reproducible builds, MAINT-006 backward-compat, MAINT-007 test coverage, MAINT-008 signed releases, MAINT-009 Operator Deployment Guide deferred to full SRS acceptance), §5.5 (PORT) -001 to -004 (PORT-005 init-system independence verified at full SRS acceptance), §5.6 (OBS) -001, -002, -004, -005, -006, and -007, §5.7 (RES) -001 (container image size);
 - Interoperability per §7.2 with **at least one** of {NSD, Knot DNS, BIND 9} as primary; the specific primary version tested MUST be recorded per BDS-VER-013.
-- Zone Provisioning (§4.20): BDS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements BDS-FR-PROV-005 through BDS-FR-PROV-014 and the catalog-related security NFRs BDS-NFR-SEC-010 through BDS-NFR-SEC-015 are not required for Alpha but remain in scope for the formal SRS MVP release gate. BDS-NFR-SEC-008 (TSIG inline/file secret confidentiality posture) and BDS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
+- Zone Provisioning (§4.20): BDS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements BDS-FR-PROV-005 through BDS-FR-PROV-014 and the catalog-related security NFRs BDS-NFR-SEC-010 through BDS-NFR-SEC-015 are not required for Alpha but remain in scope for the full SRS acceptance release gate. BDS-NFR-SEC-008 (TSIG inline/file secret confidentiality posture) and BDS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
 
-Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XoT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all BDS-NFR-PERF performance targets (full conformance), full security/maintainability verification (BDS-NFR-SEC-006/-007, BDS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs BDS-NFR-REL-006/-007, observability extension BDS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics), resource extensions BDS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, BDS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal SRS MVP release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
+Not required for Alpha, but required by the full SRS acceptance release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XoT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all BDS-NFR-PERF performance targets (full conformance), full security/maintainability verification (BDS-NFR-SEC-006/-007, BDS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs BDS-NFR-REL-006/-007, observability extension BDS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics), resource extensions BDS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, BDS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the full SRS acceptance release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
+
 *Source.* Formal Alpha acceptance target recorded in this SRS.
+
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of BDS-VER-011 (Gate methods).
 
 **BDS-VER-008 — Public-Beta Milestone.** This requirement defines the BoronDNS 1.0 public-beta release gate. It is separate from future full SRS acceptance. The milestone is achieved when the implemented and documented product boundary has passed the release test plan and every unmet aspirational target below is explicitly recorded as a public-beta limitation rather than represented as verified:
@@ -3489,6 +4478,7 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 - The `0.9.1` validation release and its retained evidence reviewed before the final `1.0.0` public-beta decision; no additional prerelease train is required by this SRS.
 
 *Source.* Public-beta release-acceptance target recorded in this SRS and the project decision register.
+
 *Verification.* Review of the 0.9.1 validation evidence, fuzz campaign summaries, release notes, documented limitations, signed artifacts, and final 1.0.0 public-beta decision.
 
 ## 7.5 Verification Evidence and Traceability
@@ -3496,7 +4486,9 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 **BDS-VER-009.** The project traceability matrix MUST record, for each requirement in §3 through §6, the verification status: **Not Verified**, **Verified** (with date and reference to the evidence), or **Deferred** (with target milestone). The companion traceability matrix and verification ledger are the canonical records of verification progress for the current repository state; Appendix A in this SRS defines the required structure and mapping rules.
 
 The traceability matrix MUST be updated synchronously with each release: at the moment a release artifact is produced, the matrix MUST reflect the verification status of every requirement against that release. Inter-release matrix updates are permitted and encouraged when verification results become available between releases (e.g., when a previously Deferred requirement is verified mid-cycle); the matrix is the canonical source of current verification status at any given time, not solely a release-time artefact. The matrix MAY be maintained as a separate Markdown, CSV, JSON, or database artifact alongside the SRS in the project repository, in which case that artifact is the canonical authority and any Appendix A rendering inside the SRS is a documentation snapshot.
-*Source.* Audit and project tracking; resolution of v0.6 audit finding about matrix update cadence.
+
+*Source.* Audit and project tracking.
+
 *Verification.* Matrix review at each release; spot-check of inter-release updates against verification evidence per BDS-VER-002.
 
 **BDS-VER-012.** Verification MUST detect regressions. A *regression* is defined as either:
@@ -3506,11 +4498,14 @@ The traceability matrix MUST be updated synchronously with each release: at the 
 Each detected regression MUST be triaged within the release process: root-cause analysis recorded, and either a fix applied OR the regression explicitly accepted with rationale in canonical release evidence. Material operator-facing regressions MUST also be disclosed in release notes. A release with an untriaged release-blocking regression MUST NOT proceed.
 
 Regression baseline: the rolling window of the last 5 release measurements is used to absorb measurement noise; the first release of a major version, having no prior history, establishes the initial baseline rather than triggering regression detection. New requirements introduced in a release have no prior verification result and thus cannot regress; they are simply Verified or Failed against the new requirement's acceptance criterion.
-*Source.* Release-process discipline; resolution of v0.6 audit finding about absent regression policy.
+
+*Source.* Release-process discipline.
+
 *Verification.* Periodic Performance test per BDS-VER-011 captures rolling metrics; retained release-evidence inspection for regression triage documentation.
 
 **BDS-VER-015.** Verification execution roles are allocated as follows:
-- **Continuous methods** per BDS-VER-011 are executed through the active continuous gate for the project stage. During the private-repository Engineering MVP profile this is local `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
+
+- **Continuous methods** per BDS-VER-011 are executed through the active continuous gate for the project stage. The current local gate is `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
 - **Periodic methods** per BDS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in canonical release evidence.
 - **Gate methods** per BDS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
 - **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through the 1.0 public-beta gate, this role is held by DT.
@@ -3518,7 +4513,9 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 - **Independent security review**, when procured, is supporting evidence. The engagement and its auditor identity, scope, and findings tracking process SHOULD be recorded, but BDS-VER-008 requires the dependency-security gate rather than promising a third-party audit for every release.
 
 Where a single individual fills multiple roles (typical for the project's small team), the role accountability is unaffected; the individual signs off in each capacity. Where a role is unfilled (e.g., the release-engineer role is shared rotationally), the rotation schedule is recorded in the Architecture Document.
-*Source.* Project governance clarity; resolution of v0.6 audit finding about absent verification responsibility allocation.
+
+*Source.* Project governance clarity.
+
 *Verification.* Architecture Document and retained release-evidence review confirming role allocations and release authorization.
 
 ## 7.6 Test Plan Boundary
@@ -3532,21 +4529,16 @@ The Test Plan is a sibling document per §1.6.1, maintained independently of thi
 
 The separation prevents the SRS from accumulating test-case detail that does not serve the SRS's normative purpose, while ensuring that the SRS's verification statements are realised in executable artifacts.
 
-## 7.7 Audit Cycle Closure
+## 7.7 Keeping the Baseline Current
 
-The SRS was subjected to a structured per-section audit cycle initiated in v0.2 and concluded in v0.7. Each section's audit closure resulted in precision refinements, gap closures, and (where appropriate) new requirements:
+Review findings, RFC errata, and implementation changes may require corrections
+to this SRS. Preserve requirement identifiers and update affected tests,
+traceability rows, and companion documents in the same change. Historical
+review completion is not evidence that later code cannot contain defects.
 
-| Audit cycle | SRS revision | Section | Principal outcomes |
-|---|---|---|---|
-| Functional | v0.3 | §4 | Closed specification gaps (non-EDNS UDP ceiling, AA bit completeness, CNAME chain semantics, TCP in-flight cap, AXFR/IXFR size cap, pseudo-RR rejection); new formal SRS MVP scope §4.19 DNS Cookies (RFC 7873/9018) and NSID (RFC 5001). |
-| Non-functional | v0.4 | §5 | Reference Hardware Profile and Reference Query Mix introduced (Appendix E); 13 new NFRs covering TCP/TSIG/DNSSEC throughput targets, overload behaviour, clock-skew tolerance, CVE policy, test coverage, signed releases, Operator Deployment Guide deliverable, build_info and latency-histogram metrics, idle-CPU bound. |
-| Interface | v0.5 | §6 | `interface.xot` -> `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the formal SRS MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
-| Architectural invariants | v0.6 | §3 | Precision refinements to BDS-INV-001 through -006; three new foundational invariants (Authoritative-Only Response Composition, Single-Process Architecture, Static Composition). |
-| Verification | v0.7 | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; BDS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
-
-The v0.7 audit pass is historical evidence, not a prohibition on later corrective review. Future revisions to this SRS are expected to address: (a) Pending items in the project decision register as project decisions are made; (b) C.6 post-MVP scope items as they are promoted into scope; (c) operational learnings from Alpha and formal SRS MVP release-gate executions; (d) RFC errata published after the active revision's publication date; (e) code-alignment or review findings that identify drift, duplication, or maintainability risk.
-
-The requirement identifier and category framework remains stable for traceability, but requirement wording, section organization, and companion-document ownership may be corrected when implementation evidence, primary-source review, or external review demonstrates that the current text is inaccurate or unmaintainable. Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope unless removed from code and the scope documents in the same change.
+A documentation cleanup must not silently remove an implemented feature or
+turn an unmet acceptance target into a completed claim. Scope changes require
+an explicit decision in the [project register](project-decision-register.md).
 
 # Appendix A — Requirement-to-RFC Traceability Matrix
 
@@ -3603,7 +4595,7 @@ Two mapping granularities are allowed:
 Verification status is tracked per requirement per BDS-VER-009. The SRS does
 not embed live status rows. Earlier inline examples became misleading as IXFR,
 DNSSEC serving, XoT, catalog zones, EDNS/EDE, DNS Cookies, RRL, and CHAOS
-support gained Engineering MVP evidence before formal SRS release acceptance.
+support gained current implementation evidence before formal SRS release acceptance.
 
 The live structured status table is maintained in companion artifacts and uses
 these columns:
@@ -3616,7 +4608,7 @@ these columns:
 - **Target resolution milestone**
 - **Notes**
 
-Deferred targets use the project milestone vocabulary: Alpha, formal SRS MVP, post-MVP,
+Deferred targets use the project milestone vocabulary: Alpha, full SRS acceptance, future,
 or a later named release gate.
 
 Population of the live tracking table is the responsibility of the test and
@@ -3675,8 +4667,8 @@ The §4.14 table is the normative source for the known RR type set, each type's
 specifying RFC, and the per-type RDATA compression policy. Current code
 alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`. That
 companion document records the source paths, short evidence pointers, current
-type-aware behavior, and out-of-catalogue type boundary. External MVP-trim
-reviews do not remove a type from the Engineering MVP scope unless the code,
+type-aware behavior, and out-of-catalogue type boundary. Feature-scope
+reviews do not remove a type from the current implementation scope unless the code,
 SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.
 
 ## B.2 Maintenance Rules
@@ -3725,7 +4717,7 @@ name compression is not safe for RR types whose RDATA structure may be unknown
 to one endpoint. RFC 6604 supplies the specific SRV clarification used by the
 current catalogue.
 
-# Appendix C — Out-of-Scope Items and Post-MVP Scope
+# Appendix C — Scope Exclusions and Optimization Profiles
 
 ## C.1 Purpose
 
@@ -3735,7 +4727,9 @@ Three kinds of entry are distinguished:
 
 - **Foundational exclusions (C.2).** Items whose inclusion would violate an architectural invariant of §3 (typically BDS-INV-001, the secondary-only invariant). These cannot be brought into scope without redefining the project's identity.
 - **Current-scope exclusions (C.3).** Items deliberately left out of the current version's scope for reasons of complexity, codebase size, or focus, but which could be added in a future version without architectural-invariant violation.
-- **Post-MVP / v2 scope items (C.6).** Future BoronDNS server optimisation tracks recorded with re-entry conditions and current-architecture constraints. These tracks are outside the current Engineering MVP runtime unless a later SRS revision and unsafe-boundary update explicitly bring them into scope.
+- **Optimization profiles (C.6).** The experimental AF_XDP backend and current
+  compact/sharded zone storage are distinguished from future work such as a
+  reusable response cache. Future work is not a hidden release requirement.
 
 Section C.5 points to the project decision register for items specifically
 flagged during SRS drafting or review where the choice merits explicit
@@ -3825,11 +4819,14 @@ These items conflict with the secondary-only architectural stance of BDS-INV-001
 
 *Enforcement.* BDS-INV-005; BDS-NEG-011; BDS-IF-CONF-007.
 
-### C.2.11 Administrative network interface
+### C.2.11 Inbound administrative network interface
 
-*Description.* A network-accessible interface for runtime server control (BIND's `rndc` over TCP, Knot's `knotc` over Unix socket or TCP, similar mechanisms in other servers).
+*Description.* A server-owned administrative listener or command socket.
 
-*Rationale.* Per BDS-INV-005 and BDS-IF-SIG (the minimal signal-handling surface), the server's runtime control interface is limited to SIGTERM and SIGINT for graceful shutdown. There is no administrative command interface; reconfiguration requires restart.
+*Rationale.* BoronDNS exposes DNS listeners and optional health/metrics
+listeners. Its optional control-plane integration polls outward for a bounded
+set of operations (§2.3); it does not open an administrative listener. General
+configuration changes still require restart under BDS-INV-005.
 
 *Enforcement.* BDS-INV-005; BDS-NFR-SEC-005.
 
@@ -3837,11 +4834,17 @@ These items conflict with the secondary-only architectural stance of BDS-INV-001
 
 These items could be added in a future version without violating any architectural invariant. They are excluded from the current version's scope for reasons of minimal-codebase focus, the current SRS feature boundary, or operational simplicity. Future versions of the SRS may revisit any of these.
 
-*Numbering note.* This catalogue retained its v0.1 numbering for stability. As of v0.3, the entry previously at C.3.1 (DNS Cookies, RFC 7873) has been brought into formal SRS MVP scope and is specified at §4.19; its former slot is preserved as an explicit recorded transition for traceability rather than renumbered.
+Section numbers remain stable so older references still reach the current
+disposition. DNS Cookies and catalog zones, once excluded, are now in scope.
 
-### C.3.1 DNS Cookies (RFC 7873) — *withdrawn (now in formal SRS MVP scope)*
+### C.3.1 DNS Cookies (RFC 7873) — in scope
 
-*Disposition.* Brought into formal SRS MVP scope per v0.3 of this SRS. Specified at §4.19 (BDS-FR-COOKIE-001 through BDS-FR-COOKIE-011). Removed from §4.11's out-of-scope closing note. Removed from C.5 decision queue. The decision to include DNS Cookies in the formal SRS MVP was recorded on 24 May 2026 following the v0.2 functional audit recommendation; the rationale is that DNS Cookies add useful UDP off-path spoofing resistance with modest operational complexity and no per-client shared-secret distribution. That rationale does not remove the BDS-FR-COOKIE-004 formal acceptance gap for configured shared Server Secret material in anycast or load-balanced deployments.
+*Disposition.* In scope under §4.19. DNS Cookies add useful UDP off-path
+spoofing resistance with modest operational complexity and no per-client
+shared-secret distribution. Process-local and configured current/previous
+shared secrets are implemented. Verification evidence remains in the
+[traceability matrix](appendix-a-traceability-matrix.md); this former exclusion
+is not an open implementation gap.
 
 ### C.3.2 EDNS Client Subnet (RFC 7871)
 
@@ -3980,7 +4983,7 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 | 8484 | DNS-over-HTTPS | Current-scope exclusion | C.3.4 |
 | 9250 | DNS-over-QUIC | Current-scope exclusion | C.3.5 |
 
-*Note.* RFC 7873 (DNS Cookies) was listed in this table in v0.1 and v0.2 as a current-scope exclusion. As of v0.3 it has been brought into formal SRS MVP scope (§4.19) and is therefore removed from this table.
+*Note.* RFC 7873 (DNS Cookies) was listed in this table in v0.1 and v0.2 as a current-scope exclusion. As of v0.3 it has been brought into full SRS acceptance scope (§4.19) and is therefore removed from this table.
 
 *Note.* RFC 9432 (DNS Catalog Zones) was listed in this table in v0.1 through v0.7 as a current-scope exclusion incompatible with BDS-INV-005. As of v0.8 it has been brought into scope (§4.20.2, `[[catalog_zones]]`) under the architectural reconciliation described in the updated BDS-INV-005 and in Appendix C.3.9; it is therefore removed from this table.
 
@@ -3999,25 +5002,24 @@ C.5 Decision Review section of release notes.
 The current pending subset is summarized in `docs/release-acceptance-gap-register.md` so
 release-readiness review has a short active queue without making the SRS a
 second project-decision table.
-The gap register records any current implementation gap between this formal SRS
-MVP policy and the Engineering MVP code evidence.
+The gap register distinguishes unimplemented requirements from missing
+verification evidence for full SRS acceptance.
 
 ## C.6 Experimental And Future Optimization Profiles
 
 This section records experimental or future BoronDNS server optimisation
 tracks. The feature-gated AF_XDP profile in C.6.1 is present in the official
 binary and within the current product boundary, but remains opt-in and is not
-the supported default. The later zone-store and response-cache tracks remain
-outside the current runtime. These entries ensure the architecture does not
-foreclose later promotion work without turning unimplemented tracks into hidden
-requirements. Current
+the supported default. Compact and sharded zone images are current runtime
+features; further storage experiments and a reusable response cache are future
+work. These entries do not turn unimplemented ideas into release requirements.
+Current
 implementation status and unsafe-boundary ownership are maintained by
 `docs/future-optimization-tracks.md`, the Architecture Document,
 `docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
 Capitalized requirement keywords in C.6.1 apply whenever the experimental
-AF_XDP profile is selected. Requirements in later unimplemented subsections are
-conditional promotion constraints and apply only if a later SRS revision brings
-the named track into scope.
+AF_XDP profile is selected. Requirements for future work apply only when that
+work is brought into scope by a later SRS revision.
 
 ### C.6.1 XDP/eBPF Kernel-Bypass on the DNS Query Interface
 
@@ -4031,30 +5033,34 @@ Identification value. IPv6 UDP checksums remain mandatory. Regression tests
 MUST cover malformed checksums, invalid sources, and constructed response
 headers before this profile can be promoted beyond experimental status.
 
-*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
+*Re-entry pointer.* Promote only when current implementation benchmarking shows that
 the socket path blocks a relevant performance target, or when a dedicated
 XDP-capable deployment profile becomes a standard target. Detailed adapter,
-unsafe-boundary, and no-runtime-loading constraints are owned by
+unsafe-boundary, and object-loading constraints are owned by
 `docs/future-optimization-tracks.md`.
 
-### C.6.2 Optimised Packed-Binary In-Memory Zone Store
+### C.6.2 Compact and Sharded In-Memory Zone Store
 
-*Status.* Out of current scope. The current Engineering MVP zone store remains
-the memory-resident snapshot model described by the Architecture Document and
-must continue satisfying BDS-INV-003 atomic publication.
+*Status.* Implemented. Queries use a memory-resident `ZoneImage` under the
+compact, sharded, or automatic publication policy of BDS-IF-CONF-019. Sharded
+publication allows eligible IXFR updates to reuse unchanged parts of the image.
+All layouts remain subject to BDS-INV-003 atomic publication. Restart durability
+uses the separate checkpoint and incremental journal of BDS-INV-004; it is not a
+query-path disk format.
 
-*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
-zone-store cache locality or per-record memory overhead is a limiting factor
-against BDS-NFR-RES-002 or the applicable performance targets. Detailed storage
-boundary, ingestion/query separation, and lookup-equivalence constraints are
-owned by `docs/future-optimization-tracks.md`.
+*Further work.* Changes to image layout need measured query throughput, memory
+cost, and refresh latency, plus lookup-equivalence tests. The
+[architecture](architecture.md) owns current design detail;
+[future optimization tracks](future-optimization-tracks.md) owns unimplemented
+experiments.
 
 ### C.6.3 Pre-Baked Response Cache for Hot Query Patterns
 
-*Status.* Out of current scope. The current Engineering MVP serves from the
-in-memory zone store and assembles responses on demand.
+*Status.* Out of current scope. The server serves from the in-memory zone store
+and assembles responses on demand. Response-cache candidate metrics measure
+possible reuse; they do not indicate a response cache is active.
 
-*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
+*Re-entry pointer.* Promote only when current implementation benchmarking shows that
 response assembly, such as name compression, RR serialization, or EDNS OPT
 construction, accounts for a significant fraction of per-query CPU time at
 target load. Detailed keying, TTL decay, DNSSEC validity, invalidation, and
@@ -4451,7 +5457,7 @@ claims.
 The detailed profile is maintained in the companion document
 `docs/reference-verification-profile.md`. That document owns the hardware
 profile, query mix, named benchmark variants, and recordkeeping checklist used
-by formal SRS MVP release-acceptance runs.
+by full SRS acceptance release-acceptance runs.
 
 ## E.2 Reference Hardware Profile
 

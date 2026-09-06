@@ -1,130 +1,147 @@
-# DevOps Getting Started
+# Developer setup
 
-This guide is the short path from a fresh clone to a locally validated BoronDNS
-binary. Use the [Operator Deployment Guide](operator-deployment-guide.md) for the
-full production-oriented reference.
+Use this guide to build BoronDNS from a checkout, run a local secondary, and
+exercise the packaging tools. To deploy a downloaded release, use the
+[operator guide](operator-deployment-guide.md).
 
-## 1. Clone
+## Build
 
-```bash
-git clone git@github.com:Integrity-Ltd/BoronDNS.git
+```sh
+git clone https://github.com/Integrity-Ltd/BoronDNS.git borondns
 cd borondns
-```
-
-The repository pins Rust `1.96.1` exactly in `rust-toolchain.toml`; release
-verification and packaging exchange and compare the resolved compiler and Cargo
-binary digests before artifacts are built.
-`rustup` will select it automatically when it is installed.
-
-## 2. Install Local Prerequisites
-
-Required for normal build and test work:
-
-```bash
 rustup toolchain install 1.96.1
-rustup component add rustfmt clippy
-rustup component add llvm-tools-preview
-cargo install cargo-deny cargo-machete
-cargo install cargo-llvm-cov --locked
-# Install shfmt and shellcheck with the host package manager.
-```
-
-Install `cargo-geiger` only when preparing formal release-review unsafe
-dependency evidence:
-
-```bash
-cargo install cargo-geiger
-```
-
-Useful for runtime smoke checks and interop scripts:
-
-```bash
-# Arch example
-sudo pacman -S --needed bind curl docker openssl python
-```
-
-Use the equivalent packages on the target Linux distribution. `dig` comes from
-BIND tools on most distributions.
-
-## 3. Validate the Checkout
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace -- --test-threads=1
-cargo test --workspace --all-targets --all-features -- --test-threads=1
-cargo deny check
-./scripts/check.sh
-```
-
-`./scripts/check.sh` is the repository gate used for local Engineering MVP
-evidence. It includes non-mutating shell formatting checks through `shfmt -d`,
-`shellcheck`, root and fuzz-crate formatting/Clippy, actionlint, tests, dependency policy, unused-code audit,
-unsafe-boundary checks, and short evidence captures.
-
-For a human-operated primary-server smoke test, run the BIND interop check after
-the normal Rust tests:
-
-```bash
-BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
-  scripts/interop-bind-axfr-docker.sh
-```
-
-For broader packet-content coverage against BIND, including a generated
-multi-type torture zone and a retained `dumpcap` capture, run:
-
-```bash
-BORONDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR=target/evidence/bind-packet-torture \
-  scripts/interop-bind-packet-torture-docker.sh
-```
-
-See [Manual BIND interop smoke](manual-bind-interop.md) for the Docker and
-host-installed BIND variants, retained artifacts, and the VM/bare-metal note for
-large RRL source-IP rotation.
-
-## 4. Build the Binary
-
-```bash
 cargo build --locked --release -p borondns-cli --features af-xdp
 ./target/release/borondns --version
 ```
 
-For a host install:
+The repository pins Rust `1.96.1` in `rust-toolchain.toml`; rustup selects it
+inside the checkout. `--locked` uses the checked-in dependency resolution.
+AF_XDP is included in the release feature set but remains inactive unless
+configured.
 
-```bash
-sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
+For routine Rust changes:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features -- --test-threads=1
 ```
 
-## 5. Build the Installer Archive
+The full repository check is `scripts/check.sh`. It also needs the tools used
+by its shell, dependency, fuzz, workflow, and documentation checks. Read the
+script's prerequisites before running it; do not confuse the three Rust
+commands above with the complete release gate. See the
+[test plan](test-plan.md) for focused checks and the
+[release guide](release-evidence-guide.md) for release preparation.
 
-For a first-class Linux install/update artifact, build the static musl archive:
+## Run against a primary
 
-```bash
+BoronDNS needs a reachable primary that permits AXFR/IXFR. It does not read
+BIND zone files directly. For an isolated test primary, follow
+[manual BIND interop](manual-bind-interop.md).
+
+```sh
+./target/release/borondns --example-config > .local-borondns.toml
+$EDITOR .local-borondns.toml
+```
+
+In that file, replace the zone, primary, NOTIFY source, and any credentials.
+Bind DNS to `127.0.0.1:5300` and health to `127.0.0.1:8080`. Set
+`server.zone_cache_directory` to an absolute, private directory writable by
+your account, and create it before starting. The example's
+`/var/lib/borondns/zones` is a system-service path and usually is not writable
+by a development account.
+
+```sh
+./target/release/borondns --validate-config .local-borondns.toml
+./target/release/borondns --dump-config .local-borondns.toml
+./target/release/borondns serve --config .local-borondns.toml
+```
+
+Keep the local configuration out of commits, especially if it contains secrets.
+The dump redacts secret values but still includes paths and deployment details.
+
+From another shell:
+
+```sh
+curl -fsS http://127.0.0.1:8080/livez
+curl -fsS http://127.0.0.1:8080/readyz
+dig @127.0.0.1 -p 5300 example.test. SOA
+dig @127.0.0.1 -p 5300 example.test. SOA +tcp
+```
+
+A zone remains LOADING until an initial transfer or eligible cache restore
+succeeds. An example configuration still pointing at documentation addresses
+will not become ready. Ctrl-C initiates graceful shutdown; restart after
+changing static configuration.
+
+## Check primary interoperability
+
+With Docker and BIND tools available:
+
+```sh
+BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
+  scripts/interop-bind-axfr-docker.sh
+```
+
+For broader packet-content tests and a retained packet capture:
+
+```sh
+BORONDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR=target/evidence/bind-packet-torture \
+  scripts/interop-bind-packet-torture-docker.sh
+```
+
+The [interop guide](manual-bind-interop.md) explains host-installed BIND,
+artifacts, and prerequisites. A script that skips because a dependency is absent
+has not validated interoperability.
+
+## Build packages and an image
+
+Package builders require a clean Git worktree, including no untracked files.
+They record the source revision and check it again before publishing outputs
+under `target/dist/`. Start with the installer, which supplies the static
+MUSL binaries consumed by the other package builders:
+
+```sh
 scripts/package-installer.sh
+scripts/package-deb.sh
+scripts/package-rpm.sh
+scripts/package-docker-image.sh
+BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 ```
 
-The output is written under `target/dist/` as
-`borondns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
-archive contains `bin/borondns`, an XDP-enabled `bin/boron-gun`, `install.sh`,
-systemd/OpenRC service templates, the example config, licenses, and an installer
-README. On a target host:
+Run only the formats you need. DEB packaging needs `dpkg-deb`, RPM packaging
+needs `rpmbuild`, and image packaging needs Docker. Local outputs include
+checksum sidecars; tag releases publish one authenticated
+`release-handoff.sha256` manifest and its Sigstore bundle instead.
 
-The default `x86_64-unknown-linux-musl` packaging path verifies both binaries
-with `ldd`/`file` output and fails if static linking cannot be confirmed. Use
-`BORONDNS_PACKAGE_ALLOW_DYNAMIC=1` only for non-release developer or distribution
-experiments. Setting it always forces `release_eligible=0`, records
-`dynamic_link_override=1`, and uses the `-nonrelease-dynamic` artifact/tag
-namespace for an otherwise clean tree; GitHub Actions rejects the override.
-Those artifacts are not the published portability baseline.
-Packaging also requires a clean Git worktree, including no untracked files, and
-rechecks its commit and source status before publishing artifacts. For a local
-diagnostic build only, `BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` permits an
-unchanged dirty tree while marking the manifests `source_clean=0`,
-`release_eligible=0`, and `dirty_source_override=1`. GitHub Actions rejects this
-override, so these outputs cannot be release artifacts.
+| Artifact | Local verification |
+| --- | --- |
+| Installer | `scripts/test-installer-docker.sh` |
+| Debian/Ubuntu package | `scripts/test-deb-package-docker.sh`: Debian 12/13, Ubuntu 22.04/24.04 lifecycle matrix. |
+| Fedora/RHEL-compatible package | `scripts/test-rpm-package-docker.sh`: Fedora 42 and Rocky Linux 9 lifecycle matrix. |
+| Docker image archive | `scripts/test-docker-image.sh` |
 
-```bash
-tag=v0.2.0
+The native packages install both binaries and a systemd unit. The service waits
+for an operator-created config; upgrade/removal preserve configuration and
+state, and Debian purge retains zone state. Use the
+[operator guide](operator-deployment-guide.md#package-lifecycle) for installing
+or migrating from an archive.
+
+The default MUSL build must pass the builders' static-link verification.
+`BORONDNS_PACKAGE_ALLOW_DYNAMIC=1` permits a diagnostic dynamic build;
+`BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` permits an unchanged dirty source
+tree. Both mark output ineligible for release, and GitHub Actions rejects both
+overrides. They are local experiments, not shortcuts for preparing a release.
+
+## Verify a downloaded installer
+
+Locally built artifacts do not acquire a GitHub workflow signature merely by
+running the packaging scripts. For an official downloaded release, obtain the
+archive, manifest, and signature bundle from the same tag and use:
+
+```sh
+tag=v1.0.0
 target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
@@ -141,203 +158,16 @@ sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
 sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
 
-Set `tag` to the exact downloaded release tag. Signature verification is a
-precondition: do not extract or execute an archive whose bundle does not bind
-to that tag's `release-installer.yml` workflow identity.
+Set `tag` to the exact downloaded version. Run each step only after the previous
+one succeeds, and confirm the checksum check names your archive with `OK`.
+The protected directory keeps verification, extraction, and execution on the
+same files. Do not extract an archive after any verification failure. The
+[release guide](release-evidence-guide.md) explains the provenance boundary;
+the [operator guide](operator-deployment-guide.md) covers runtime installation.
 
-For unattended static-zone setup:
+## Further reading
 
-```bash
-sudo BORONDNS_ZONE=example.com. \
-  BORONDNS_PRIMARY=10.0.0.10:53 \
-  BORONDNS_NOTIFY_SOURCE=10.0.0.10 \
-  "$install_root/borondns-${tag#v}-$target_triple/install.sh" --yes
-```
-
-## 6. Build the Docker Image Archive
-
-### Debian/Ubuntu package
-
-After `scripts/package-installer.sh` has produced the verified MUSL binaries,
-build the native `amd64` package with `dpkg-deb` available:
-
-```bash
-scripts/package-deb.sh
-sha256sum -c target/dist/borondns_*_amd64.deb.sha256
-sudo apt install ./target/dist/borondns_*_amd64.deb
-```
-
-The package installs `borondns` and `boron-gun` under `/usr/bin`, creates the
-`borondns` service account and state directories, and enables the hardened
-systemd unit. It does not invent a working secondary configuration: the unit
-remains inactive until `/etc/borondns-secondary/config.toml` exists. Package
-upgrades preserve configuration and state, removal preserves both, and purge
-removes configuration while retaining `/var/lib/borondns` operational data.
-Run `scripts/test-deb-package-docker.sh` for the Debian 12/13 and Ubuntu
-22.04/24.04 install, upgrade, remove, and purge matrix.
-
-### Fedora/RHEL-compatible package
-
-With `rpmbuild` available, build and verify the native `x86_64` package:
-
-```bash
-scripts/package-rpm.sh
-sha256sum -c target/dist/borondns-*.x86_64.rpm.sha256
-sudo dnf install ./target/dist/borondns-*.x86_64.rpm
-```
-
-It has the same service activation, archive-migration guard, upgrade, removal,
-and retained-state policy as the Debian package. Run
-`scripts/test-rpm-package-docker.sh` for the Fedora 42 and Rocky Linux 9
-install, upgrade, remove, and reinstall matrix.
-
-The tag-push release workflow also builds an Alpine-based Docker image and
-publishes it as a compressed Docker archive, not as a registry image. Build and
-smoke-test the same artifact locally with:
-
-```bash
-scripts/package-docker-image.sh
-scripts/test-docker-image.sh
-BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
-```
-
-The output is written under `target/dist/` as
-`borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
-matching `.sha256` file. The SBOM command also writes CycloneDX JSON SBOMs,
-SHA-256 sidecars, and an SBOM manifest for the release binaries and Docker
-image. Docker packaging applies the same clean-source requirement and records
-the source-clean and release-eligibility state in both its manifest and image
-labels. Load the image into a local Docker daemon with:
-
-```bash
-xz -dc target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
-docker run --rm borondns:<version> --version
-```
-
-If Docker prints `WARNING: IPv4 forwarding is disabled. Networking will not
-work.`, that warning is from the Docker host, not from BoronDNS. Version output
-still works, but bridge networking and published ports may not. Enable Docker's
-required host forwarding, or use a deliberately designed host-network profile
-with host firewall rules.
-
-Recommended runtime hardening keeps the image non-root, read-only, and without
-ambient Linux capabilities. Map host port 53 to the image's unprivileged 5300
-listener instead of adding `CAP_NET_BIND_SERVICE`:
-
-```bash
-docker run -d --name borondns \
-  --read-only \
-  --ulimit nofile=65536:65536 \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --pids-limit 128 \
-  -p 53:5300/udp \
-  -p 53:5300/tcp \
-  -p 127.0.0.1:8080:8080/tcp \
-  -v /etc/borondns-secondary/config.toml:/etc/borondns-secondary/config.toml:ro \
-  borondns:<version> \
-  serve --config /etc/borondns-secondary/config.toml
-```
-
-## 7. Create a Config
-
-Start from the checked-in example:
-
-```bash
-cp config/borondns.example.toml /tmp/borondns.toml
-$EDITOR /tmp/borondns.toml
-```
-
-BoronDNS is a secondary-only authoritative server. It does not load BIND-style
-zone files directly and it does not act as the primary. For a real environment,
-first choose the primary authoritative server that will hold the zone master
-copy, then replace at least:
-
-- `[[zones]].name`
-- `[[zones]].primaries` or `[[zones.transfer_primaries]]`
-- `notify_sources`
-- TSIG key references and secret file paths, if TSIG is used
-- XoT trust anchor, certificate, and key paths, if XoT is used
-- `[interfaces].dns`, `[interfaces].mgmt`, and `[interfaces].transfer`
-
-The example binds DNS to port `5300` and management to localhost so it can run
-as an unprivileged local process. Production DNS service normally uses UDP/TCP
-53 and should be run under systemd, a container runtime, or another supervisor.
-
-Validate before starting:
-
-```bash
-./target/release/borondns --validate-config /tmp/borondns.toml
-./target/release/borondns --dump-config /tmp/borondns.toml
-./target/release/borondns --config /tmp/borondns.toml --validate-config
-```
-
-## 8. Run Locally
-
-```bash
-./target/release/borondns --config /tmp/borondns.toml serve
-```
-
-In another shell:
-
-```bash
-curl -fsS http://127.0.0.1:8080/livez
-curl -fsS http://127.0.0.1:8080/readyz
-curl -fsS http://127.0.0.1:8080/metrics | head
-dig @127.0.0.1 -p 5300 example.test. SOA
-```
-
-If the configured primary is not reachable, health can stay unready while the
-zone remains in `LOADING`. That is expected for a config that still points at
-documentation/example addresses.
-
-## 9. Default Host Layout
-
-The default runtime path is:
-
-```text
-/etc/borondns-secondary/config.toml
-```
-
-Install a starting config there with:
-
-```bash
-sudo install -d -m 0755 /etc/borondns-secondary
-sudo install -m 0640 /tmp/borondns.toml /etc/borondns-secondary/config.toml
-```
-
-Then `borondns serve` can run without an explicit `--config` argument.
-
-## 10. Service Manager Notes
-
-For privileged port 53, prefer one of:
-
-- run as an unprivileged user with `CAP_NET_BIND_SERVICE`;
-- let systemd grant the capability;
-- start as root only long enough to bind sockets and configure
-  `[process].run_as_user`.
-- keep `[process].disable_core_dumps` and `[process].no_new_privileges` at their
-  secure defaults unless you are doing a controlled local debugging run.
-
-BoronDNS ignores `SIGHUP`; configuration topology changes require a process
-restart. If `[secret_store]` is configured, TSIG keys and named XoT profiles
-inside that already configured filesystem root can be reloaded by the
-control-plane `rotate_tsig` or `republish_feed` operations. `SIGTERM` and
-`SIGINT` trigger graceful shutdown.
-
-Provision secret-store rotations as immutable generation directories. Keep all
-manifest paths relative, stage the complete directory, then atomically switch
-the configured `current` symlink. BoronDNS captures that root once per reload,
-rejects writable or symlinked material, and commits either one complete new
-snapshot or retains the prior snapshot.
-
-## 11. Next Documents
-
-- [Operator deployment guide](operator-deployment-guide.md): full runtime,
-  monitoring, security, and release evidence guidance.
-- [Manual BIND interop smoke](manual-bind-interop.md): local real-primary smoke
-  run and retained artifact map.
-- [Engineering MVP readiness](engineering-mvp-readiness.md): what can and
-  cannot be claimed at the current milestone.
-- [Interface stability baseline](interface-stability-baseline.tsv): CLI,
-  config, metric, log, health, and signal compatibility surfaces.
+- [Configuration](configuration.md): listener roles, TSIG/XoT, catalogs, and tuning.
+- [Health and metrics](health-metrics-interface.md): probes and monitoring.
+- [Architecture](architecture.md): runtime structure and publication.
+- [Test plan](test-plan.md): development and release checks.

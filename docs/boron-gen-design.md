@@ -1,146 +1,105 @@
-# BoronGen deterministic large-zone primary
+# BoronGen design
 
-Status: implementation contract for the internal large-scale test tool
+BoronGen is a synthetic authoritative primary for transfer, publication, query,
+and memory measurements. It generates large catalog/member zones without an
+equally large zone file or retained record store. See [the usage guide](boron-gen.md)
+for profiles, CLI examples, and the systemd/cgroup harness.
 
-## Purpose
+## Deterministic streaming
 
-BoronGen is an internal synthetic authoritative primary for exercising
-BoronDNS transfer, compilation, DNSSEC denial-index, query, and memory behavior
-at sizes that are impractical to materialize in BIND-style zone files.
+Records are a function of scenario configuration, seed, zone index, owner index,
+record index, and serial. A manifest gives expected record counts before the
+listener starts. The generator validates names and count arithmetic at startup,
+then checks record/message wire bounds as it streams.
 
-BoronGen is not a general-purpose authoritative server and is not a DNSSEC
-validity oracle. Small generated corpora remain subject to independent transfer
-and parser checks. DNSSEC validity testing continues to use genuinely signed
-zones from interoperable authoritative implementations.
+AXFR fills bounded DNS messages and awaits each TCP write. Per-connection state
+holds the current iterator and message buffer, not the whole zone. Connection
+concurrency is bounded separately. At fixed concurrency and message size,
+increasing the corpus should not produce proportional retained generator memory;
+RSS measurements are needed to confirm this for a particular build and workload.
 
-## Required properties
+When TSIG is configured, every transfer message is signed and chained. This
+avoids buffering unsigned messages between signatures. The default message bound
+is 60,000 bytes, configurable from 512 through 64,000; the default TCP connection
+limit is four.
 
-- A scenario is a pure function of its configuration, seed, zone index, owner
-  index, RR index, and serial.
-- Catalog zones and member zones are generated without retaining their records.
-- AXFR records are produced incrementally into bounded DNS messages and written
-  under TCP backpressure.
-- After a transfer, the process retains only the scenario configuration,
-  counters, serial, and bounded per-connection buffers.
-- With churn disabled, SOA polling returns the stable configured serial and
-  IXFR for that serial returns the single current SOA.
-- With churn enabled, the serial advances from a monotonic clock and BoronGen
-  streams deterministic replace-only IXFR generations on demand. It retains no
-  per-generation zone image or journal. Requests outside the configured
-  generation window fall back to a fresh AXFR.
-- Concurrent connections are bounded. Configuration and aggregate record-count
-  arithmetic are checked before the listener starts; per-record/message
-  wire-size arithmetic remains checked while streaming and fails the affected
-  request without growing beyond the configured message bound.
-- Catalog and member transfers can use the same TSIG key. Every AXFR message is
-  signed in the initial implementation, which gives a valid TCP TSIG chain
-  without retaining unsigned messages between signatures.
-- A machine-readable manifest records the exact scenario and expected record
-  counts.
+## SOA, AXFR, and IXFR
 
-## Synthetic NSEC3 contract
+The same endpoint serves UDP SOA polling and TCP SOA, AXFR, and IXFR. With churn
+disabled, the configured serial is stable and an up-to-date IXFR request receives
+a single SOA.
 
-The large-scale NSEC3 profile emits a strictly increasing sequence of 20-byte
-owner hashes. Every record's `next hashed owner name` is the next emitted hash,
-and the final record points to the first. The resulting ring is correctly
-ordered, fully linked, and suitable for BoronDNS's NSEC3 range indexing,
-binary-search lookup, and denial-response performance paths.
+With churn enabled, a monotonic clock advances member serials after the start
+delay. Each generation replaces a fixed set of synthetic RRsets. Old and new
+RDATA are derived from their serials, so BoronGen can stream several missed
+generations in IXFR order without retaining a journal. Requests outside
+`ixfr_max_generations` receive AXFR instead. An AXFR uses a selected generation
+consistently even if the clock advances while the transfer is in progress.
 
-The ring contains the real SHA-1 NSEC3 hash of the apex so BoronDNS can exercise
-its actual closest-encloser and NXDOMAIN proof path. The remaining hashes are
-generated directly across the 160-bit namespace and are not claimed to be
-preimages of the generated ordinary owner names. RRSIG records are structurally
-valid opaque load-test data, not cryptographic signatures. The manifest and
-startup log identify all three properties.
+The catalog uses RFC 9432 version 2 and formula-derived member names. Its serial
+does not change during member churn. BoronGen does not send NOTIFY and does not
+implement XoT or per-member catalog transfer overrides. It is a test primary,
+not a general authoritative DNS service.
 
-This mode avoids an in-memory or on-disk `O(number of names)` hash sort. A
-separate small-corpus validity mode may later calculate real NSEC3 hashes, sort
-them, and use genuine signing.
+## Synthetic DNSSEC data
 
-## Initial content profiles
+The `registry-nsec3` profile emits a strictly increasing sequence of 20-byte
+owner hashes. Each NSEC3 record points to the next hash; the last wraps to the
+first. The ring includes the real NSEC3 hash of the apex, allowing BoronDNS's
+closest-encloser and NXDOMAIN lookup paths to run.
 
-- `registry-nsec3`: delegation-shaped NS, glue, sampled DS, NSEC3, and optional
-  structurally valid RRSIG records.
-- `mixed`: deterministic A, AAAA, TXT, multi-record RRsets, and optional
-  structural RRSIG data.
-- `large-rrset`: a configurable number of A records at each generated owner,
-  plus optional structural RRSIG data.
+The other hashes are generated directly across the hash space. They are not
+necessarily preimages of the ordinary owner names in the zone. RRSIG RDATA is
+structurally valid load-test material, not a cryptographic signature. These
+properties are explicit in the manifest and startup log.
 
-All profiles include one apex SOA and NS RRset. NSEC3 profiles also include an
-apex NSEC3PARAM record.
+This construction avoids retaining and sorting every generated owner's hash.
+It measures denial-index construction and lookup without claiming that a
+validator would accept the resulting zone. Cryptographic interoperability tests
+must use genuinely signed zones from an independent primary.
 
-## Protocol scope
+## Resource containment
 
-The implementation serves UDP and TCP SOA, TCP AXFR, unchanged single-SOA IXFR,
-and deterministic changed IXFR. `ixfr_delta_rrsets` selects fixed RRsets whose
-old and new values are derived from the generation serial;
-`ixfr_churn_interval_ms` advances the serial;
-`ixfr_churn_start_delay_ms` leaves time for the initial AXFR; and
-`ixfr_max_generations` bounds one response before AXFR fallback. Multiple missed
-generations are emitted in RFC 1995 order without retaining zone history.
+Generator limits and server transfer limits cover different resources:
 
-The catalog SOA serial stays fixed because churn changes member contents, not
-catalog membership. BoronGen also serves an RFC 9432 version 2 catalog zone and
-its formula-derived member zones. NOTIFY, XoT, and per-member catalog transfer
-overrides remain outside its scope.
+| Boundary | Purpose |
+| --- | --- |
+| Generator configuration validation | Reject invalid names, zero counts, and arithmetic overflow before listening |
+| Connection/message bounds | Limit concurrent streaming buffers and wire frames |
+| BoronDNS transfer byte/message/resident limits | Bound the receiver's ingestion workload |
+| Separate systemd cgroups | Contain generator and server memory independently |
+| Readiness and query checks | Distinguish a published usable zone from a completed transfer or contained failure |
 
-## Resource-safety layers
+BoronDNS permits 4096 transfer messages by default, in addition to its byte and
+resident-memory limits. A large campaign explicitly raises
+`limits.max_transfer_ingest_messages` and the other allowances; it does not
+disable the protections.
 
-1. BoronGen validates configuration and checked record-count arithmetic before
-   binding.
-2. DNS messages, query frames, concurrent connections, and output buffers have
-   explicit limits.
-3. BoronDNS retains its transfer byte limit and gains a configurable transfer
-   message-count limit; neither protection is silently disabled.
-4. Large local runs use a dedicated transient systemd unit with cgroup v2
-   controls. The planned 32 GiB test uses `MemoryHigh` below `MemoryMax`,
-   enables systemd-oomd pressure handling where supported, and sets `OOMPolicy`
-   so failure remains confined to the test unit.
-5. Runs increase through calibrated steps before the 32 GiB target. A generated
-   manifest and cgroup memory-event snapshots are retained with the evidence.
+The bounded harness uses cgroup v2, systemd-oomd, memory limits, no swap, and
+`OOMPolicy=stop`. Its default server cap is 32 GiB. The large-host matrix raises
+limits per scenario after checking available resources. Begin with calibrated
+smaller runs before a capacity test.
 
-The cgroup is the final containment boundary for allocator exhaustion. It does
-not turn allocation failure inside BoronDNS into a recoverable zone-build
-error. Default readiness runs treat an OOM as failure. The harness's explicit
-`contained-oom` outcome is a negative containment test and passes only if the
-BoronDNS unit is OOM-killed while the separately bounded generator survives;
-it is never labelled as successful publication.
+An allocator failure may still terminate BoronDNS. The cgroup contains that
+failure; it does not make allocation failure a recoverable zone-build error.
+Ordinary readiness runs fail on OOM. The explicit `contained-oom` scenario passes
+only when the server is OOM-killed while the separately bounded generator
+survives.
 
-## Validation gates
+## Validation
 
-- Unit tests prove deterministic owner/RDATA generation and exact counts.
-- NSEC3 tests prove strict owner ordering, exact next-hash linkage, and wrap.
-- Message tests prove configured and DNS/TCP frame bounds.
-- Small unsigned and TSIG AXFR streams parse through BoronDNS's production
-  transfer parser.
-- Changed single- and multi-generation TSIG IXFR streams parse through the
-  production parser and produce the same snapshot as a fresh generation.
-- Small generated corpora are independently inspected with standard DNS tools.
-- BoronGen RSS remains approximately constant while transferring successively
-  larger corpora at fixed concurrency.
-- A published `registry-nsec3` corpus answers a DNSSEC NXDOMAIN probe with
-  NSEC3 authority records through the immutable zone-image semantic path.
-- A bounded BoronGun UDP probe drives the same DNSSEC NXDOMAIN path, requires
-  matching responses, and records achieved throughput and latency in the run
-  evidence. The gate also requires indexed NSEC3 publication with no fallback
-  group and matching DNSSEC-augmented query accounting. Only the loopback
-  harness client is exempted from RRL.
-- The `large-rrset` profile proves publication and transfer beyond the former
-  65,535-member implementation boundary. It separately verifies that oversized
-  ordinary query responses follow DNS message limits instead of treating the
-  section-count width as a zone-storage limit.
-- A deliberately undersized cgroup proves that allocator exhaustion remains
-  confined to BoronDNS and does not kill BoronGen or destabilize the host.
-- Differential fuzzing applies generated IXFR streams to the incremental path
-  and compares each resulting snapshot and query image with a fresh rebuild.
-- Large campaigns run under cgroup v2/systemd-oomd containment and use a second
-  physical host for request-rate measurements while churn is active.
+Unit tests cover deterministic records and counts, ordered/linked NSEC3 hashes,
+message bounds, and unsigned/TSIG transfer parsing through BoronDNS's production
+parser. Single- and multi-generation IXFR tests compare the resulting snapshot
+with the generated current zone.
 
-## BoronDNS large-transfer prerequisite
+Runtime harnesses check publication, DNSSEC NXDOMAIN responses, query accounting,
+and retained memory/cgroup evidence. Large-RRset tests cross 65,535 records while
+keeping storage support distinct from ordinary DNS message capacity. The
+`transfer_stream` fuzz target also compares incremental IXFR snapshots and
+compiled images with fresh rebuilds.
 
-BoronDNS admits 4,096 messages per AXFR/IXFR session by default. At the
-DNS-over-TCP frame limit this is only about 256 MiB of wire data. The
-`limits.max_transfer_ingest_messages` setting provides a configurable,
-validated message-count allowance alongside the existing byte allowance. The
-default remains conservative; the test configuration opts into the larger
-value explicitly.
+Hardware throughput claims need a separate client host and recorded link,
+worker, rate, and response settings. Keep results and source identities in
+dated campaign records; this document describes the design, not a performance
+guarantee.

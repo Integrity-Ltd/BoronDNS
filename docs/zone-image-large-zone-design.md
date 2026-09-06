@@ -1,15 +1,18 @@
 # ZoneImage Large-Zone Design
 
-Status: production layout decision, 2026-07-17.
+Decision and measurements: July 17, 2026. Later implementation changes are
+called out below.
 
-This note records the measurements and reasoning behind the production
-large-zone layout. Exact encoded and operational limits are specified in
-`docs/zone-image-capacity-limits.md`.
+This is the evidence behind selective widening of the compact image. Its
+benchmark numbers belong to the recorded revisions and fixtures. For current
+image, transfer, and persistence bounds, use
+[capacity limits](zone-image-capacity-limits.md); for the current update path,
+use the [data-plane reference](memory-io-data-plane-design.md).
 
 ## Decision
 
-BoronDNS uses one immutable `ZoneImage` per zone. The production layout widens
-only fields that grow with the entire image:
+The compact representation uses one immutable `ZoneImage` per zone. The July
+decision widened fields that grow with the entire image:
 
 - label, owner-name, RDATA, and wire-arena offsets are `u64`;
 - the first-record ordinal of an RRset is `u64`;
@@ -19,10 +22,14 @@ only fields that grow with the entire image:
 Query-local fields remain compact:
 
 - node, edge, RRset, relation-span, bitmap, and child-hash IDs are `u32`;
-- per-node RRset counts and per-RRset record/relation counts are `u16`; and
+- per-node RRset counts and per-RRset relation counts remain `u16`; and
 - child-hash slots use `u16` edge offsets until fanout requires `u32`.
 
-Canonical range sharding was prototyped and rejected. It would add routing,
+The RRset record count was later widened from `u16` to `u32`, and
+`BlobRange.len` is now `u64`. Those later changes are not the subject of the
+July A/B tables.
+
+Canonical range sharding of the compact image was prototyped and rejected. It would add routing,
 cross-range closest-encloser, wildcard, DNAME, delegation, glue, NSEC/NSEC3,
 AXFR/IXFR, publication, and recovery contracts to every large-zone deployment.
 The prototype source and benchmark were removed once physical-link testing
@@ -136,14 +143,22 @@ stress projections rather than claims about `.com`.
 
 The projected shape has 644 million RRsets and 4.83 billion records. Its RRset
 and node counts fit the compact `u32` ID space, while its record ordinal and
-arenas exceed `u32`; selective `u64` removes exactly those structural ceilings.
+arenas exceed `u32`; selective `u64` removes those image ceilings. The
+current full last-good checkpoint separately caps total records at
+`u32::MAX`, so this 4.83-billion-record projection does not fit today's
+durable checkpoint format.
 
 The July 2026 follow-up rejected generic compression and owner/RDATA interning,
 implemented query-neutral IN-only snapshot class-index compaction, and added
 per-arena benchmark reporting. Any future wire-body redesign must first replay
 a representative registry corpus and preserve physical-link performance; see
-`docs/zone-image-proposal-disposition-2026-07.md`. Sharding is not part of the
-planned query architecture. If a deployment cannot hold the source snapshot,
-builder workspace, and immutable generations required for reload, it needs a
-larger-memory host or a separately designed storage architecture rather than a
-transparent change to ZoneImage semantics.
+[the July proposal disposition](zone-image-proposal-disposition-2026-07.md).
+The rejected canonical-range image split is distinct from the subsequently
+implemented RRset snapshot shards and IXFR overlay publication. Overlays share
+unchanged update state while retaining a compact base; they do not partition
+DNS name semantics into independent ranges. See the
+[IXFR measurements](ixfr-scaling-2026-08.md).
+
+Reload capacity still depends on the source snapshot, builder workspace, and
+overlapping immutable generations. Sharing reduces some update costs; it
+does not remove the need to provision the full-compilation working set.

@@ -36,21 +36,21 @@ requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
 BDS-NFR-PERF-001	benchmark-report-template.md; metric-results.tsv	setup-ready	record UDP authoritative query throughput on the Reference Hardware Profile
 BDS-NFR-PERF-002	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 direct-hit UDP latency at 50 percent target throughput
 BDS-NFR-PERF-003	benchmark-report-template.md; metric-results.tsv	setup-ready	record p99 query latency at 90 percent target throughput
-BDS-NFR-PERF-004	benchmark-report-template.md; metric-results.tsv	setup-ready	record TCP throughput and latency under pipelined query load
-BDS-NFR-PERF-005	benchmark-report-template.md; metric-results.tsv	setup-ready	record AXFR ingestion throughput and publication latency
-BDS-NFR-PERF-006	benchmark-report-template.md; metric-results.tsv	setup-ready	record IXFR refresh throughput and publication latency where primary support permits it
-BDS-NFR-PERF-007	benchmark-report-template.md; metric-results.tsv	setup-ready	record DNSSEC passive-serve latency and response-size impact
-BDS-NFR-PERF-008	benchmark-report-template.md; metric-results.tsv	setup-ready	record overload behavior and recovery timing at configured limits
-BDS-NFR-RES-001	resource-results.tsv	setup-ready	record RSS/VSZ/thread/file-descriptor samples during each benchmark phase
+BDS-NFR-PERF-004	benchmark-report-template.md; metric-results.tsv	setup-ready	record AXFR ingestion throughput including validation and publication
+BDS-NFR-PERF-005	benchmark-report-template.md; metric-results.tsv	setup-ready	record process initialization time for up to 1000 zones, excluding transfer completion
+BDS-NFR-PERF-006	benchmark-report-template.md; metric-results.tsv	setup-ready	record TCP throughput with at least 32 in-flight queries per connection
+BDS-NFR-PERF-007	benchmark-report-template.md; metric-results.tsv	setup-ready	record HMAC-SHA256 verification throughput under signed NOTIFY load
+BDS-NFR-PERF-008	benchmark-report-template.md; metric-results.tsv	setup-ready	record NSEC DNSSEC-augmented query throughput with DO=1
+BDS-NFR-RES-001	resource-results.tsv	setup-ready	record published container image uncompressed size
 BDS-NFR-RES-002	resource-results.tsv	setup-ready	record measured bytes per transferred record and compare with the release target
-BDS-NFR-RES-003	resource-results.tsv	setup-ready	record idle CPU and steady-state CPU under representative traffic
+BDS-NFR-RES-003	resource-results.tsv	setup-ready	record service of 10000 zones and 10 million records with 16 GiB available memory
 BDS-NFR-RES-004	resource-results.tsv	setup-ready	record file-descriptor formula inputs, observed fd count, and OS limits
-BDS-NFR-RES-005	resource-results.tsv	setup-ready	record published OCI image size and binary size
-BDS-NFR-RES-006	resource-results.tsv	setup-ready	record capacity limit behavior and failure mode for configured resource caps
-BDS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	attach completed benchmark report to formal SRS MVP release evidence before final SRS acceptance
-BDS-VER-010	release-notes-snippet.md	setup-ready	publish completed benchmark result and evidence paths in release notes
+BDS-NFR-RES-005	resource-results.tsv	setup-ready	record that concurrent AXFR and IXFR sessions stay within the configured transfer limit
+BDS-NFR-RES-006	resource-results.tsv	setup-ready	record idle CPU over five minutes for 1000 active zones with one million records after 60 seconds without queries
+BDS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	record measured targets and accepted limitations for the public-beta milestone
+BDS-VER-010	release-notes-snippet.md	setup-ready	retain benchmark results in canonical evidence and link them from release notes where relevant
 BDS-VER-012	baseline-history-template.tsv	setup-ready	update rolling baseline and triage regressions above threshold
-BDS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
+BDS-VER-015	operator-signoff.md	setup-ready	record the release engineer and Architecture Owner review; record optional external review when available
 EOF
 
 cat >"$evidence_dir/metric-results.tsv" <<'EOF'
@@ -97,16 +97,19 @@ EOF
 cat >"$evidence_dir/benchmark-runbook.md" <<'EOF'
 # BoronDNS Benchmark Runbook
 
-1. Build the release candidate with `cargo build --locked --release`.
+1. Select the release binary to test, or build the candidate with
+   `cargo build --locked --release` and record its feature set.
 2. Record `git rev-parse HEAD`, `rustc --version`, `cargo --version`, kernel,
    CPU, memory, NIC, driver, and container runtime versions.
 3. Fill `workload-profile-template.md` before running load.
-4. Start BoronDNS with DNS, transfer, and management interfaces separated.
+4. Start BoronDNS with the reference query/management interface separation and
+   writable zone cache. Record any separate transfer interface and all deviations.
 5. Load the release zone corpus from real or fixture primaries.
 6. Record readiness, transfer, zone-state, query, latency, RCODE, and resource
    metrics before load, during each phase, and after load.
-7. Run each required throughput, latency, transfer, overload, and resource
-   phase for at least the configured minimum duration.
+7. Run each required throughput, latency, transfer, and resource phase for at
+   least the configured minimum duration. Use the requirement's own timing
+   window for initialization and idle-CPU measurements.
 8. Fill `metric-results.tsv`, `resource-results.tsv`, and
    `benchmark-report-template.md`.
 9. Update `baseline-history-template.tsv` or the release baseline store with
@@ -186,13 +189,19 @@ cat >"$evidence_dir/benchmark-report-template.md" <<EOF
 - UDP authoritative throughput
 - Direct-hit p99 latency at 50 percent capacity
 - Near-capacity p99 latency at 90 percent capacity
-- TCP query throughput and pipelined latency
 - AXFR ingestion throughput and publication latency
-- IXFR refresh throughput and publication latency, where supported
-- DNSSEC passive-serve latency and response-size impact
-- Overload behavior and recovery timing
+- Process initialization time with up to 1,000 zones
+- TCP query throughput and pipelined latency
+- HMAC-SHA256 verification throughput under signed NOTIFY load
+- NSEC DNSSEC-augmented query throughput and response-size impact
 - RSS, VSZ, threads, file descriptors, idle CPU, binary size, OCI image size,
-  bytes per transferred record, and configured resource-cap behavior
+  bytes per transferred record, zone capacity, and concurrent transfer limits
+
+## Additional Scenarios
+
+Select IXFR scaling, simultaneous query/transfer load, NSEC3, or overload/recovery
+measurements when relevant. Record their workload and evidence without assigning
+them to an unrelated SRS performance requirement.
 
 ## Regression Method
 
@@ -217,12 +226,12 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the release-candidate setup artifact for later
-release/operations execution of Reference Hardware/Profile benchmarks. It does
-not claim that production benchmarks have run. It provides the runbook, report
-template, metric/resource TSV schemas, baseline-history format, requirement
-traceability, release-note snippet, environment values, and sign-off template
-needed for later SRS acceptance.
+This release-candidate setup artifact contains the runbook and report formats
+for a Reference Hardware/Profile benchmark. Fill them with measured results;
+generation alone does not run or pass a benchmark. The TSV column names
+\`local_mvp_status\` and \`later_release_ops_action\` are retained for compatibility.
+Use the current requirements in \`docs/BoronDNS-Secondary-SRS-v1.0.0.md\` and the
+workload in \`docs/reference-verification-profile.md\` when interpreting results.
 
 Run configuration:
 

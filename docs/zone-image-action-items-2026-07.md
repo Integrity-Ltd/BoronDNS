@@ -1,13 +1,14 @@
-# ZoneImage Remaining Action-Item Report
+# ZoneImage capacity and robustness follow-up — July 2026
 
-Status: implemented and locally measured, 2026-07-18.
+Measured July 18, 2026. This is a closed historical review slice, not the
+current project task list.
 
-This report closes the follow-up items raised after the July ZoneImage proposal
-disposition. Exact encoded limits remain normative in
-`zone-image-capacity-limits.md`; the snapshot-memory follow-up is scoped in
-`zone-snapshot-narrowing-design.md`.
+The table records the fixes and deferred work from that review. Current limits
+are in [capacity limits](zone-image-capacity-limits.md); the updated
+[snapshot memory note](zone-snapshot-narrowing-design.md) accounts for the
+IXFR overlays added since this measurement.
 
-## Disposition
+## Disposition at the time
 
 | Item | Result |
 | --- | --- |
@@ -55,9 +56,9 @@ zone_image_denial_bench --records 100000 --iterations 100000 --query-cases 257
 
 The only median regression was +2.75% in NSEC compilation. Its pairwise median
 change was -2.72%, and the paired compile timings varied in both directions,
-so this is treated as host noise rather than a candidate regression. The
-measured image layout is byte-identical, exact and denial lookup medians did not
-regress, and none of the changed robustness/observability code enters the
-ZoneImage query hot path.
+so the review treated it as host noise rather than a candidate regression. The
+compared image sizes were byte-identical, and exact and denial lookup medians
+did not regress. This was evidence for that robustness/observability slice;
+subsequent image and IXFR changes have their own measurements.
 
 These are local microbenchmark results, not physical-link promotion evidence.

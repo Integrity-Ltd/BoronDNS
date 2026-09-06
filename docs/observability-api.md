@@ -1,381 +1,161 @@
-# Optional Observability API
+# Observability API
 
-Status: implemented initial optional BoronDNS observability API. The current
-implementation exposes the endpoint family below as compact JSON snapshots on
-the existing management HTTP listener when `[observability].enabled = true`.
-Host resource, time-sync, and certificate checks use bounded host-local probes;
-unavailable optional checks return explicit `unknown` or `disabled` status
-values rather than blocking.
+The optional observability API exposes read-only JSON snapshots on the existing
+management HTTP listener. Use it for node status, troubleshooting, or collectors
+that need more context than the [health probes](health-metrics-interface.md).
+It does not perform transfers, change configuration, or retain historical data.
 
-This document defines the shape for the in-process BoronDNS observability API.
-It replaces the idea of a separate on-node monitoring agent with a narrower
-product-native surface: BoronDNS exposes read-only facts about
-its own runtime, transfer state, catalog state, local resource posture, and
-serving-relevant environment checks when explicitly enabled.
+## Enable and protect it
 
-The existing [Health and Metrics Interface](health-metrics-interface.md)
-continues to own `/livez`, `/readyz`, `/healthz`, and `/metrics`. This document
-owns the proposed richer JSON inspection endpoints.
-
-## Scope
-
-The observability API is optional, in-process, and GET-only. It is intended for
-private management networks, local collectors, control-plane node-status
-ingestion, operator debugging, and external probe correlation.
-
-In scope:
-
-- current BoronDNS runtime status beyond liveness/readiness;
-- zone, catalog, transfer, NOTIFY, TSIG, DNS Cookie, RRL, DNSSEC-serving, and
-  `ZoneImage` summary facts already known by the process;
-- per-zone transfer progress and last-result state;
-- compact resource summaries similar to coarse `df -h`, process memory, process
-  CPU, open-file, and file-descriptor-limit views;
-- serving-relevant certificate expiry summaries for configured XoT/mTLS
-  material;
-- host time-synchronization status as reported by existing OS services, without
-  implementing an NTP/SNTP client in BoronDNS;
-- redacted configuration and build/runtime identity facts.
-
-Out of scope:
-
-- remediation, restart, reload, reconfiguration, or any mutating endpoint;
-- a general host-monitoring daemon;
-- log scraping as a replacement for the system journal or centralized logs;
-- implementing NTP, SNTP, or time-service probing inside BoronDNS;
-- external black-box DNS probing from Internet, zone-sync, or management
-  vantage points;
-- alert routing, de-duplication, escalation, or long-term event storage;
-- control-plane tenant/auth/RBAC/audit functions.
-
-BoronDNS remains a secondary-only authoritative data-plane backend. The
-observability API must not create a runtime administration API and must not put
-BoronDNS in charge of tenant, billing, ownership, policy, or alert workflow.
-
-## Relationship To Other Monitoring
-
-The observability API provides inside-the-process facts. It does not replace:
-
-- systemd, Kubernetes, Icinga, Prometheus scrape absence, or another supervisor
-  for detecting that the BoronDNS process is down;
-- external black-box DNS probes that verify real answers, DNSSEC chains,
-  latency, public exposure, recursion refusal, and transfer refusal from the
-  network;
-- the control plane or another management-plane service that correlates
-  expected state, node state, external probe results, tenant context, and
-  operator workflow.
-
-If BoronDNS is not running, this API cannot answer. That failure mode is
-deliberately left to existing supervisors and external collectors.
-
-## Configuration
-
-The proposed configuration uses the existing management HTTP listener selected
-by `[health]` bind precedence. The richer observability endpoints are disabled
-unless `[observability].enabled = true`.
+First configure a private management listener, then enable:
 
 ```toml
 [observability]
-# Enable richer JSON observability endpoints on the management HTTP listener.
-# Default: false.
-enabled = false
-
-# Path prefix for the JSON API. Default: "/observability/v1".
+enabled = true
 path_prefix = "/observability/v1"
-
-# Rate limit for JSON observability endpoints. Probe endpoints remain governed
-# by the existing health contract and /metrics keeps its existing rate limit.
-# Default: 60 requests per minute.
 rate_limit_per_minute = 60
-
-# Idle seconds before a per-source rate-limit bucket can be evicted.
-# Default: 300.
 rate_limit_idle_seconds = 300
-
-# Include coarse local filesystem capacity summaries for configured paths.
-# Default: true.
-include_filesystems = true
-
-# Include coarse process memory/CPU/open-file summaries.
-# Default: true.
-include_process_resources = true
-
-# Include host time-synchronization status. BoronDNS does not implement NTP/SNTP,
-# does not spawn host commands, and does not inspect supervisor-specific service
-# files. Until a portable configured source exists, this reports unknown.
-# Default: true.
-include_time_sync_status = true
-
-# Include certificate expiry summaries for configured XoT/mTLS files.
-# Default: true.
-include_certificate_status = true
-
-# Include per-zone detailed state. When false, only aggregate counts are
-# returned from collection endpoints. Default: true.
-include_zone_detail = true
-
-# Include redacted effective configuration summaries. Secrets, key material,
-# and TSIG values must never be returned. Default: true.
-include_config_summary = true
-
-# Optional static bearer token file for direct deployments that cannot place the
-# listener behind an authenticated management proxy. When set, all observability
-# endpoints require `Authorization: Bearer <token>`. The token is loaded at
-# listener startup, trimmed for surrounding ASCII whitespace, and never returned
-# by the API. The file must be non-empty and regular; on Unix it must be
-# owner-only (for example mode 0600) and its final path component cannot be a
-# symlink. Token files are capped at 8 KiB, with the same opened handle checked
-# and bounded so concurrent growth cannot bypass the ceiling. Default: unset.
-# bearer_token_file = "/etc/borondns-secondary/observability.token"
+bearer_token_file = "/etc/borondns-secondary/observability.token"
 ```
 
-Authentication is deployment-dependent. Localhost-only and private management
-network deployments may keep the listener unauthenticated, but any remotely
-reachable deployment should set `bearer_token_file` and preferably place the
-listener behind an authenticated/TLS management proxy. This API exposes
-operational metadata and is not suitable for public DNS listener addresses.
+The API is disabled by default. A token is optional, but the API exposes zone
+names and operational metadata even though it redacts secrets. Use a token and
+a TLS/authenticated proxy for remotely reachable management access. BoronDNS
+itself serves plain HTTP.
 
-## Endpoint Summary
+The token file is read at listener startup, trimmed of surrounding ASCII
+whitespace, and limited to 8 KiB. It must be non-empty and regular; on Unix it
+must have owner-only permissions and its final path component cannot be a
+symlink. Make it readable by the runtime user. Rotation requires a restart.
 
-All endpoints are `GET`. JSON responses use `Content-Type: application/json`.
-Unknown paths and wrong methods should follow the existing health-interface
-error style unless a later interface revision defines a richer error contract.
+Clients send `Authorization: Bearer <token>`. Missing or incorrect tokens
+return HTTP 401 with `WWW-Authenticate: Bearer` and an error of
+`missing_bearer_token` or `invalid_bearer_token`. The per-source rate limit is
+checked before authentication, so failed attempts also consume the budget.
 
-| Path | Purpose |
+The token protects only observability routes. It does not protect `/livez`,
+`/readyz`, `/healthz`, or `/metrics`. Keep the listener isolated as a whole.
+
+## Endpoints
+
+Paths below use the default prefix. All accept GET and return
+`Content-Type: application/json`.
+
+| Path | Current contents |
 | --- | --- |
-| `/observability/v1` | API index, enabled feature flags, endpoint links. |
-| `/observability/v1/summary` | One-page runtime, readiness, zone, transfer, catalog, and resource summary. |
-| `/observability/v1/runtime` | Process uptime, version/build labels, listener roles, worker mode, shutdown/drain state. |
-| `/observability/v1/resources` | Coarse local filesystem, memory, CPU, file-descriptor, and limit posture. |
-| `/observability/v1/time` | Host time-sync status from OS services and timestamp of last status refresh. |
-| `/observability/v1/certificates` | Expiry/status and SHA-256 fingerprint summary for configured XoT/mTLS trust/client material. |
-| `/observability/v1/zones` | Per-zone serving, serial, refresh, expire, query, and DNSSEC-serving state. |
-| `/observability/v1/zones/{zone}` | Detailed state for one configured or catalog-derived zone. |
-| `/observability/v1/catalogs` | Configured catalog zones, last transfer, member counts, caps, and reconciliation state. |
-| `/observability/v1/transfers` | Current and recent transfer sessions, primary choice, AXFR/IXFR fallback, and failures. |
-| `/observability/v1/security` | TSIG, NOTIFY, recursion-refusal, DNS Cookie, RRL, and wrong-interface exposure summaries. |
-| `/observability/v1/config` | Redacted effective configuration summary and interface role map. |
+| `/observability/v1` | Endpoint links and enabled check families. |
+| `/observability/v1/summary` | Zone/catalog counts, transfer outcomes, selected security counters, and query-image counters. |
+| `/observability/v1/runtime` | Version, commit/compiler/build labels, uptime, runtime status, and drain time remaining. |
+| `/observability/v1/resources` | Process memory/CPU ticks/file descriptors and root-filesystem capacity. |
+| `/observability/v1/time` | `unknown` when enabled: no time-sync source is currently implemented. |
+| `/observability/v1/certificates` | Configured XoT certificate metadata, expiry status, and SHA-256 fingerprints. |
+| `/observability/v1/zones` | Zone counts and, when enabled, a per-zone collection. |
+| `/observability/v1/zones/{zone}` | State, serial, SOA timers, source kind, and query count for one zone. |
+| `/observability/v1/catalogs` | Catalog settings and membership counts, including static overlaps. |
+| `/observability/v1/transfers` | Aggregate outcomes, per-zone refresh scheduling, and transfer-material counts. |
+| `/observability/v1/security` | NOTIFY, TSIG-NOTIFY, DNS Cookie, RRL, and recursion-refusal observations. |
+| `/observability/v1/config` | Observability settings, metrics detail, and zone/catalog counts. |
 
-The path prefix is configurable, but endpoint names under the prefix should be
-stable once implemented.
+These are implemented snapshots, not a complete host inventory or a full dump
+of effective configuration. In-flight transfer sessions and recent-session
+history are not retained: transfers report `active.status = "not_tracked"`.
+The security endpoint likewise reports wrong-interface observations as
+`not_tracked`; it cannot verify external firewall exposure.
 
-The current implementation wires all paths in the table. `/resources` reads
-bounded local process and filesystem snapshots. `/time` checks host time status
-from host-local status files when available. `/certificates` inspects direct
-XoT PEM files. For named secret-store profiles it reports parsed certificate
-metadata retained in the captured immutable secret generation, so filesystem
-replacement or a failed reload cannot make observability disagree with active
-transfer credentials. Disabled check families return `disabled`; unavailable
-host services return `unknown`.
+Zone lookup is case-insensitive and accepts a name with or without its trailing
+dot. An unknown zone currently returns HTTP 200 with
+`data.error = "zone_not_found"`; clients must inspect the payload rather than
+treat every 200 as a successful lookup. Unknown routes return 404, and a
+non-GET method on a known route, including HEAD, returns 405.
 
-## Response Principles
+## Response envelope
 
-Responses should be compact snapshots rather than event streams. BoronDNS does
-not retain historical transfer versions, metrics, or observability state;
-those fields are bounded in memory and reset on restart. The RFC 5936 last-good zone cache is
-separate from the observability API.
-
-Accepted management connections have fixed defensive request-read and
-response-write deadlines. A client that sends an incomplete request or stops
-reading a response is disconnected so it cannot retain one of the globally
-bounded health/observability connection slots indefinitely.
-
-Every response should include:
-
-- `schema_version`;
-- `generated_at_unix_seconds`;
-- build/runtime identity labels;
-- `metrics_detail`;
-- a top-level `data` envelope wrapping the endpoint-specific payload;
-- enough status fields for the control plane or an operator to decide whether the data is
-  fresh, partial, or disabled by configuration.
-
-Every response also reports `metrics_detail` as `full` or `reduced`. In reduced
-metrics mode, aggregate atomic counters remain available, but hot-path detail
-maps, per-zone query counters, and RCODE-derived security detail are
-intentionally reduced. JSON zone entries therefore report
-`"queries": "reduced"` and the security endpoint reports reduced RCODE detail
-instead of forcing disabled maps back onto the hot path.
-
-Secrets must be redacted. Responses must not expose:
-
-- plaintext TSIG secrets;
-- DNSSEC private keys;
-- private-key bytes or PEM contents;
-- bearer tokens;
-- full transferred zone contents;
-- customer tenant/RBAC data.
-
-Zone names, primary addresses, TSIG key names, catalog names, and operational
-metadata are still sensitive in some deployments. Operators should treat this
-API as management-plane-only even when no secret values are returned.
-
-## Summary Response Shape
-
-Example:
+Successful snapshots share this envelope:
 
 ```json
 {
   "schema_version": 1,
   "generated_at_unix_seconds": 1791133200,
   "server": {
-    "version": "X.Y.Z",
+    "version": "1.0.0",
     "status": "running",
     "uptime_seconds": 86400,
     "draining": false
   },
   "metrics_detail": "full",
-  "data": {
-    "zones": {
-      "configured_or_known": 252,
-      "active": 252,
-      "loading": 0,
-      "expired": 0,
-      "catalog_derived": 240,
-      "catalog_zones": 3
-    },
-    "catalogs": {
-      "configured": 3,
-      "members_applied": 240,
-      "members_total": 240
-    },
-    "transfers": {
-      "axfr_started": 18,
-      "axfr_succeeded": 17,
-      "axfr_failed": 1,
-      "ixfr_started": 96,
-      "ixfr_succeeded": 95,
-      "ixfr_failed": 1
-    },
-    "security": {
-      "notify_unauthorized": 0,
-      "rrl_dropped": 0,
-      "dns_cookie_badcookie": 0
-    },
-    "zone_image": {
-      "serve_hits": 1048576,
-      "direct_hits": 1040000,
-      "semantic_hits": 8576,
-      "serve_failures": 0
-    }
-  }
+  "data": {}
 }
 ```
 
-Every response is wrapped in the envelope shown above: `server.status` is one of
-`running`, `draining`, or `unhealthy`, and `server.version` reflects the running
-binary's version (derived from `CARGO_PKG_VERSION`), so the literal value varies
-by build. The endpoint-specific payload always lives under the top-level `data`
-key.
+The version comes from the running binary. Status is `running`, `draining`,
+or `unhealthy`. Endpoint-specific fields appear under `data`. The generation
+timestamp records when the response was assembled; it does not assert that
+all observed state changed at that instant.
 
-The resources endpoint is intentionally coarse. The current implementation reads
-`/proc/self/status`, `/proc/self/stat`, `/proc/self/fd`, `/proc/self/limits`,
-and `statvfs("/")` through the audited OS-adapter module for a small process
-and filesystem view. It should not grow into full host inventory.
+`metrics_detail` is `full`, `reduced`, or `off`, following
+`metrics.hot_path_detail`. In reduced/off mode, per-zone query counts and
+RCODE-derived details may be the string `"reduced"`, not numeric zero.
+Coarse hot-path counters are incomplete in off mode. Collectors must handle
+these types and avoid interpreting disabled instrumentation as idle traffic.
 
-## Zone And Transfer State
+A zone payload contains `zone`, `source` (`configured`, `catalog_derived`,
+or `catalog_zone`), `state` (`loading`, `active`, or `expired`),
+`serial`, `soa_refresh_seconds`, `soa_retry_seconds`,
+`soa_expire_seconds`, and `queries`. Refresh timestamps and
+`failures_since_success` are reported by the transfer scheduler view.
 
-The zone endpoints should expose data-plane-native state that is already
-tracked by BoronDNS:
+## Optional detail and its cost
 
-- zone apex and source kind: static, catalog-derived, or catalog zone;
-- serving state: active, loading, expired, withdrawn, draining;
-- current served SOA serial where known;
-- last successful transfer time and transfer kind;
-- next refresh time and SOA expire horizon;
-- selected primary and fallback order, redacted where policy requires;
-- last transfer failure code and short reason;
-- IXFR unsupported/cooldown state and AXFR fallback counters;
-- minimum remaining RRSIG validity if the zone is signed and the computation is
-  cheap from served records;
-- query counters already available through metrics, summarized for JSON users.
+These settings default to `true`:
 
-The current transfer endpoint exposes AXFR/IXFR aggregate counters, scheduler
-state, and configured transfer-material counts. In-flight session detail and
-recent session history are not retained yet; the endpoint reports this as
-`active.status = "not_tracked"` instead of inventing state. The control plane or
-another collector owns durable history if needed.
+| Setting | Effect |
+| --- | --- |
+| `include_filesystems` | Root-filesystem capacity and descriptor-limit information. |
+| `include_process_resources` | Process memory, CPU ticks, thread and open-descriptor counts. |
+| `include_time_sync_status` | Return the time check, currently `unknown`. |
+| `include_certificate_status` | Inspect configured XoT certificate material. |
+| `include_zone_detail` | Include per-zone entries in the `/zones` collection. |
+| `include_config_summary` | Include the limited `/config` summary. |
 
-## Catalog State
+Disabled resource/time/certificate/config families report `disabled`.
+Unavailable resource data can be `unknown` or `partial`. The filesystem view
+currently measures `/` through `statvfs`; it does not enumerate the cache,
+credential mounts, or every configured filesystem. Process data comes from
+`/proc/self/status`, `stat`, `fd`, and `limits`; CPU values are cumulative
+ticks, not a sampled utilization percentage.
 
-Catalog observability should expose:
+Disabling `include_zone_detail` suppresses the `/zones` collection entries
+but does not disable the single-zone route, catalog membership view, or
+per-zone transfer scheduler view. It is a collection-cost setting, not an
+access-control boundary.
 
-- configured catalog zones;
-- last successful catalog transfer serial/time;
-- parsed RFC 9432 version;
-- member count parsed from the transferred catalog;
-- member count applied after caps and static-zone precedence;
-- dropped members with bounded reason counts;
-- whether `serve_catalog_zone` is enabled;
-- whether optional member-transfer metadata extensions were observed.
+Direct XoT certificate status inspects configured PEM files. Named secret-store
+profiles use certificate metadata from the active immutable secret generation,
+so a failed reload or replacement file cannot misrepresent the active profile.
+The time endpoint does not read time-service status files, spawn commands,
+or implement NTP/SNTP. Monitor clock synchronization through host monitoring.
 
-This supports control-plane catalog correlation without making BoronDNS an
-administrative catalog editor.
+Zone collections and scheduler views scale with the number of known zones.
+Scrape at a deliberate interval, avoid repeated full collections for large
+estates, and measure their cost before using them for frequent polling.
+Resource and certificate work is dispatched off the async worker; all routes
+share the management connection limit and five-second request/write deadlines.
+There is no guarantee that arbitrary inspection load has zero cost.
 
-## Security And Exposure State
+Over-limit requests return HTTP 429, a `Retry-After` header, and the same
+`rate_limited` JSON shape as the metrics endpoint. Rates are keyed by source IP,
+so collectors behind one proxy share its budget.
 
-The security endpoint should report only observations BoronDNS can make from
-its own runtime:
+## Monitoring responsibilities
 
-- recursion-refusal behavior for the authoritative server configuration;
-- TSIG verification counters by outcome, without key material;
-- unauthorized or TSIG-failed NOTIFY counters;
-- transfer ACL/source rejection counts where tracked by existing metrics;
-- DNS Cookie policy and outcome counters;
-- RRL policy and limited/drop/slip counters;
-- listener/interface role map and whether management endpoints are bound only
-  to management/local addresses when that state is tracked.
+The API never returns TSIG secrets, private-key bytes, PEM contents, bearer
+tokens, or complete zone contents. Zone names, key names, primary-related
+metadata, and certificate identity can still be sensitive.
 
-External facts such as "hidden primary is unreachable from the Internet" or
-"public secondaries answer correctly from multiple regions" belong to external
-black-box probes, not this API.
+Use external DNS probes for answer correctness and reachability, a supervisor
+for process death, host monitoring for clocks and disks, and an external
+collector for history and alerting. This API supplies the process's view; it
+cannot answer when the process is down.
 
-## Time And Certificate Checks
-
-Clock correctness matters for TSIG and DNSSEC signature validity, but BoronDNS
-does not implement its own NTP/SNTP protocol client and does not spawn host
-commands or inspect supervisor-specific service files. Until a portable,
-explicitly configured status source exists, the endpoint returns `unknown`, not
-`ok`.
-
-Certificate status should be limited to configured files BoronDNS already uses,
-such as XoT trust anchors and client certificates. The response should expose
-subject/issuer names and not-before/not-after timestamps, not PEM bytes.
-
-## Non-Interference Requirements
-
-The observability API must be designed so that inspection cannot degrade DNS
-serving:
-
-- all endpoints are read-only;
-- expensive endpoints are rate-limited;
-- scrape-time zone walking is bounded or disabled by configuration;
-- responses are produced from snapshots or cached summaries where practical;
-- no endpoint performs outbound DNS transfers or external network checks as a
-  side effect;
-- resource checks must use small, bounded OS reads;
-- unavailable optional checks return `disabled` or `unknown` rather than
-  blocking.
-
-## Fit With The Control Plane
-
-The control plane should consume this API as one input to its monitoring and
-assurance model. The control plane remains the owner of:
-
-- expected zone state;
-- tenant/customer context;
-- node inventory and provisioning metadata;
-- persistent audit/event history;
-- operator-visible alert state;
-- retry/pause/resume workflows;
-- correlation with external probes.
-
-The intended data flow is:
-
-1. The control plane publishes configuration/catalog state.
-2. BoronDNS serves as a secondary and exposes read-only observability facts.
-3. External probes verify black-box behavior.
-4. The control plane correlates expected state, BoronDNS facts, and probe results.
-
-This keeps BoronDNS small enough to remain a data-plane component while giving
-the control plane better material than generic process metrics alone.
+Implementation: [HTTP handlers](../crates/borondns-server/src/health_metrics.rs)
+and [resource/certificate readers](../crates/borondns-server/src/observability.rs).

@@ -1,15 +1,17 @@
 # RR Type Catalogue Implementation Notes
 
-Status: implementation-supporting companion to SRS section 4.14.
+BoronDNS handles some RR types by their wire format and carries other types as
+opaque data. The table below describes that distinction: a type omitted from
+the table can still be transferred and served. The requirements are in
+[SRS section 4.14](BoronDNS-Secondary-SRS-v1.0.0.md), starting at `BDS-FR-RR-001`.
 
-The normative RR type requirement is `BDS-FR-RR-001` in
-`docs/BoronDNS-Secondary-SRS-v1.0.0.md`. This document records how the current
-code owns that catalogue so review-driven MVP trim suggestions do not silently
-remove behavior that is already implemented and tested.
+Format checks do not imply application-level validation. For example, BoronDNS
+preserves DNSSEC keys and signatures without verifying their cryptography, and
+serves TLSA data without performing DANE validation.
 
 ## Ownership
 
-| Concern | Current owner |
+| Concern | Source |
 | --- | --- |
 | Known RR type numeric constants | `crates/borondns-core/src/dns.rs` `RecordType` |
 | AXFR/IXFR transfer RDATA normalization | `crates/borondns-core/src/axfr.rs` `normalize_transfer_rdata` |
@@ -20,9 +22,7 @@ remove behavior that is already implemented and tested.
 
 ## Current Known-Type Set
 
-The current type-aware set is:
-
-| RR type | Code | Current code-aligned behavior |
+| RR type | Code | Handling |
 | --- | ---: | --- |
 | A | 1 | Validates fixed 4-octet RDATA. |
 | NS | 2 | Normalizes compressed transfer RDATA names and may compress names when serving. |
@@ -58,12 +58,10 @@ RDATA layout, and semantically duplicate resource records are collapsed before
 RRset construction. Received TTL values with bit 31 set are treated as zero per
 RFC 2181 section 8.
 
-Types not listed in SRS section 4.14 are handled under `BDS-FR-URR-001` through
-`BDS-FR-URR-009`, not as missing implementation. Current examples intentionally
-remaining unknown include LOC, SSHFP, IPSECKEY, OPENPGPKEY, CSYNC, ZONEMD,
+Types outside the format-specific set use the opaque handling defined by
+`BDS-FR-URR-001` through `BDS-FR-URR-009`. Examples include LOC, SSHFP,
+IPSECKEY, OPENPGPKEY, CSYNC, ZONEMD,
 SMIMEA, CDS, CDNSKEY, CAA, HIP, and SPF type 99.
-
-This is a code-aligned scope boundary:
 
 - Unknown transfer RDATA is stored and served bit-for-bit.
 - Unknown RDATA is not interpreted as compressed names.
@@ -74,9 +72,7 @@ This is a code-aligned scope boundary:
   requires code, SRS section 4.14, this document, and traceability updates in
   the same patch.
 
-## Evidence Pointers
-
-Current short evidence includes:
+## Tests and maintenance
 
 - `crates/borondns-core/src/axfr.rs` unit tests for transfer normalization,
   prohibited transfer content, known-type validation, DNSSEC algorithm opacity,
@@ -89,6 +85,6 @@ Current short evidence includes:
 - `scripts/interop-bind-packet-torture-docker.sh` for broad packet comparison
   against BIND, including known catalogue types and intentionally unknown CAA.
 
-Release acceptance still needs retained per-type packet artifacts where
-`docs/appendix-a-traceability-matrix.md` marks `BDS-FR-RR-001..BDS-FR-RR-007`
-as partial.
+For retained evidence by requirement, use the
+[traceability matrix](appendix-a-traceability-matrix.md). Keep code, this
+catalogue, and the SRS aligned when adding format-specific behavior.

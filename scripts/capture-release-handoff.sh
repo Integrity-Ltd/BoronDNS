@@ -22,20 +22,21 @@ EOF
 cat >"$evidence_dir/evidence-attachment-map.tsv" <<'EOF'
 requirement_id	evidence_category	setup_artifact	completed_release_artifact	required_release_note_section	local_mvp_status	later_release_ops_action
 BDS-VER-008	1.0 public-beta acceptance gate	release-readiness-checklist.md	completed release checklist and optional external operator review	Verification Responsibility Sign-off	setup-ready	complete every required gate row before claiming public-beta acceptance
-BDS-VER-010	release publication	release-notes-fill-plan.md	completed release notes checked by scripts/check-release-notes.sh	all release-note sections	setup-ready	publish evidence pointers and requirement outcomes
+BDS-VER-010	release publication	release-notes-fill-plan.md	concise public release notes and retained canonical evidence	all release-note sections	setup-ready	identify version, artifacts, support posture, material limitations, and verification instructions; detailed dossier checking is optional
 BDS-VER-011	cadence governance	scheduled-ci-plan.md	CI/scheduler run logs or release engineer manual run record	Release/Operations Handoff	setup-ready	record continuous, periodic, and gate execution ownership
 BDS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table and perf/resource comparison output	Regression Delta	setup-ready	triage every functional or performance/resource regression
 BDS-VER-013	interop version retention	evidence-attachment-map.tsv	interop-primary-versions/INDEX.tsv and referenced primary-version files	Interop Primary Versions	setup-ready	attach every retained real-primary version artifact
-BDS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC compliance table with release evidence pointers	RFC Compliance Assertions	setup-ready	copy and update docs/rfc-compliance-assertions.md posture
+BDS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	canonical RFC compliance register with release evidence pointers	RFC Compliance Assertions	setup-ready	review docs/rfc-compliance-assertions.md and link to its current assertions
 BDS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed required project responsibility rows and any optional external review	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
 BDS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed interface baseline diff and release-note change classification	Interface Changes	setup-ready	compare current interface baseline against previous accepted release and classify additions deprecations and breaking changes
-BDS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
-BDS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
+BDS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed two-build binary comparison and artifact digest manifest	Maintainability Measurements	setup-ready	retain the workflow comparison; independent-builder and archive/image claims require additional evidence
+BDS-NFR-MAINT-008	release signing	signing-runbook.md	signed checksum manifest and verification output	Security and Dependency Review	setup-ready	verify the signed tag, Sigstore manifest signature, and public artifact checksums
 BDS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
 PROJECT-DECISIONS	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending project-decision item before claiming formal SRS acceptance
 EOF
 
 python3 - "$repo_root/docs/project-decision-register.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -59,7 +60,8 @@ for line in section.splitlines():
     if cells[0] == "Item" or set(cells[0]) <= {"-"}:
         continue
     decision = cells[3]
-    if decision == "Pending":
+    status_text = re.sub(r"[*_`]", "", decision).strip()
+    if re.match(r"^Pending(?:\s|:|$)", status_text, re.IGNORECASE):
         action = "release review must resolve or explicitly defer with owner and target release"
     else:
         action = "confirm implementation and evidence remain aligned with recorded decision"
@@ -87,15 +89,19 @@ EOF
 cat >"$evidence_dir/scheduled-ci-plan.md" <<'EOF'
 # BoronDNS Scheduled CI and Manual Release Run Plan
 
-This is the release-candidate handoff for BDS-VER-011. It is not proof that hosted CI or
-scheduled jobs have run.
+Use this BDS-VER-011 plan to record selected runs and their owners. Generation
+does not run checks or establish a passing result.
 
 ## Continuous
 
-- Owner: CI, or release engineer until hosted CI exists.
+- Owner: maintainers through the local/SSH gate; CI where configured.
 - Required command: `./scripts/check.sh`
 - Required retained evidence: release snapshot `logs/check-sh.log`
 - Blocking rule: any non-zero exit blocks merge/release candidacy.
+
+The hosted workflow exists for v-prefixed tags and manual dispatch. It verifies
+source provenance, builds/tests packages, signs, and publishes. It does not run
+`scripts/check.sh`; retain that gate's result before tagging.
 
 ## Periodic
 
@@ -104,26 +110,28 @@ scheduled jobs have run.
   - `scripts/fuzz-campaign.sh --duration 86400`
   - Reference Hardware/Profile benchmark execution using `benchmark-handoff/`
   - extended-runtime resource summaries at the cadence declared for the run
-- Monthly:
+- Monthly during an active release-acceptance cycle:
   - BIND, NSD, and Knot interoperability/differential comparison refresh.
 - Required retained evidence:
   - fuzz `campaign-summary.tsv`
   - completed benchmark report and metric/resource TSVs
-  - soak weekly summaries and final report
+  - resource summaries for the declared run duration
   - interop primary-version artifacts
 
 ## Gate
 
 - Owner: release engineer.
-- Required command: `scripts/release-evidence-snapshot.sh`
-- Optional gate environment:
+- Local quality gate and clean-container packaging rehearsal run before tagging.
+- Use `scripts/release-evidence-snapshot.sh` when collecting the broad evidence profile.
+- Select additional snapshot work with:
   - `BORONDNS_EVIDENCE_RUN_INTEROP=1`
   - `BORONDNS_EVIDENCE_RUN_FUZZ=1`
   - `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`
-  - `BORONDNS_RELEASE_NOTES=<completed release notes>`
-- Blocking rule: skipped long-running or external-operator evidence may be
-  delegated only when release notes record owner, rationale, and evidence
-  attachment path; skipped evidence is not passing SRS acceptance evidence.
+  - `BORONDNS_RELEASE_NOTES=<completed optional evidence dossier>`
+- Record a result for every check required by the release claim. Record deferrals
+  and their effect on acceptance; skipped evidence is not a pass. External
+  operator review is optional supporting evidence. BDS-VER-008 public-beta
+  acceptance is separate from full SRS target acceptance.
 EOF
 
 cat >"$evidence_dir/signing-runbook.md" <<'EOF'
@@ -131,38 +139,41 @@ cat >"$evidence_dir/signing-runbook.md" <<'EOF'
 
 This is the release-candidate handoff for BDS-NFR-MAINT-008. It does not sign artifacts.
 
-## Preferred Sigstore/Cosign Path
+## Official Release Path
 
-1. Build release artifacts with `cargo build --locked --release` or the release
-   packaging workflow.
-2. Record artifact names, SHA256 digests, commit, Rust version, and build
-   profile in the release artifact manifest.
-3. Sign each public/MVP artifact with Cosign keyless signing.
-4. Retain the Cosign signature and transparency-log bundle with the release
-   evidence.
-5. Add `cosign verify-blob` instructions to release notes or the artifact
-   manifest, including expected certificate identity and OIDC issuer.
+1. Retain the candidate's local quality-gate result and complete
+   `scripts/release-preflight-container.sh` from the clean commit.
+2. Create an annotated `v*` tag signed by the repository-trusted maintainer key.
+3. The tag workflow rebuilds and checks packages, authenticates its handoff, and
+   keylessly signs `release-handoff.sha256` with Cosign. It publishes that
+   manifest, its Sigstore bundle, and the files covered by its checksums.
+4. Verify the manifest signature against the exact tag workflow identity and
+   GitHub OIDC issuer, then check each downloaded artifact's digest.
+5. Retain verification output and include the verification command in public notes.
 
-## OpenPGP Fallback
-
-Use detached OpenPGP signatures only when Cosign cannot be used for the target
-distribution channel. The release notes must include the public key or
-fingerprint location and a detached-signature verification command.
+See `docs/release-evidence-guide.md` for exact commands. The personal OpenPGP
+key authorizes the source tag; Sigstore authenticates the generated checksum
+manifest. The current workflow does not implement detached OpenPGP artifact
+signing as an automatic fallback.
 
 ## Internal Unsigned Builds
 
-An unsigned build must be labelled `unsigned/internal` and must not be treated
-as an MVP or public release artifact.
+Label an unsigned diagnostic build `unsigned/internal`; it is not an official
+public release artifact.
 EOF
 
 cat >"$evidence_dir/release-notes-fill-plan.md" <<'EOF'
 # BoronDNS Release Notes Fill Plan
 
-Use `docs/release-notes-template.md` as the source structure. Before running
-`scripts/check-release-notes.sh`, replace every placeholder and attach evidence
-from the release snapshot.
+Public notes identify version, artifacts, support posture, material limitations,
+interface changes, and artifact-verification instructions. The tag workflow
+generates concise publication notes and does not invoke the dossier checker.
 
-Required evidence pointer sources:
+Use `docs/release-notes-template.md` when a consolidated, detailed evidence
+dossier is useful. For that optional format, replace placeholders before running
+`scripts/check-release-notes.sh`. Public notes may link to canonical evidence.
+
+Evidence sources, when collected for the release:
 
 - `git-status.txt`, `git-log.txt`, and `logs/tool-versions.log`
 - `logs/check-sh.log`
@@ -181,7 +192,7 @@ Required evidence pointer sources:
 - `interop-primary-versions/INDEX.tsv`
 - `release-handoff/`
 
-The release notes gate rejects `TBD` placeholders and, when a snapshot is
+The optional dossier checker rejects `TBD` placeholders and, when a snapshot is
 provided, requires every retained interop primary-version artifact listed in
 `interop-primary-versions/INDEX.tsv` to be referenced. The Security and
 Dependency Review section must also summarize the
@@ -216,32 +227,31 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 # BoronDNS Release Readiness Checklist
 
 - [ ] `./scripts/check.sh` passed on the release candidate commit.
-- [ ] `scripts/release-evidence-snapshot.sh` captured the candidate evidence.
-- [ ] Release notes contain no placeholders and pass `scripts/check-release-notes.sh`.
+- [ ] Selected evidence retained through a snapshot, focused logs, or workflow artifacts.
+- [ ] Public notes identify version, artifacts, support posture, material limitations,
+      interface changes, and verification instructions.
+- [ ] If a detailed dossier is supplied, it passes `scripts/check-release-notes.sh`.
 - [ ] Dependency audit and source/license checks reviewed.
-- [ ] First-party Rust source line count and coverage measurements recorded in
-      release notes.
+- [ ] Required source audit and coverage measurements retained in canonical evidence.
 - [ ] Interface compatibility evidence attached and release notes classify
       additions, deprecations, and breaking changes.
-- [ ] Reproducible-build handoff attached, or completed independent
-      bit-identical build comparison and artifact manifest attached.
-- [ ] Reproducible-build handoff is not treated as completed
-      BDS-NFR-MAINT-005 evidence unless the independent comparison is filled.
+- [ ] Current-commit two-build binary comparison and packaged-byte verification retained.
+- [ ] Any additional independent-builder or archive/image reproducibility claim
+      has its own completed evidence; a handoff template does not establish it.
 - [ ] Safe-Rust audit, transitive unsafe enumeration, scanner caveats, and
       unsafe exception review attached.
 - [ ] Security policy reviewed for this release candidate.
 - [ ] Interop primary versions attached for all real-primary evidence used.
-- [ ] Long-running fuzz evidence completed or delegated with owner and path.
-- [ ] Reference Hardware/Profile benchmark evidence completed or delegated with
-      owner and path.
-- [ ] Several independent 24-hour fuzz/resource rounds and any selected
-      extended-runtime evidence completed or delegated with owner and path.
+- [ ] Fuzz, interoperability, performance, and extended-runtime results selected
+      for changed risks are complete, or deferrals state their effect on acceptance.
+- [ ] Any quantitative Reference Hardware/Profile claim has matching measurements;
+      public-beta limitations are distinct from full SRS target acceptance.
 - [ ] Regression delta reviewed and triaged.
-- [ ] RFC compliance assertions copied and updated with release evidence paths.
+- [ ] Canonical RFC compliance assertions reviewed and linked to current evidence.
 - [ ] Appendix C.5 pending decisions resolved or explicitly deferred with owner
       and target release.
-- [ ] Public/MVP artifacts signed, or internal builds labelled unsigned/internal.
-- [ ] External operator acceptance recorded for formal SRS acceptance.
+- [ ] Public release tag, checksum-manifest signature, and artifact digests verified.
+- [ ] Optional external review recorded if available, with reviewed scope and conclusions.
 - [ ] Architecture Owner sign-off recorded.
 - [ ] Release engineer sign-off recorded.
 EOF

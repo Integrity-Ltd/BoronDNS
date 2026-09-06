@@ -5,7 +5,7 @@ vulnerability-intake policy, not a support contract or service-level agreement.
 
 ## Release status
 
-BoronDNS 1.x is intended to begin as public-beta software for evaluation,
+BoronDNS 1.x is public-beta software for evaluation,
 interoperability testing, and early operational use. Operators should assess
 each release and its documented limitations for their own environment.
 

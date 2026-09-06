@@ -1,171 +1,112 @@
-# Manual BIND Interop Smoke
+# Real-primary interoperability checks
 
-This runbook is the shortest human-operated check that BoronDNS can load a
-zone from a real BIND primary and serve it over UDP and TCP. It complements
-`cargo test --workspace`: the point is to exercise a real primary server and
-the operator-facing commands, not only in-process tests.
+These scripts check BoronDNS against a running primary: initial AXFR, NOTIFY,
+catalog membership, and transfers over TLS. Start with the BIND AXFR smoke;
+choose the later checks for the path you changed. They are functional checks,
+not throughput or long-running stability measurements.
 
-## Scope
+Run them from the repository root on a test host. They build the local debug
+BoronDNS binary and start temporary services. Most scripts report missing
+prerequisites as `skipping ...` with exit status zero, so require the explicit
+success message and retained artifacts before recording a pass.
 
-The smoke run verifies:
+## BIND AXFR smoke
 
-- BIND answers SOA and AXFR for the fixture zone.
-- BoronDNS starts with a generated config and reaches `/readyz`.
-- BoronDNS serves transferred `A`, `CNAME`, and TCP `SOA` answers.
-- BoronDNS metrics expose the active transferred zone and AXFR counters.
-- The retained artifact directory records BIND version, generated configs,
-  logs, query outputs, metrics, and AXFR traceability.
-
-This is not a full SRS release acceptance run. It does not replace long fuzz,
-soak, Reference Hardware/Profile performance, third-party security audit, or
-external operator acceptance.
-
-## Containerized BIND Primary
-
-Prerequisites:
-
-```bash
-docker --version
-dig -v
-cargo --version
-curl --version
-python3 --version
-```
-
-Run:
+The Docker variant needs a working Docker daemon, `dig`, `curl`, `python3`, and
+`cargo`. It runs BIND 9 in an Alpine container, loads the fixture zone, and
+starts BoronDNS on loopback.
 
 ```bash
 BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
   scripts/interop-bind-axfr-docker.sh
 ```
 
-The script starts BIND 9 inside an Alpine container and runs the local
-debug-build BoronDNS binary on loopback. This is intentionally easy to run from
-a developer checkout while still using a real primary implementation.
-
-Expected final line:
+It checks BIND SOA/AXFR, waits for BoronDNS `/readyz`, checks transferred `A`
+and `CNAME` answers plus TCP `SOA`, and verifies active-zone and AXFR metrics.
+The final line must be:
 
 ```text
 BIND Docker AXFR interop passed
 ```
 
-Useful retained files:
+The artifact directory contains:
 
-- `primary-version.txt`: BIND image/package/version details.
-- `named.conf` and `alpha.test.zone`: primary configuration and fixture.
-- `borondns.toml`: generated BoronDNS configuration.
-- `primary-soa.out` and `primary-axfr.out`: direct BIND checks.
-- `answer-a.out`, `answer-cname.out`, `tcp-soa.out`: BoronDNS query checks.
-- `metrics.txt`: management endpoint output after transfer and queries.
-- `axfr-traceability.tsv`: AXFR requirement evidence map.
+| Files | Purpose |
+| --- | --- |
+| `primary-version.txt` | BIND image, package, and version |
+| `named.conf`, `alpha.test.zone`, `borondns.toml` | Reproduction inputs |
+| `primary-soa.out`, `primary-axfr.out` | Direct checks against BIND |
+| `answer-a.out`, `answer-cname.out`, `tcp-soa.out` | Answers served by BoronDNS |
+| `metrics.txt`, logs | Transfer and runtime observations |
+| `axfr-traceability.tsv` | Mapping to AXFR requirements |
 
-## Host-Installed BIND Variant
-
-If BIND is installed directly on the host, this equivalent script avoids
-Docker:
+For host-installed BIND, use the equivalent script:
 
 ```bash
 BORONDNS_BIND_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-host-axfr \
   scripts/interop-bind-axfr.sh
 ```
 
-The host variant requires `named`, `named-checkconf`, `named-checkzone`, `dig`,
-`curl`, `python3`, and `cargo`.
+It needs `named`, `named-checkconf`, and `named-checkzone` in addition to
+`dig`, `curl`, `python3`, and `cargo`; Docker is not required.
 
-## NOTIFY Refresh Check
+## NOTIFY refresh
 
-After the AXFR smoke passes, use the BIND NOTIFY refresh script to check a
-real-primary update path:
+With host-installed BIND and `rndc`:
 
 ```bash
 BORONDNS_BIND_NOTIFY_ARTIFACT_DIR=target/evidence/manual-bind-notify \
   scripts/interop-bind-notify-refresh.sh
 ```
 
-This script requires host-installed BIND and `rndc`. It starts BoronDNS before
-BIND, observes BIND-generated NOTIFY through a small UDP proxy, triggers a zone
-serial/data update, and confirms BoronDNS refreshes the served answer and
-metrics.
+The script starts BoronDNS before BIND, observes BIND's NOTIFY through a UDP
+proxy, changes the zone serial and data, and checks that BoronDNS refreshes
+its answers and metrics.
 
-## Catalog Zone Live Check
-
-Use the BIND catalog-zone Docker script to check the RFC 9432 catalog path with
-BoronDNS running throughout the test:
+## Live BIND catalog membership
 
 ```bash
 BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-catalog \
   scripts/interop-bind-catalog-zone-docker.sh
 ```
 
-The script starts BIND in Docker with `catalog.example.` and `member.example.`
-as ordinary authoritative zones, restricts AXFR to TSIG, starts BoronDNS with
-only `[[catalog_zones]]`, verifies the catalog is not query-visible with
-`serve_catalog_zone = false`, then edits and reloads the BIND catalog zone while
-BoronDNS keeps running. It confirms that adding a member PTR makes BoronDNS
-transfer and serve `member.example.`, and that removing the PTR makes BoronDNS
-stop serving that catalog-managed member.
+BIND serves `catalog.example.` and `member.example.` with TSIG-restricted
+AXFR. BoronDNS starts with only `[[catalog_zones]]`. The script adds and removes
+a member PTR while BoronDNS keeps running, checking that the member becomes
+queryable and then stops being served. It also checks that
+`serve_catalog_zone = false` hides the catalog itself.
 
-For the v0.9 BIND XoT matrix row, run the XoT variant:
+For the same path over XoT (zone transfer over TLS):
 
 ```bash
 BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-xot-catalog \
   scripts/interop-bind-xot-catalog-zone-docker.sh
 ```
 
-This script starts BIND with an XoT listener, generated local CA/server
-certificate, ALPN `dot`, and TSIG-restricted catalog/member transfers. It proves
-plain TCP transfer is denied, signed XoT catalog transfer succeeds, BoronDNS
-consumes the catalog over XoT+TSIG, and live catalog add/remove updates are
-reconciled while BoronDNS remains running.
+This variant generates a local CA and server certificate, uses ALPN `dot`,
+and checks that plain TCP transfer is denied while XoT+TSIG transfer and live
+catalog reconciliation succeed. It can skip when the packaged BIND lacks the
+required XoT support; check its final message.
 
 ## PowerDNS PostgreSQL Catalog Check
 
-The production-shape catalog check uses PowerDNS Authoritative with the gpgsql
-backend and a PostgreSQL container:
+This supplemental check uses PowerDNS Authoritative with the `gpgsql` backend
+and a PostgreSQL container:
 
 ```bash
 BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR=target/evidence/manual-powerdns-catalog \
   scripts/interop-powerdns-postgres-catalog-tsig-docker.sh
 ```
 
-This script creates a PowerDNS RFC 9432 producer catalog with `pdnsutil`, keeps
-zone data in PostgreSQL, enables TSIG-only AXFR for both the catalog and member
-zone, starts BoronDNS with only `[[catalog_zones]]`, and then changes the
-PowerDNS catalog assignment live. It verifies unsigned catalog AXFR is denied,
-TSIG-signed catalog transfer succeeds, catalog queries stay hidden, member add
-starts serving, an in-place PowerDNS member-zone record update refreshes into
-BoronDNS, and member removal stops serving while BoronDNS remains running.
+The script creates an RFC 9432 producer catalog with `pdnsutil` and requires
+TSIG for catalog and member AXFR. It checks unsigned-transfer rejection,
+signed transfer, hidden catalog queries, live member addition/removal, and
+refresh of an updated member record while BoronDNS remains running.
 
-## RRL And Source-IP Rotation
+## Related checks
 
-Docker is sufficient for the AXFR and basic query smoke above. It is not the
-right environment for the large source-IP rotation needed by RRL scale tests.
-For those tests use a VM or bare-metal host with a dedicated test source range:
-
-```bash
-sudo ip link add dummy0 type dummy
-sudo ip link set dummy0 up
-sudo ip addr add 10.0.0.1/8 dev dummy0
-sudo sysctl -w net.ipv4.ip_nonlocal_bind=1
-sudo sysctl -w net.ipv4.conf.all.rp_filter=0
-```
-
-The project currently keeps the short RRL harness in
-`scripts/interop-rrl-udp.sh` and the release-campaign handoff in
-`scripts/rrl-evidence-campaign.sh`. A larger source-IP rotating harness is not
-part of the Engineering MVP evidence boundary. If it is promoted for release
-acceptance, it should cover IPv4 and IPv6 and define its own artifact format.
-
-## Additional Harness Candidates
-
-Any broader harness layer should live outside the main server crates instead of
-adding more ad-hoc shell around runtime code. Candidate pieces are:
-
-- deterministic zone-profile generation, including DNSSEC and reverse zones;
-- BIND 9.20 LTS lifecycle helpers for AXFR, IXFR, NOTIFY, and TSIG;
-- functional tests using an independent DNS protocol implementation;
-- source-IP rotating UDP/TCP load generation for RRL;
-- wrappers for `dnsperf` and `kxdpgun` on the later performance lab.
-
-Keep that larger harness out of the Engineering MVP claim unless it has its own
-artifact formats, ownership, and runtime profile.
+See the [evidence command catalog](evidence-command-catalog.md) for the full
+primary-server matrix and artifact settings. The short RRL check is
+`scripts/interop-rrl-udp.sh`; `scripts/rrl-evidence-campaign.sh` collects its
+campaign evidence. Source-IP rotation at scale needs a dedicated network test
+setup and is not established by the Docker AXFR checks above.

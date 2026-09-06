@@ -1,14 +1,21 @@
 # Evidence Command Catalog
 
-This file lists command entry points used by the release-candidate preflight and
-later SRS acceptance evidence flows. It is command inventory only; current
-evidence state and remaining gaps stay in `docs/release-acceptance-gap-register.md`,
-`docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`.
+Use this inventory to select a preflight or capture additional acceptance
+evidence. It records commands, not results; see the
+[verification ledger](verification-ledger.md) and
+[gap register](release-acceptance-gap-register.md) for evidence status.
 
 `scripts/release-evidence-snapshot.sh` copies all shell blocks below into its
 snapshot manifest. When `BORONDNS_EVIDENCE_RUN_INTEROP=1` is set, it executes
-only the commands in the broader SRS acceptance block, skipping recursive
-snapshot commands.
+the `scripts/` and `./` commands in the broader acceptance block, skipping
+recursive snapshot commands. Bare `cargo` and environment-prefixed commands
+in that block are manual instructions; the snapshot runner does not execute
+them.
+
+Run from the repository root on a build/test host with the prerequisites in
+the chosen script. The broader block includes builds, containers, and network
+tests; it is not a lightweight documentation check. Commands using `plan` or
+`--dry-run` prepare a campaign but do not run it.
 
 ## Release-Candidate Preflight Profile
 
@@ -29,18 +36,12 @@ scripts/audit-unused-code.sh
 scripts/check-functional-requirement-references.py
 ```
 
-`scripts/engineering-mvp-evidence.sh` runs only this narrow profile by default,
-uses per-command timeouts, and writes broader release/operations commands to a
-deferred list instead of executing them. Transitive unsafe dependency
-enumeration through `scripts/capture-unsafe-dependency-evidence.sh` is kept in
-the broader SRS acceptance profile because it depends on `cargo-geiger` and is
-release-review evidence rather than a cheap release-candidate gate.
-
-The clean-container release preflight is the mandatory packaging rehearsal
-before a signed release tag is created. It is listed here as an operator command
-rather than being nested inside `engineering-mvp-evidence.sh`, because it builds
-all release artifacts and uses the host Docker daemon from a bounded, trusted
-clean tool container.
+`engineering-mvp-evidence.sh` runs its bounded default checks with per-command
+timeouts and records broader work in a deferred list. It does not invoke the
+clean-container packaging rehearsal; run `release-preflight-container.sh`
+separately before creating a signed release tag. That rehearsal builds the
+release artifacts and uses the host Docker daemon. The broader unsafe-dependency
+capture requires `cargo-geiger`.
 
 ## Broader SRS Acceptance Commands
 
@@ -119,4 +120,16 @@ scripts/interop-tcp-truncation-retry.sh
 scripts/interop-edns-behavior.sh
 scripts/perf-smoke.sh
 scripts/release-evidence-snapshot.sh
+```
+
+## Package lifecycle checks
+
+These manual commands supplement the broader inventory when native packages
+change. The snapshot runner does not execute this section automatically.
+
+```sh
+scripts/package-deb.sh
+scripts/test-deb-package-docker.sh
+scripts/package-rpm.sh
+scripts/test-rpm-package-docker.sh
 ```

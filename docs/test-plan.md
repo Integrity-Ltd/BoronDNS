@@ -1,317 +1,194 @@
 # BoronDNS Test Plan
 
-This Test Plan is the sibling document required by SRS v1.0.0 section 7.6. It
-records the current verification harnesses, their SRS method classifications,
-and their execution cadence. It is intentionally a living plan: the test
-inventory stays at evidence-command and requirement-family level until release
-acceptance requires per-requirement rows. Appendix A, the verification ledger,
-and release evidence snapshots own that expansion.
-
-## Scope
-
-- Normative source: `docs/BoronDNS-Secondary-SRS-v1.0.0.md`.
-- Working evidence ledger: `docs/verification-ledger.md`.
-- Family traceability matrix: `docs/appendix-a-traceability-matrix.md`.
-- Release evidence snapshot: `scripts/release-evidence-snapshot.sh`.
-- Release/operations handoff: `scripts/capture-release-handoff.sh`.
-
-Every concrete test case or evidence command in this plan must reference SRS
-requirement identifiers directly or through the ledger/matrix row that owns the
-family-level requirement range.
+This plan maps the SRS verification methods to runnable checks and explains when
+to run them. Use [the evidence guide](release-evidence-guide.md) for capture and
+retention, the [verification ledger](verification-ledger.md) for results, and
+[Appendix A](appendix-a-traceability-matrix.md) for requirement traceability.
+The governing requirements are in
+[SRS section 7](BoronDNS-Secondary-SRS-v1.0.0.md).
 
 ## Cadence Classes
 
-The project uses the SRS v1.0.0 BDS-VER-011 cadence vocabulary exactly:
+The `BDS-VER-011` classes describe when evidence is needed:
 
-- **Continuous**: build-blocking checks for every main-branch candidate.
-- **Periodic**: scheduled checks independent of a specific commit.
-- **Gate**: release-acceptance checks whose results support release approval.
+- **Continuous**: local checks required for a main-branch candidate.
+- **Periodic**: scheduled runs during an active release-acceptance cycle.
+- **Gate**: checks selected for a release decision.
 
-For the private Engineering MVP profile, only the Continuous class is enacted
-as local automation through `scripts/check.sh`. Periodic and Gate rows below are
-documented release/operations obligations with runnable commands, handoff
-artifacts, and evidence formats; they are not treated as completed evidence
-until their corresponding retained runs exist.
+`scripts/check.sh` implements Continuous locally and on the project's SSH
+verification hosts. GitHub Actions builds and publishes tagged releases; it
+does not run that full gate. No hosted periodic schedule is currently configured.
 
 ## Method Cadence Map
 
-| Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
+| Verification method | Cadence | Current harness | Evidence or requirement owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous plus release review | `cargo fmt --all --check`; `cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check`; `rustup run 1.95.0 cargo check --workspace --all-targets --locked` (declared MSRV); `scripts/check-shell-scripts.sh` (non-mutating `shfmt -d` plus `shellcheck`); `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings`; `scripts/check-github-actions.sh`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
-| Unit test | Continuous | Default-feature `cargo test --workspace -- --test-threads=1` plus `cargo test --workspace --all-targets --all-features -- --test-threads=1` so the feature-gated server AF_XDP and BoronGun XDP adapter suites remain blocking; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
-| Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
-| Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/borondns-cli/tests` | Rust test names and ledger rows |
-| Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
-| Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; fuzz-crate formatting and warning-free Clippy gates; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
-| Dependency security audit | Continuous | `cargo deny check`; separate locked-graph `cargo deny` checks for `crates/borondns-server-ebpf/Cargo.toml` and `crates/boron-gun-ebpf/Cargo.toml` | `docs/verification-ledger.md` dependency audit row |
-| Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; `docs/two-host-fuzz-soak-campaign.md` and `scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400` prepare the local two-host split; Engineering MVP setup records `campaign-summary.tsv`, later release/operations execution retains the full campaign artifacts | retained fuzz campaign summary, logs, and artifacts |
-| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the Engineering MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
-| Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
-| Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/evidence-command-catalog.md`, with current gaps tracked in `docs/release-acceptance-gap-register.md`; human-operated BIND smoke run documented in `docs/manual-bind-interop.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `BDS-VER-003`, `BDS-VER-004`, `BDS-VER-013` |
-| Soak test / extended-runtime test | Periodic and Gate when selected | `scripts/capture-soak-handoff.sh` creates a duration-neutral setup/report path; the release plan selects fuzz/resource rounds, allocator stress, targeted load, and any optional longer soak according to changed risk | retained resource samples and completed extended-runtime report artifacts |
-| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, and optional external operator review | release notes, interface compatibility evidence, info verbosity profile, and any external review record |
-| Optional independent security review | Gate when selected | Third-party or independent review may be selected for a defined release or vulnerability scope | release notes and review report when available |
-| Optional external operator review | Gate when selected | Production-representative external deployment may supplement project-owned acceptance evidence | release notes and reviewed scope when available |
-
-The `scripts/audit-invariants.sh` BDS-INV-004 gate self-tests its filesystem
-mutation scanner before inspecting runtime source. Its fixtures cover Cargo
-dependency renames followed by source-level crate/module aliases, fixed-point
-type and function-value aliases, typed `Default::default()` `OpenOptions`,
-parenthesized or cast function values, `const`/`static` function bindings, and
-moved or assigned `OpenOptions`, `DirBuilder`, and `File` capabilities. The
-multi-hop fixtures exercise each added binding form. Negative fixtures retain
-generic network writers, unrelated typed defaults, and provably read-only
-`OpenOptions`/`rustix` opens as allowed surfaces.
+| Static analysis | Continuous | Rust and fuzz formatting/Clippy, shell lint, workflow lint, MSRV check, source/unsafe-boundary audits, interface and documentation checks in `scripts/check.sh` | Verification ledger and Appendix A |
+| Unit test | Continuous | Default and all-feature workspace tests, plus coverage capture | Rust tests and `scripts/capture-coverage-evidence.sh` |
+| Property-based test | Continuous | Targeted randomized tests inside the Rust suites | Rust test names and ledger rows |
+| Integration test | Continuous | Server runtime and CLI process tests | Server and CLI test suites |
+| Conformance test | Continuous and Gate | Wire format, EDNS, TSIG, passive DNSSEC, CLI, configuration, signals, health and metrics tests; selected interop scripts | Rust tests, interop reports, ledger |
+| Short-cadence Fuzz test | Continuous | Fuzz compile, format, Clippy, and campaign dry-run checks; short executions selected separately | `fuzz/README.md` |
+| Dependency security audit | Continuous | `cargo deny` for workspace and the two separate eBPF manifests | Dependency audit ledger row |
+| Long-cadence Fuzz test | Periodic and Gate when selected | `scripts/fuzz-campaign.sh --duration 86400`; two-host campaign harness | Campaign summary, logs, crashes, and resource samples |
+| Performance test | Periodic and Gate | `scripts/perf-smoke.sh`, resource capture, workload-specific benchmarks, regression comparison | Benchmark report and baseline |
+| Differential test | Periodic | Comparisons against BIND, NSD, and Knot; interop scripts provide the starting harness | Retained comparative assertions and primary versions |
+| Interoperability test | Gate | Primary matrix and protocol scripts in `docs/evidence-command-catalog.md` | `BDS-VER-003`, `BDS-VER-004`, `BDS-VER-013` |
+| Soak test / extended-runtime test | Periodic and Gate when selected | Fuzz/resource rounds, allocator stress, sustained load, optional longer soak | Resource samples and declared run duration |
+| Operational test | Gate | Install/upgrade/removal, startup, rollback, health, logging, interface comparison, release verification | Package tests and operator evidence |
+| Optional independent security review | Gate when selected | Review of a declared release or changed attack surface | Review report and finding dispositions |
+| Optional external operator review | Gate when available | Production-representative deployment review | Reviewer, scope, and conclusions |
 
 ## Continuous Execution
 
-`scripts/check.sh` enacts the current Continuous cadence locally and on the
-project's SSH verification hosts. Hosted GitHub Actions are deliberately
-reserved for release-tag verification while the repository is private. The
-command must remain build-blocking for:
+Run the maintained gate rather than copying its command list into a second
+automation script:
 
-- Test Plan shape validation: `scripts/check-test-plan.sh`;
-- verification ledger consistency: `python3 scripts/check-verification-ledger.py`;
-- functional requirement source-comment coverage:
-  `python3 scripts/check-functional-requirement-references.py`;
-- static audits: invariant, passive DNSSEC, XoT revocation, safe-Rust where
-  release-review cost allows, and unsafe-boundary registry consistency;
-- Rust formatting, shell formatting/linting, clippy, workspace tests, and
-  coverage threshold evidence;
-- dependency advisory/license/source checks through `cargo deny check`;
-- first-party safe-Rust and audited unsafe-boundary checks through
-  `scripts/audit-safe-rust.sh` and `scripts/check-unsafe-boundaries.py`.
+```sh
+scripts/check.sh
+```
 
-Transitive unsafe dependency enumeration through
-`scripts/capture-unsafe-dependency-evidence.sh` is retained as release-review
-evidence because it depends on `cargo-geiger` scanner behavior and can be
-slow or partial. It is not part of the default Engineering MVP evidence
-profile.
+The gate includes these Rust checks:
 
-Automatic hosted verification runs only for v-prefixed tag pushes through
-`.github/workflows/release-installer.yml`. Before the tag is created,
-`scripts/release-preflight-container.sh` rehearses the complete packaging path
-from a clean committed checkout with the pinned Rust toolchain in a bounded
-clean tool container. The tagged workflow then verifies the source and tag,
-repeats reproducible packaging and smoke checks for the exact tag source, and
-performs the GitHub-only OIDC signing/publication step. Its explicit
-`workflow_dispatch` entry remains an operator-invoked release diagnostic, not a
-push or pull-request trigger.
+```sh
+rustup run 1.95.0 cargo check --workspace --all-targets --locked
+cargo fmt --all --check
+cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+cargo test --workspace -- --test-threads=1
+cargo test --workspace --all-targets --all-features -- --test-threads=1
+```
 
-`scripts/test-operations-harnesses.sh` is the focused fault-injection gate for
-campaign and interop lifecycle helpers. Its Docker-image setup fixtures use a
-monotonic clock and verify that lock acquisition, descriptor-bound temporary
-tree creation, identity-bound cleanup, broker release, and all STOP,
-SIGTERM-ignore, and SIGKILL/reap paths share one absolute setup deadline. The
-timing assertions include a narrow scheduler tolerance but do not grant each
-cleanup phase a fresh timeout. Where a setup operation authenticates an earlier
-operation cutoff and a later cleanup cutoff, ordinary mutations stop at the
-first cutoff while the non-replaceable broker authority remains available only
-for bounded cleanup through the second. The same gate replaces automatic-tree
-family lock pathnames during creation and requires the abstract family
-authority to prevent split-brain publication while exact rollback leaves a
-discoverable tree/journal or quarantine instead of deleting through a mutable
-pathname. Automatic-tree journal/recovery scans and stale-status staging scans
-stream directory entries under the absolute operation deadline, sort only a
-bounded set, and fail-retain when the explicit entry cap is exceeded. Flood and
-expired-deadline fixtures require prompt nonzero exit without deleting any
-preexisting entry or publishing a replacement. Expired cleanup attempts leave
-the ready journal byte-identical.
-Deadline-supervisor fixtures also delay procfs enumeration before its first
-entry and lower a test-only proc inventory cap, proving that process-group
-membership checks cannot extend the configured termination tail. Collection
-metadata fixtures cover oversized sparse status/commit files, FIFO commits,
-post-open pathname swaps, and a live transaction flooded beyond its 64-entry
-recovery cap; each must fail promptly and retain unrelated or indeterminate
-state.
-Restarted processes treat same-UID disk journals and collection markers as
-evidence only and prove that forged, schema-valid state cannot authorize
-delete, overwrite, restore, or promotion. Live collection tests retain marker
-and transaction descriptors, keep marker decision payloads in immutable process
-state, and reject both post-creation pathname swaps and in-place marker rewrites
-paired with object swaps. They also interrupt an all-absent bundle before its
-first promotion and require same-process recovery to restore all three absent
-destinations, covering dynamic output assignment from live marker state.
-Privileged-cleanup fixtures prove that sudo still
-retains a current-UID-owned fuzz tree instead of recursively deleting it, and
-that a root-owned mode-0777 post-stat swap or named access ACL forces the same
-whole-tree retention. Retained-cleanup fixtures require a prepublished exact
-original/quarantine identity journal, verify a crash-left `prepared` journal
-only when its original is absent and exact quarantine identity/type match, and
-reject a forged sibling inode. The
-deadline supervisor blocks INT/TERM/HUP/CHLD before `posix_spawn`, consumes
-them with `signalfd`, observes exit with pidfd `waitid(WNOWAIT)`, tears down the
-process group, and only then reaps. Its descriptor-bound stdout-capture fixture
-TERMs the real outer Bash caller and proves that owner pidfds tear down nested
-command-substitution descendants before the deadline. Early-failure fixtures
-also require invalid owner overrides and capture output-name collisions to
-preserve caller traps byte-for-byte and launch no child. Descriptor-exhaustion
-fixtures cover the partial process-substitution window, requiring a nonzero
-capture result, unchanged caller output and traps, and no orphaned child.
-Metadata-codec fixtures reject implementation-local and syntactically unsafe
-dynamic output names before caller state is unset or metadata is read. Retained
-journal fixtures also reject symlink parent namespaces and require journal,
-original, and quarantine checks relative to one descriptor-bound real parent.
-Sampler fixtures
-also cross-bind every process-detail row to its exact host epoch, reject
-per-epoch duplicate PIDs and aggregate mismatches, and retain same-PID reuse
-across later epochs as valid evidence.
+The MSRV check uses the declared Rust 1.95.0 minimum. Normal builds use the
+pinned repository toolchain. All-feature tests keep the server AF_XDP and
+BoronGun XDP code covered even though those backends are opt-in.
 
-The repository also contains a tag-push/workflow-dispatch release workflow. It
-does not run `scripts/check.sh`; the release engineer must run and retain that
-gate against the candidate commit before creating the tag. The workflow acts as
-artifact publication automation for a named release by building and smoking the
-`x86_64-unknown-linux-musl` installer archive, raw static `borondns` binary,
-raw static XDP-enabled `boron-gun` binary, and Docker image archive; it is not
-the standing Continuous gate unless the release
-process records its retained logs as the accepted release-gate automation
-evidence.
+Source checks include `scripts/check-unsafe-boundaries.py`,
+`scripts/check-unsafe-prone-dependencies.py`,
+`scripts/check-interface-compatibility.py`, and
+`scripts/check-functional-requirement-references.py`. The invariant scanner
+self-tests its alias and filesystem-capability handling before auditing runtime
+source. Coverage and short resource checks also run in the gate.
 
-Manual real-primary smoke evidence is intentionally outside `scripts/check.sh`
-because it depends on Docker or host BIND availability. For developer/operator
-confidence after an Engineering MVP build, run `scripts/interop-bind-axfr-docker.sh`
-and retain artifacts with `BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR`, as described
-in `docs/manual-bind-interop.md`. For RFC 9432 catalog-zone confidence, run
-`scripts/interop-bind-catalog-zone-docker.sh` and retain artifacts with
-`BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR`; that harness mutates the BIND
-catalog while BoronDNS remains running and verifies live member add/remove
-behavior end to end. For BIND 9 XoT catalog-zone confidence, run
-`scripts/interop-bind-xot-catalog-zone-docker.sh` and retain artifacts with
-`BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR`; that harness verifies ALPN
-`dot`, TSIG over XoT, denied plain TCP transfer, and live catalog member
-add/remove. For the intended PowerDNS plus PostgreSQL primary shape, run
-`scripts/interop-powerdns-postgres-catalog-tsig-docker.sh` and retain artifacts
-with `BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR`; that harness uses PowerDNS
-producer catalog metadata, PostgreSQL/gpgsql storage, TSIG-only catalog/member
-transfers, live catalog assignment add/remove, and an in-place member-zone
-record update while BoronDNS remains running.
+`scripts/test-operations-harnesses.sh` covers process deadlines, cancellation,
+resource sampling, lock ownership, collection consistency, and recovery from
+interrupted operations. It includes fault injection for pathname replacement,
+forged recovery metadata, descriptor exhaustion, and retained-state cleanup.
+The fixtures and their exact assertions belong in that script, rather than
+being duplicated as an evolving test inventory here.
+
+`scripts/capture-unsafe-dependency-evidence.sh` provides transitive unsafe
+enumeration for release review. Its scanner caveats need manual interpretation;
+it is not part of the default bounded evidence profile.
+
+Real-primary smoke tests require Docker or a configured primary and run
+separately. Start with [Manual BIND Interop](manual-bind-interop.md), or select
+the relevant catalog, XoT, TSIG, and IXFR commands from the
+[evidence catalog](evidence-command-catalog.md). Retain primary versions,
+configuration, logs, and results.
 
 ## Periodic Execution
 
-Periodic evidence is not yet fully automated. Until scheduled CI is added, the
-release engineer records each periodic run manually in the release evidence
-snapshot and release notes.
+The release engineer schedules and records these runs. The weekly/monthly
+intervals below are the `BDS-VER-011` release acceptance cadence during an active
+acceptance cycle, not a standing calendar commitment. A run's existence in this
+plan is not evidence that it has happened.
 
-The cadence column below is a formal release-acceptance cadence, not an
-Engineering MVP execution requirement and not a standing calendar commitment
-until a release-acceptance cycle begins. In the private Engineering MVP profile,
-these rows remain handoff obligations unless completed artifacts are retained.
+| Evidence | Cadence during acceptance | Command or guide |
+| --- | --- | --- |
+| Long fuzz campaign | At least weekly; at least 24 hours per selected parser for final sign-off | `scripts/fuzz-campaign.sh --duration 86400`; [two-host campaign](two-host-fuzz-soak-campaign.md) |
+| Performance regression | Weekly on the Reference Hardware Profile | Benchmark harnesses; `scripts/check-perf-regression.py` |
+| Extended runtime | Continuous sampling during the selected run, with weekly reports if it lasts that long | `scripts/capture-soak-handoff.sh`; [large-surface soak](large-surface-soak.md) |
+| Differential primary comparison | At least monthly | BIND/NSD/Knot harnesses with comparative assertions |
 
-| Periodic evidence | Release acceptance cadence | Current command or artifact | Open acceptance work |
-| --- | --- | --- | --- |
-| Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
-| Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off template; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
-| Reproducible-build comparison | Hard gate before public artifact signing | The tagged workflow runs `scripts/reproducible-build-compare.sh` for its exact current commit and authenticates the validated manifests into the signing job; `docs/reproducible-build-v0.2.0.md` records earlier v0.2.0 evidence and `scripts/capture-reproducible-build-handoff.sh` provides release-engineer sign-off templates | release/operations owners still fill package/image, public-signature verification, and external sign-off evidence before claiming broader artifact acceptance |
-| Extended-runtime snapshot | At a declared cadence while the selected run is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, summary template, and operator sign-off template | release/operations owners fill the report for the declared run duration |
-| Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
+Retain `campaign-summary.tsv`, logs, resource samples, and any failure artifacts
+for fuzz runs. There is no fixed 30-day soak requirement. Select additional
+stress or load scenarios for the changed code and document the duration.
 
 ## Gate Execution
 
-Release Gate evidence is captured with `scripts/release-evidence-snapshot.sh`.
-Set `BORONDNS_EVIDENCE_RUN_INTEROP=1` for release candidates that need retained
-interop artifacts, `BORONDNS_EVIDENCE_RUN_FUZZ=1` for release-cadence fuzz evidence,
-`BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` for retained RRL campaign evidence, and
-`BORONDNS_RELEASE_NOTES=<path>` to run the release-notes gate against the snapshot.
-Use `BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
-`BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` for wall-clock duration campaigns.
+Before tagging, run the local quality gate and the clean-container packaging
+rehearsal against the selected commit. The tag-push/workflow-dispatch release
+workflow is artifact publication automation: it verifies source and tag
+provenance, rebuilds and checks packages, signs a checksum manifest, and
+publishes the artifacts. It does not invoke `scripts/check.sh`.
 
-Gate review must not treat skipped interop, fuzz, performance, soak, security
-audit, or external-operator steps as passing evidence for final SRS acceptance.
-For Engineering MVP, long-running steps may be marked as delegated when
-the runnable harness, artifact format, and release/operations handoff are
-present.
+```sh
+scripts/check.sh
+scripts/release-preflight-container.sh
+```
 
-For releases that change the `ZoneImage` data plane, packet composer, or UDP/TCP
-serving path, retain `scripts/zone-image-evidence-gate.sh` output as the
-ZoneImage release gate. A local loopback run is acceptable for Engineering
-release stabilization evidence; formal performance acceptance must use the
-Reference Hardware/Profile or a physical non-loopback run with
-`BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`.
+To retain a broad local evidence set:
 
-`scripts/capture-release-handoff.sh` is intentionally a setup artifact. It
-creates the release attachment map, scheduled CI/manual-run plan, signing
-runbook, release-note fill plan, external-operator acceptance template, and
-release-readiness checklist for later SRS acceptance execution. A generated
-handoff directory proves the Engineering MVP governance setup exists; it does not
-prove that release acceptance or external-operator sign-off has been completed.
+```sh
+scripts/release-evidence-snapshot.sh
+```
 
-`scripts/capture-info-verbosity-handoff.sh` is intentionally a setup artifact.
-It creates the runbook, report template, log-volume/structured-field/metrics
-TSV schemas, requirement traceability map, release-note snippet, and operator
-sign-off template for later production-depth profiling of `info` verbosity
-under release traffic. A generated handoff directory proves the Engineering MVP
-setup exists; it does not prove that production-depth profiling has been
-executed.
+Set `BORONDNS_EVIDENCE_RUN_INTEROP=1`,
+`BORONDNS_EVIDENCE_RUN_FUZZ=1`, or
+`BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` for the additional campaigns needed.
+RRL duration/count and performance-baseline options are described in the
+[evidence guide](release-evidence-guide.md).
 
-`scripts/capture-interface-compatibility-evidence.sh` records the current
-interface baseline and policy for BDS-NFR-MAINT-006. When a previous accepted
-baseline is provided, it also runs the release-to-release compatibility diff.
-Without that previous baseline it is setup evidence only and must not be treated
-as a completed compatibility-diff review.
+For changes to `ZoneImage`, packet composition, or UDP/TCP serving, retain
+`scripts/zone-image-evidence-gate.sh` results. Loopback is useful for functional
+and tuning checks. Performance claims about a real network require the Reference
+Hardware/Profile or an appropriate physical non-loopback run; the harness can
+enforce this with `BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`.
 
-`scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
-creates the benchmark runbook, report template, performance/resource TSV
-schemas, requirement traceability map, rolling-baseline history template, and
-operator sign-off template for later Reference Hardware/Profile execution. A
-generated handoff directory proves the Engineering MVP setup exists; it does
-not prove that production benchmarks have been executed.
+`scripts/reproducible-build-compare.sh` supplies the static-binary comparison.
+The tagged workflow repeats it for the exact commit and checks that the packaged
+binaries match. DEB and RPM builds are compared separately. Archive/image
+reproducibility and an independent builder's agreement need their own evidence.
 
-`scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
-the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
-traceability map, and operator sign-off template for the later BDS-NFR-REL-003
-extended-runtime campaign. A generated handoff directory proves the setup
-exists; it does not prove that the long-running soak has been executed.
+The following helpers prepare report formats for work that is selected:
 
-`scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
-artifact. It creates fixed build inputs, a runbook, artifact-manifest and
-comparison TSV schemas, requirement traceability, release-note snippet, and
-release-engineer sign-off template. `scripts/reproducible-build-compare.sh`
-now produces completed local static-binary manifests and comparison TSVs. The
-tagged workflow validates the current-commit result before signing and carries
-those records under a separate authenticated internal manifest; the handoff
-remains for external sign-off and package/image follow-up.
+| Evidence | Helper |
+| --- | --- |
+| Interface baseline or release comparison | `scripts/capture-interface-compatibility-evidence.sh` |
+| Production-depth logging | `scripts/capture-info-verbosity-handoff.sh` |
+| Reference benchmark | `scripts/capture-benchmark-handoff.sh` |
+| Extended runtime | `scripts/capture-soak-handoff.sh` |
+| Independent build comparison | `scripts/capture-reproducible-build-handoff.sh` |
+| Release decisions and review | `scripts/capture-release-handoff.sh` |
 
-When `BORONDNS_PERF_BASELINE` points at a whitespace-delimited history file with
-rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`
-runs the smoke-metric regression comparison. `BORONDNS_PERF_REGRESSION_THRESHOLD_PCT`
-overrides the default 10 percent threshold.
+A generated template is not a passed test. A skipped optional run should remain
+identified as unrun; a missing required result blocks the corresponding claim.
+Review open findings in [the acceptance register](release-acceptance-gap-register.md).
 
 ## Regression Policy
 
-This policy implements BDS-VER-012.
+This policy implements `BDS-VER-012`.
 
-- A functional regression exists when a requirement previously marked
-  **Verified** in the traceability matrix fails its current verification.
-- A performance/resource regression exists when a `BDS-NFR-PERF-*` or
-  `BDS-NFR-RES-*` metric that previously met target degrades by more than
-  `regression.performance_threshold_pct`.
-- `regression.performance_threshold_pct` defaults to **10**.
-- The performance/resource comparison baseline is the median of the last five
-  release measurements for the same metric on the Reference Hardware Profile.
+- A functional regression is a failure of a requirement previously marked
+  **Verified**.
+- A performance/resource regression is a previously accepted metric that
+  degrades by more than `regression.performance_threshold_pct`, which
+  defaults to **10**.
+- The comparison uses the median of the last five release measurements for the
+  same metric on the Reference Hardware Profile.
 - The first release of a major version establishes the initial baseline.
-- New requirements introduced in a release cannot regress because they have no
-  prior verification result; they are classified as Verified, Deferred, or
-  Failed against their new acceptance criterion.
+- New requirements have no previous result; classify them as Verified, Deferred,
+  or Failed against their own acceptance criteria.
 
-Every detected regression must be triaged before release. The release notes
-must record root cause, owner, remediation release, and whether the regression
-was fixed or explicitly accepted with rationale. A release with an untriaged
-regression must not proceed.
+Record each regression's cause, owner, disposition, and remediation target in
+canonical release evidence. A release with an untriaged regression must not
+proceed. Public notes must explain material operator-facing effects; detailed
+tables can remain in linked evidence.
 
 ## Release Notes Inputs
 
-`docs/release-notes-template.md` is the required release-note structure. The
-release-note gate checks that the release notes include the following. This is
-a pre-tag/manual evidence gate in the current release process: the tag workflow
-generates shorter asset-publication notes and does not invoke
-`scripts/check-release-notes.sh`.
+Public notes identify the version, artifacts, support posture, material
+limitations, interface changes, and verification instructions. They may link to
+canonical requirement and interoperability evidence instead of reproducing it.
 
-- per-requirement-category counts for Verified, Deferred, and Failed, including
-  the `BDS-VER` verification-requirement category;
-- new Failed and Deferred results compared to the previous same-major release;
-- retained primary version/configuration artifact paths for interop evidence;
-- failed-requirement project decisions and remediation targets;
-- RFC compliance assertions;
-- verification responsibility sign-off;
-- when an optional external operator review is available, reviewer identity,
-  reviewed scope, and conclusions as supporting evidence.
+[Release Notes Template](release-notes-template.md) is the optional detailed
+dossier accepted by `scripts/check-release-notes.sh`. It contains requirement
+counts and changes, regression decisions, primary versions, RFC assertions,
+interface changes, security evidence, and review responsibility. Supply
+`BORONDNS_RELEASE_NOTES=<path>` to check that dossier during a snapshot.
+
+The tag workflow generates concise publication notes and does not call the
+dossier checker. Optional external review is supporting evidence when available,
+not a prerequisite for every release.

@@ -1,106 +1,66 @@
 # RFC Traceability Policy
 
-Status: companion policy for SRS Appendix A, BDS-VER-005, BDS-VER-006, and
-BDS-VER-014.
-
-This document owns the maintenance rules for RFC traceability. The SRS owns
-normative BoronDNS requirements. `docs/rfc-compliance-assertions.md` owns the
-current structured RFC compliance posture. `docs/appendix-a-traceability-matrix.md`
-owns checked requirement-range-to-evidence mappings.
-
-The purpose of this split is to keep the SRS from becoming an unchecked
-standards research dump. A standards clause belongs in a current requirement
-only when it has been checked against the current BoronDNS scope, code, and
-evidence plan.
+This policy supports SRS Appendix A and `BDS-VER-005`, `BDS-VER-006`, and
+`BDS-VER-014`. The [SRS](BoronDNS-Secondary-SRS-v1.0.0.md) defines required
+behavior; [RFC compliance assertions](rfc-compliance-assertions.md) record the
+scoped claims; the [traceability matrix](appendix-a-traceability-matrix.md)
+links requirements to evidence.
 
 ## Scope Categories
 
-Use these categories when adding or reviewing RFC mappings:
+| Category | Meaning |
+| --- | --- |
+| Full | All normative clauses in the RFC apply to BoronDNS. |
+| Partial (secondary-side) | Only the secondary authoritative-server clauses apply. |
+| Partial (selected clauses) | Only the named format, transport, or operational clauses apply. |
+| Informative | Background or guidance; no independent compliance claim. |
 
-- **Full.** All normative clauses in the RFC are in BoronDNS scope.
-- **Partial (secondary-side).** Secondary authoritative server clauses are in
-  scope; primary, resolver, validator, or client-only clauses are out of scope.
-- **Partial (selected clauses).** Only named wire-format, option-format,
-  transport, or operational clauses are in scope.
-- **Informative.** The RFC is cited for background, registry grounding, or
-  operational guidance and is not an independent compliance claim.
+For partial or informative mappings, explain the exclusions. Typical reasons
+are secondary-only operation (`BDS-INV-001`), no DNSSEC signing (`BDS-NEG-002`),
+no transfer serving (`BDS-NEG-005`), and no master-file serving interface
+(`BDS-NEG-006`).
 
-Partial and Informative rows must name the exclusion reason. Common exclusion
-reasons are BDS-INV-001 secondary-only behavior, BDS-NEG-002 no DNSSEC signing,
-BDS-NEG-005 no zone-transfer serving, BDS-NEG-006 no master-file serving
-interface, and Appendix C protocol exclusions.
+## Mapping and evidence
 
-## Mapping Rules
+A navigation row may cover an RFC or SRS subsection. A partial,
+security-sensitive, or disputed claim needs a clause-level mapping: RFC and
+section, scoped behavior, immutable SRS IDs, status, and evidence or a target
+milestone. Check the primary source and current code before changing a claim.
 
-Coarse-grained mappings are acceptable for project navigation and for RFCs
-whose scoped clauses are wholly covered by an SRS subsection. Fine-grained
-mappings are required when a compliance claim is partial, security-sensitive, or
-called out by review.
+Use these verification statuses:
 
-Fine-grained rows must include:
+- **Not Verified**: no completed verification is recorded.
+- **Verified**: verification is complete and the evidence is cited.
+- **Deferred**: verification is assigned to a named later milestone.
+- **Not Applicable**: retained for traceability, but outside the applicable scope.
 
-- RFC number and clause or section.
-- Scoped topic.
-- One or more immutable SRS requirement IDs.
-- Status from the vocabulary below.
-- Evidence pointer or explicit target milestone.
+Structured requirement-status records use these columns: **Requirement ID**,
+**Verification Method**, **Status**, **Verification Date**, **Evidence Reference**,
+**Target resolution milestone**, and **Notes**. A source path or runnable test
+alone is not evidence that a release passed that test.
 
-The live repository should prefer companion artifacts over long inline SRS
-tables. Do not add clause-by-clause standards prose to the SRS body unless it
-changes required BoronDNS behavior.
-
-## Verification Status
-
-Status values are:
-
-- **Not Verified**: verification has not yet been performed.
-- **Verified**: verification has been performed and an evidence pointer exists.
-- **Deferred**: verification is intentionally deferred to a named milestone.
-- **Not Applicable**: the row is retained for stability but no longer applies.
-
-Structured status tables must use these columns:
-
-- **Requirement ID**
-- **Verification Method**
-- **Status**
-- **Verification Date**
-- **Evidence Reference**
-- **Target resolution milestone**
-- **Notes**
-
-For BDS-VER-014, `docs/rfc-compliance-assertions.md` is the current canonical
-structured primary-documentation register. Operator-facing guides should link
-to that register and summarize the current posture rather than maintaining a
-second copy of the table. Release notes must copy or generate that shape and
-replace current-main gaps with release-specific evidence pointers and
-dispositions.
+Keep the compliance table in [RFC compliance assertions](rfc-compliance-assertions.md).
+Operator guides and release notes should link to it at the relevant revision.
+They need not reproduce the full table; release-specific claims must cite the
+corresponding retained results.
 
 ## Current Feature Guardrail
 
-The external SRS review suggested a smaller static-zone MVP. That trim is not a
-standards decision. Implemented Engineering MVP protocol slices remain in scope
-when `docs/implemented-feature-scope.md` cites current source ownership,
-representative evidence ownership, implementation markers, and representative
-test markers.
+The [feature scope](implemented-feature-scope.md) records implemented IXFR,
+outbound XoT, passive DNSSEC, RRL, DNS Cookies, RFC 9432 catalog zones, EDNS,
+bounded EDE, and opt-in CHAOS behavior. Missing formal acceptance evidence does
+not remove an implemented feature from scope. Conversely, implementation does
+not by itself establish full RFC compliance.
 
-This matters for IXFR, outbound XoT, passive DNSSEC serving, RRL, DNS Cookies,
-RFC 9432 catalog zones, EDNS response behavior, bounded EDE diagnostics, and
-opt-in CHAOS self-identification. Those slices may still have release-evidence
-gaps, but they are not automatically deferred merely because a smaller review
-cut would have deferred them.
+## Exclusions and discrepancies
 
-## Out-of-Scope Clause Handling
+Put observable protocol exclusions in the relevant SRS requirement, stable
+product exclusions in SRS Appendix C, and clause-specific rationale in the RFC
+assertion register. [Review dispositions](srs-review-disposition.md) retain the
+reasoning behind reviewed changes without duplicating the requirements.
 
-When an RFC clause is out of scope, record the reason in one of these places:
-
-- The SRS requirement text, if the exclusion directly affects observable
-  protocol behavior.
-- SRS Appendix C, if the exclusion is a stable product-scope boundary.
-- `docs/rfc-compliance-assertions.md`, if the exclusion is part of a structured
-  compliance row.
-- `docs/srs-review-disposition.md`, if the exclusion was raised by an external
-  review and needs rationale.
-
-Do not rely on unsourced implementation-history claims such as "server X
-supports feature Y as of year Z". Interop requirements must require a
-current-version capability decision and retained version/configuration evidence.
+When code intentionally differs from an RFC, record the exact clause, behavior,
+reason, and interoperability evidence. A BIND or other primary-server result
+can expose a practical compatibility problem; it does not silently replace the
+RFC. Record tested primary versions and configurations, and make capability
+decisions for those versions rather than relying on historical support claims.

@@ -1,7 +1,15 @@
-# BoronDNS Release Notes Template
+# Detailed Release Evidence Template
 
-Use this template for each release candidate. Replace every `TBD` value before
-running `scripts/check-release-notes.sh`.
+Use this optional dossier when a release needs a consolidated verification
+record. The tag workflow generates concise public artifact notes and does not
+run this checker. Public notes may link to canonical evidence instead of copying
+these tables.
+
+Replace every `TBD` before running
+`scripts/check-release-notes.sh RELEASE_NOTES.md [EVIDENCE_SNAPSHOT_DIR]`.
+Use `Not run`, `Not applicable`, or an explicit deferral with its rationale when
+there is no result. Keep existing headings and field labels: the checker uses
+them to validate the dossier structure.
 
 ## Release Identity
 
@@ -9,10 +17,11 @@ running `scripts/check-release-notes.sh`.
 - Release candidate commit: TBD
 - Release date UTC: TBD
 - Evidence snapshot: TBD
+- Support posture and material operator-facing limitations: TBD
 - Release artifacts: installer `.tar.xz`, static `borondns` binary, static
   XDP-enabled `boron-gun` binary, Debian/Ubuntu `amd64` `.deb`, Fedora/RHEL
   compatible `x86_64` `.rpm`, Alpine Docker image `.tar.xz`, CycloneDX SBOMs
-  for the binaries and Docker image, SBOM manifest, authenticated
+  for the binaries and Docker image, Docker image and SBOM manifests, authenticated
   `release-handoff.sha256`, and its keyless Sigstore bundle.
 
 ## Verification Summary
@@ -66,7 +75,7 @@ Copy the pending-decision register from
 `release-handoff/appendix-c5-decision-register.tsv`, which is generated from
 `docs/project-decision-register.md`. Every `Pending` item must be resolved for
 this release or explicitly deferred with an owner and target release before
-formal SRS MVP acceptance is claimed.
+the corresponding acceptance target is claimed.
 
 | Item | Flagged at | Recommendation | Decision for this release | Owner | Target release | Evidence or rationale |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -146,4 +155,4 @@ CLI, metrics, logs, health endpoints, and network behavior.
 | --- | --- | --- | --- |
 | Architecture Owner | TBD | Release verification result review | TBD |
 | Test/verification owner | TBD | Verification evidence completeness | TBD |
-| External operator, formal SRS MVP only | TBD | Production-representative acceptance scope | TBD |
+| External operator, optional | TBD | Production-representative review, if available | TBD |

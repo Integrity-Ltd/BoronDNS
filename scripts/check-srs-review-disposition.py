@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -30,8 +31,16 @@ SCOPE_POINTER_DOCUMENTS = [
 ]
 
 
-def normalize_whitespace(text: str) -> str:
-    return " ".join(text.split())
+def references_file(document: Path, text: str, target: Path) -> bool:
+    """Accept repository-relative code references and document-relative links."""
+    if str(target.relative_to(ROOT)) in text:
+        return True
+    for destination in re.findall(r"\]\(([^)]+)\)", text):
+        destination = destination.split("#", 1)[0].strip("<>")
+        if "://" not in destination and (document.parent / destination).resolve() == target:
+            return True
+    return False
+
 
 REQUIRED_REVIEW_DISPOSITIONS = [
     "BDS/RDS namespace mismatch",
@@ -54,66 +63,6 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "SRS claimed v0.7 structural finality",
     "Catalog metrics catalogue exceeded implemented observability surface",
     "XoT TLS-version wording over-counted TLS 1.2",
-]
-
-REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
-    "MVP Trim Reconciliation",
-    "not as a deletion list for already-implemented code",
-    "mirrors the review's \"defer these\" list item by item",
-    "Engineering MVP scope plus the code-backed feature inventory",
-    "formal SRS release acceptance remains a separate evidence gate",
-    "the governing test is current-code alignment",
-    "first-party source ownership, representative tests or interop evidence, and current SRS owner identifiers",
-    "move to a deferred or gap state in the same patch",
-    "`docs/implemented-feature-scope.md`",
-    "Duration-neutral resource/soak tooling remains available",
-    "implementation-specific source and test markers",
-]
-
-REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
-    "## Review Baseline Alignment",
-    "suggested minimal static-zone cut is treated as a floor for code alignment",
-    "not a replacement for the current release candidate",
-    "Review baseline area",
-    "Current code-aligned status",
-    "Static TOML configuration with explicit zones, primaries, and optional TSIG",
-    "UDP/TCP authoritative query serving with EDNS0 and TCP fallback",
-    "AXFR initial load, SOA refresh/retry/expire state machine, NOTIFY, and TSIG-protected transfer/NOTIFY",
-    "Basic RR support, unknown RR pass-through, and passive DNSSEC records as transferred",
-    "Minimal health, readiness, metrics, and structured logs",
-    "## Retained Slices",
-    "every code-backed slice that exceeds a static AXFR-only secondary-server cut",
-    "Not claimed by this slice",
-    "Normative SRS owner",
-    "Current source ownership",
-    "Representative evidence ownership",
-    "fall back to AXFR when IXFR is unavailable or unsuitable",
-    "Client-query DoT, DoH, DoQ, inbound XoT listeners",
-    "copies the query DO bit into the response OPT",
-    "Per-zone RRL, distributed/shared RRL state across processes",
-    "Durable client authentication, TSIG replacement",
-    "automatic discovery without catalog configuration",
-    "EDNS EXPIRE (RFC 7314), DNS Stateful Operations",
-    "Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only",
-    "Automatic host disclosure, arbitrary CHAOS namespaces",
-]
-
-REQUIRED_SUPPORT_TOOLING_BOUNDARIES = [
-    "## Retained Support And Evidence Tooling",
-    "Release installer and Docker image archives",
-    "BoronGun load generator",
-    "Benchmark and tuning harnesses",
-    "Supplemental interop harnesses",
-    "do not expand the BoronDNS server protocol surface",
-    "not expand the secondary-server protocol requirements",
-]
-
-REQUIRED_PRIMARY_SOURCE_BOUNDARY_TERMS = [
-    "test-version capability selection only",
-    "Vendor documentation is a release-test planning input, not a normative source for BoronDNS behavior.",
-    "Current implementation and BoronDNS project policy",
-    "Vendor RRL documentation may inform later release review, but it is not a conformance target",
-    "must not be used to imply vendor-equivalent semantics",
 ]
 
 REVIEW_SUGGESTED_DEFER_ITEMS = [
@@ -255,122 +204,20 @@ REVIEW_BASELINE_SCOPE = {
     },
 }
 
-REQUIRED_MVP_TRIM_ROW_TERMS = {
-    "Catalog zones": [
-        "Retained in Engineering MVP because RFC 9432 catalog transfer",
-        "release-specific catalog evidence remains tracked outside the SRS body",
-    ],
-    "XoT": [
-        "Retained in Engineering MVP as outbound zone-transfer transport only",
-        "Client-query DoT and NOTIFY-over-TLS listeners remain out of scope",
-        "transfer client now enforces a TLS 1.3-only formal RFC 9103 profile",
-    ],
-    "DNS Cookies": [
-        "Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism",
-        "not described as TSIG-equivalent authentication",
-    ],
-    "RRL beyond a simple first version": [
-        "Retained in Engineering MVP as the implemented process-wide UDP response limiter",
-        "TSIG and valid-cookie exemptions",
-        "per-zone RRL remains out of current scope",
-    ],
-    "Extended DNS Errors": [
-        "Retained only as the bounded implemented profile",
-        "Current EDE output is limited to `Not Ready` and `Unsupported NSEC3 Iterations`",
-    ],
-    "CHAOS `version.bind` / `id.server`": [
-        "Retained as disabled-by-default, opt-in diagnostics",
-        "operators must configure exposed values intentionally",
-    ],
-    "Full DNSSEC negative proof synthesis": [
-        "Not accepted as the code boundary",
-        "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material",
-    ],
-    "Full Prometheus metric catalogue": [
-        "Partially retained as implemented operational metrics",
-        "Opt-in pipeline timing and response-cache candidate metrics are measurement aids",
-    ],
-    "Packed zone store / pre-baked response cache": [
-        "Deferred",
-        "The response-cache candidate counters only measure whether a future cache might be useful",
-    ],
-    "Fixed 30-day soak test": [
-        "Accepted as over-prescriptive and removed from the current release gate",
-        "several independent 24-hour fuzz/resource rounds",
-    ],
-    "Full three-primary interop matrix": [
-        "Deferred from Engineering MVP execution",
-        "the formal all-primary BDS-VER-003 matrix remains release acceptance",
-    ],
-    "Exact performance MUSTs": [
-        "Deferred from Engineering MVP execution",
-        "Reference Hardware/Profile conformance remains release acceptance",
-    ],
-    "Release signing": [
-        "Deferred from Engineering MVP execution",
-        "signed artifact evidence is a release gate",
-    ],
-    "CVE governance": [
-        "Retained as documentation/process scope, not protocol-code scope",
-        "release-specific audit and exception evidence remains release acceptance",
-    ],
-    "External operator acceptance": [
-        "Optional supporting evidence",
-        "third-party sign-off is not a prerequisite for 0.9.1 or the 1.0 public beta",
-    ],
-}
-
+# The code/test registries below validate these owners independently of prose.
 REVIEW_DEFER_CODE_BACKING = {
-    "Catalog zones": [
-        "| RFC 9432 catalog zones |",
-        "borondns_catalog_member_info",
-    ],
-    "XoT": [
-        "| XoT |",
-        "Client-query DoT, DoH, DoQ, inbound XoT listeners",
-        "TLS 1.3-only client profile",
-    ],
-    "DNS Cookies": [
-        "| DNS Cookies |",
-        "Durable client authentication, TSIG replacement",
-    ],
-    "RRL beyond a simple first version": [
-        "| RRL |",
-        "TSIG and valid-cookie exemptions",
-        "Per-zone RRL, distributed/shared RRL state across processes",
-    ],
-    "Extended DNS Errors": [
-        "| Bounded EDE diagnostics |",
-        "Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only",
-    ],
-    "CHAOS `version.bind` / `id.server`": [
-        "| Opt-in CHAOS self-identification |",
-        "Automatic host disclosure, arbitrary CHAOS namespaces",
-    ],
-    "Full DNSSEC negative proof synthesis": [
-        "| Passive DNSSEC serving |",
-        "generated DNSSEC records, or synthesized denial-proof material",
-    ],
-    "Full Prometheus metric catalogue": [
-        "| Minimal health, readiness, metrics, and structured logs |",
-        "| Benchmark and tuning harnesses |",
-    ],
-    "Packed zone store / pre-baked response cache": [
-        "| Benchmark and tuning harnesses |",
-        "a response-cache backend",
-    ],
-    "Exact performance MUSTs": [
-        "| Benchmark and tuning harnesses |",
-        "Reference Hardware/Profile conformance",
-    ],
-    "Release signing": [
-        "| Release installer and Docker image archives |",
-        "signed-release acceptance evidence",
-    ],
-    "Full three-primary interop matrix": [
-        "| Supplemental interop harnesses |",
-        "formal NSD/Knot/BIND release matrix",
-    ],
+    "Catalog zones": ["crates/borondns-core/src/catalog.rs"],
+    "XoT": ["crates/borondns-server/src/transfer.rs"],
+    "DNS Cookies": ["scripts/interop-dns-cookie-dig.sh"],
+    "RRL beyond a simple first version": ["scripts/interop-rrl-udp.sh"],
+    "Extended DNS Errors": ["crates/borondns-core/src/dns.rs"],
+    "CHAOS `version.bind` / `id.server`": ["scripts/interop-chaos-queries.sh"],
+    "Full DNSSEC negative proof synthesis": ["scripts/audit-dnssec-passive.sh"],
+    "Full Prometheus metric catalogue": ["docs/health-metrics-interface.md"],
+    "Packed zone store / pre-baked response cache": ["docs/future-optimization-tracks.md"],
+    "Exact performance MUSTs": ["scripts/capture-benchmark-handoff.sh"],
+    "Release signing": [".github/workflows/release-installer.yml"],
+    "Full three-primary interop matrix": ["docs/manual-bind-interop.md"],
 }
 
 PROCESS_ONLY_REVIEW_DEFER_ITEMS = [
@@ -674,10 +521,8 @@ SUPPORT_TOOLING = {
             "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
         ],
         "evidence_needles": [
-            "fails if static linking cannot be confirmed",
-            "not the published portability baseline",
-            "docker load",
-            "x86_64-unknown-linux-musl-docker-image.tar.xz",
+            "package_load_verified_docker_archive",
+            "verify-docker-archive.py",
         ],
     },
     "boron-gun": {
@@ -724,7 +569,6 @@ SUPPORT_TOOLING = {
             "response_cache_candidate",
         ],
         "evidence_needles": [
-            "local engineering benchmark",
             "Reference Hardware/Profile",
             "check-perf-regression.py",
         ],
@@ -745,7 +589,7 @@ SUPPORT_TOOLING = {
             "gpgsql",
         ],
         "evidence_needles": [
-            "PowerDNS PostgreSQL Catalog Check",
+            "interop-powerdns-postgres-catalog-tsig-docker.sh",
             "target/evidence",
         ],
     },
@@ -757,109 +601,47 @@ def main() -> int:
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
     feature_scope = FEATURE_SCOPE_PATH.read_text(encoding="utf-8")
     srs_current = SRS_CURRENT_PATH.read_text(encoding="utf-8")
-    normalized_disposition = normalize_whitespace(disposition)
-    normalized_feature_scope = normalize_whitespace(feature_scope)
-    scope_pointer_texts = {
-        path: normalize_whitespace(path.read_text(encoding="utf-8"))
-        for path in SCOPE_POINTER_DOCUMENTS
-    }
+    # Review labels are stable identifiers; explanations may be edited freely.
+    rows: dict[str, list[str]] = {}
+    required_labels = set(REQUIRED_REVIEW_DISPOSITIONS + REVIEW_SUGGESTED_DEFER_ITEMS)
+    review_table = False
+    for line in disposition.splitlines():
+        if not line.startswith("|"):
+            review_table = False
+            continue
+        columns = [column.strip() for column in line.strip().strip("|").split("|")]
+        if columns[0] in {"Review finding", "Review-suggested defer item"}:
+            review_table = True
+            continue
+        if not review_table:
+            continue
+        if columns[0] not in required_labels:
+            continue
+        label = columns[0]
+        if label in rows:
+            errors.append(f"duplicate review disposition: {label!r}")
+        rows[label] = columns
+        if len(columns) != 3 or not all(columns):
+            errors.append(f"review disposition needs explanation and evidence: {label!r}")
+    for label in sorted(required_labels - rows.keys()):
+        errors.append(f"{DISPOSITION_PATH.relative_to(ROOT)} omits review item {label!r}")
 
-    for finding in REQUIRED_REVIEW_DISPOSITIONS:
-        if finding not in disposition:
-            errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits review finding "
-                f"{finding!r}"
-            )
-    for term in REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS:
-        if term not in normalized_disposition:
-            errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits scope-trim "
-                f"boundary term {term!r}"
-            )
-    for term in REQUIRED_CODE_ALIGNMENT_BOUNDARIES:
-        if term not in normalized_feature_scope:
-            errors.append(
-                f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits code-alignment "
-                f"boundary term {term!r}"
-            )
-    for term in REQUIRED_SUPPORT_TOOLING_BOUNDARIES:
-        if term not in normalized_feature_scope and term not in normalized_disposition:
-            errors.append(
-                "support-tooling scope omits boundary term "
-                f"{term!r} from feature scope and review disposition"
-            )
-    for term in REQUIRED_PRIMARY_SOURCE_BOUNDARY_TERMS:
-        if term not in disposition:
-            errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits primary-source "
-                f"boundary term {term!r}"
-            )
-    for item in REVIEW_SUGGESTED_DEFER_ITEMS:
-        if item not in disposition:
-            errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits review-suggested "
-                f"defer item {item!r}"
-            )
-    for item, row_terms in REQUIRED_MVP_TRIM_ROW_TERMS.items():
-        for term in row_terms:
-            if term not in disposition:
-                errors.append(
-                    f"{DISPOSITION_PATH.relative_to(ROOT)} omits required "
-                    f"code-aligned disposition for review defer item {item!r}: "
-                    f"{term!r}"
-                )
-    for item, backing_terms in REVIEW_DEFER_CODE_BACKING.items():
-        for term in backing_terms:
-            if term not in feature_scope:
+    for item, backing_paths in REVIEW_DEFER_CODE_BACKING.items():
+        for relative_path in backing_paths:
+            if not references_file(FEATURE_SCOPE_PATH, feature_scope, ROOT / relative_path):
                 errors.append(
                     f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not tie "
-                    f"review-deferred item {item!r} to implemented feature "
-                    f"scope term {term!r}"
+                    f"review item {item!r} to {relative_path}"
                 )
-    covered_review_defer_items = set(REVIEW_DEFER_CODE_BACKING)
-    covered_review_defer_items.update(PROCESS_ONLY_REVIEW_DEFER_ITEMS)
-    missing_review_defer_coverage = (
-        set(REVIEW_SUGGESTED_DEFER_ITEMS) - covered_review_defer_items
-    )
-    unexpected_review_defer_coverage = (
-        covered_review_defer_items - set(REVIEW_SUGGESTED_DEFER_ITEMS)
-    )
-    if missing_review_defer_coverage:
-        errors.append(
-            "review defer items lack code-backed or process-only classification: "
-            + ", ".join(sorted(missing_review_defer_coverage))
-        )
-    if unexpected_review_defer_coverage:
-        errors.append(
-            "review defer classification names unknown review items: "
-            + ", ".join(sorted(unexpected_review_defer_coverage))
-        )
-    for item in PROCESS_ONLY_REVIEW_DEFER_ITEMS:
-        if item not in disposition:
+    covered_review_items = set(REVIEW_DEFER_CODE_BACKING) | set(PROCESS_ONLY_REVIEW_DEFER_ITEMS)
+    if covered_review_items != set(REVIEW_SUGGESTED_DEFER_ITEMS):
+        errors.append("review items must have a code-backed or process-only classification")
+
+    for scope_path in SCOPE_POINTER_DOCUMENTS:
+        scope_text = scope_path.read_text(encoding="utf-8")
+        if not references_file(scope_path, scope_text, FEATURE_SCOPE_PATH):
             errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits process-only "
-                f"review defer item {item!r}"
-            )
-    for term in [
-        "Current Intentional Code Alignment Gaps",
-        "XoT TLS formal profile enforcement",
-        "builder_with_protocol_versions(&[&version::TLS13])",
-        "TLS 1.2-only primaries fail",
-        "formal TLS 1.3-only profile enforcement",
-        "Section 4.1 owns the member-zone PTR structure",
-        "special-use or wildcard-looking names are not implicitly invalid",
-        "RFC 9432 §5.2 name clashes are ignored and logged",
-    ]:
-        if term not in disposition:
-            errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits intentional "
-                f"code-alignment gap term {term!r}"
-            )
-    for scope_path, scope_text in scope_pointer_texts.items():
-        if "docs/implemented-feature-scope.md" not in scope_text:
-            errors.append(
-                f"{scope_path.relative_to(ROOT)} does not point to the "
-                "implemented feature-scope source of truth"
+                f"{scope_path.relative_to(ROOT)} does not link to implemented feature scope"
             )
 
     for baseline, spec in REVIEW_BASELINE_SCOPE.items():
