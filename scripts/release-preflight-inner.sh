@@ -24,10 +24,23 @@ repo_root="$work_root/source"
     printf 'invalid release preflight workspace: %s\n' "$work_root" >&2
     exit 1
 }
+for owner_id in "${BORONDNS_PREFLIGHT_OWNER_UID:-}" "${BORONDNS_PREFLIGHT_OWNER_GID:-}"; do
+    [[ "$owner_id" =~ ^(0|[1-9][0-9]*)$ ]] || {
+        printf 'missing or invalid preflight workspace owner identity\n' >&2
+        exit 1
+    }
+done
+# Child package tests bind their temporary inputs through the host Docker
+# daemon. Keep those paths in the identically mounted workspace, not private
+# container /tmp (or an inherited TMPDIR invisible to the host).
+export TMPDIR="$work_root"
 cleanup_workspace_permissions() {
     local status=$?
     trap - EXIT
-    chmod -R u+rwX,go+rX "$work_root" 2>/dev/null || status=74
+    chmod -R u+rwX "$work_root" 2>/dev/null || status=74
+    chown -R -P --no-dereference \
+        "$BORONDNS_PREFLIGHT_OWNER_UID:$BORONDNS_PREFLIGHT_OWNER_GID" \
+        "$work_root" 2>/dev/null || status=74
     exit "$status"
 }
 trap cleanup_workspace_permissions EXIT

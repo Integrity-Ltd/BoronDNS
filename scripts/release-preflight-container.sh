@@ -32,7 +32,7 @@ if (($# != 0)); then
     exit 2
 fi
 
-for tool in docker git realpath; do
+for tool in docker git realpath id; do
     command -v "$tool" >/dev/null 2>&1 || {
         printf 'missing release preflight host tool: %s\n' "$tool" >&2
         exit 1
@@ -117,5 +117,7 @@ docker run --rm \
     --volume "$workspace:$workspace" \
     --env "BORONDNS_PREFLIGHT_EXPECTED_COMMIT=$source_commit" \
     --env "BORONDNS_PREFLIGHT_WORKSPACE=$workspace" \
+    --env "BORONDNS_PREFLIGHT_OWNER_UID=$(id -u)" \
+    --env "BORONDNS_PREFLIGHT_OWNER_GID=$(id -g)" \
     --env DOCKER_HOST=unix:///var/run/borondns-host-docker.sock \
     "$image"
