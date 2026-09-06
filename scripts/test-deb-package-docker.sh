@@ -16,6 +16,13 @@ docker info >/dev/null 2>&1 || {
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-deb-test.XXXXXXXX")"
 trap 'rm -rf -- "$workdir"' EXIT INT TERM HUP
 mkdir -p "$workdir/bin" "$workdir/dist-r1" "$workdir/dist-r2"
+# Validate the checkout version above, then test the supported source-archive
+# path with an explicit tag. Minimal builder images intentionally have no Git,
+# and a worktree's .git pointer would be invalid inside a /src-only bind anyway.
+mkdir -p "$workdir/source/scripts"
+cp "$repo_root/Cargo.toml" "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" "$workdir/source/"
+cp -R "$repo_root/packaging" "$repo_root/config" "$workdir/source/"
+cp "$repo_root/scripts/package-deb.sh" "$repo_root/scripts/native-package-common.sh" "$workdir/source/scripts/"
 debian_bookworm="debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 debian_trixie="debian@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8"
 ubuntu_2204="ubuntu@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc"
@@ -47,7 +54,7 @@ build_package() {
         -e BORONDNS_DIST_DIR=/output \
         -e BORONDNS_DEB_BORONDNS_BIN=/inputs/borondns \
         -e BORONDNS_DEB_BORON_GUN_BIN=/inputs/boron-gun \
-        -v "$repo_root:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
+        -v "$workdir/source:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
         "$debian_bookworm" \
         /bin/bash /src/scripts/package-deb.sh >/dev/null
 }

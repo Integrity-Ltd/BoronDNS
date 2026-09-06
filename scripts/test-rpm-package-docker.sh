@@ -16,6 +16,12 @@ docker info >/dev/null 2>&1 || {
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-rpm-test.XXXXXXXX")"
 trap 'rm -rf -- "$workdir"' EXIT INT TERM HUP
 mkdir -p "$workdir/bin" "$workdir/dist-r1" "$workdir/dist-r2"
+# Keep Git/worktree metadata out of the minimal builder; the checkout version
+# was validated above and each build receives its explicit matching tag.
+mkdir -p "$workdir/source/scripts"
+cp "$repo_root/Cargo.toml" "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" "$workdir/source/"
+cp -R "$repo_root/packaging" "$repo_root/config" "$workdir/source/"
+cp "$repo_root/scripts/package-rpm.sh" "$repo_root/scripts/native-package-common.sh" "$workdir/source/scripts/"
 fedora_image="${BORONDNS_RPM_FEDORA_IMAGE:-fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814}"
 rocky_image="${BORONDNS_RPM_ROCKY_IMAGE:-rockylinux@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6}"
 
@@ -36,7 +42,7 @@ build_package() {
         -e BORONDNS_RPM_RELEASE="$release" -e BORONDNS_DIST_DIR=/output \
         -e BORONDNS_RPM_BORONDNS_BIN=/inputs/borondns \
         -e BORONDNS_RPM_BORON_GUN_BIN=/inputs/boron-gun \
-        -v "$repo_root:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
+        -v "$workdir/source:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
         "$image" /bin/bash -euxc 'dnf -y install rpm-build >/dev/null; /src/scripts/package-rpm.sh' >/dev/null
 }
 

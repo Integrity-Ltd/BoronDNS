@@ -1729,10 +1729,34 @@ mkdir -p -m 0755 "$service_target_root/units"
 			printf "%s\n" "#!/bin/sh" "sleep 30" >"$blocking_tools/systemctl"
 			printf "%s\n" "#!/bin/sh" "sleep 30" >"$blocking_tools/rc-service"
 			printf "%s\n" "#!/bin/sh" "exit 0" >"$blocking_tools/rc-update"
-			chmod 0755 "$blocking_tools/systemctl" "$blocking_tools/rc-service" "$blocking_tools/rc-update"
+			printf "%s\n" "#!/bin/bash" \
+				"read -r started _ </proc/uptime" \
+				"/usr/bin/timeout \"\$@\"" \
+				"status=\$?" \
+				"read -r finished _ </proc/uptime" \
+				"case \"\${5:-}\" in" \
+				"/opt/installer-blocking-service-tools/systemctl|/opt/installer-blocking-service-tools/rc-service)" \
+				"  [[ \"\$1\" == --preserve-status && \"\$2\" == --signal=TERM && \"\$3\" == --kill-after=1 && \"\$4\" == 1 ]] || exit 98" \
+				"  printf \"%s %s\\n\" \"\$status\" \"\$((10#\${finished/./} - 10#\${started/./}))\" >>/opt/installer-blocking-service-tools/timings ;;" \
+				"esac" \
+				"exit \"\$status\"" >"$blocking_tools/timeout"
+			chmod 0755 "$blocking_tools/systemctl" "$blocking_tools/rc-service" \
+				"$blocking_tools/rc-update" "$blocking_tools/timeout"
+			check_blocking_manager_timings() {
+				local manager_status manager_hundredths manager_calls=0
+				while read -r manager_status manager_hundredths; do
+					test "$manager_status" -eq 143
+					test "$manager_hundredths" -le 250
+					manager_calls=$((manager_calls + 1))
+				done <"$blocking_tools/timings"
+				test "$manager_calls" -ge 1
+			}
 			for blocking_init in systemd openrc; do
+				rm -f "$blocking_tools/timings"
 				set +e
-				timeout 6 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
+				# Startup/rollback have a separate watchdog; each manager invocation
+				# must still obey its one-second deadline plus kill tail below.
+				timeout --kill-after=2 30 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
 					BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
 					BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
 					/pkg/install.sh status --init "$blocking_init" \
@@ -1741,6 +1765,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				set -e
 				test "$blocking_status" -ne 0
 				test "$blocking_status" -ne 124
+				test "$blocking_status" -ne 137
+				check_blocking_manager_timings
 			done
 
 			# A bounded state probe is tri-state. Timeout or manager failure must
@@ -1749,8 +1775,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				blocking_mutation_root="/opt/installer-blocking-$blocking_init"
 				rm -rf "$blocking_mutation_root"
 				mkdir -m 0755 "$blocking_mutation_root"
+				rm -f "$blocking_tools/timings"
 				set +e
-				timeout 6 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
+				timeout --kill-after=2 30 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
 					BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
 					BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
 					BORONDNS_BIN_DIR="$blocking_mutation_root/bin" \
@@ -1765,6 +1792,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				set -e
 				test "$blocking_mutation_status" -ne 0
 				test "$blocking_mutation_status" -ne 124
+				test "$blocking_mutation_status" -ne 137
+				check_blocking_manager_timings
 				grep -q "cannot establish service state" "/tmp/blocking-mutation-$blocking_init.log" || {
 					cat "/tmp/blocking-mutation-$blocking_init.log" >&2
 					echo "$blocking_init blocking mutation did not report an indeterminate service state" >&2
@@ -2491,10 +2520,24 @@ mkdir -p -m 0755 "$service_target_root/units"
 		mkdir -p /opt/readiness-blackhole-bin
 		cp /opt/configure-delayed-fail-bin/systemctl /opt/readiness-blackhole-bin/systemctl
 		printf "%s\n" "#!/bin/sh" "sleep 30" > /opt/readiness-blackhole-bin/bash
-		chmod 0755 /opt/readiness-blackhole-bin/systemctl /opt/readiness-blackhole-bin/bash
+		# Measure the actual trusted timeout call, not payload validation and
+		# transactional rollback around it. /proc/uptime gives monotonic hundredths.
+		printf "%s\n" "#!/bin/bash" \
+			"read -r started _ </proc/uptime" \
+			"/usr/bin/timeout \"\$@\"" \
+			"status=\$?" \
+			"read -r finished _ </proc/uptime" \
+			"if [[ \"\${4:-}\" == /opt/readiness-blackhole-bin/bash ]]; then" \
+			"  [[ \"\$1\" == --signal=TERM && \"\$2\" == --kill-after=1 && \"\$3\" == 1 ]] || exit 98" \
+			"  printf \"%s %s\\n\" \"\$status\" \"\$((10#\${finished/./} - 10#\${started/./}))\" >>/tmp/readiness-blackhole-probes.log" \
+			"fi" \
+			"exit \"\$status\"" > /opt/readiness-blackhole-bin/timeout
+		chmod 0755 /opt/readiness-blackhole-bin/systemctl /opt/readiness-blackhole-bin/bash \
+			/opt/readiness-blackhole-bin/timeout
+		rm -f /tmp/readiness-blackhole-probes.log
 		rm -f /tmp/configure-delayed-fail-state/restarted /tmp/configure-delayed-fail-state/probes
 		touch /tmp/configure-delayed-fail-state/active /tmp/configure-delayed-fail-state/enabled
-		SECONDS=0
+		readiness_blackhole_started=$SECONDS
 		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/readiness-blackhole-bin \
 			FAKE_SYSTEMD_STATE=/tmp/configure-delayed-fail-state \
 				BORONDNS_INSTALLER_READINESS_ATTEMPTS=2 \
@@ -2505,7 +2548,18 @@ mkdir -p -m 0755 "$service_target_root/units"
 			echo "configure accepted a permanently blocked readiness connect" >&2
 			exit 1
 		fi
-		test "$SECONDS" -le 5
+		printf "readiness blackhole configure/rollback elapsed_seconds=%s\n" \
+			"$((SECONDS - readiness_blackhole_started))"
+		readiness_blackhole_probes=0
+		while read -r probe_status probe_hundredths; do
+			test "$probe_status" -eq 124
+			# The one-second probe plus its one-second kill tail has a 500 ms
+			# scheduler allowance; a stuck 30-second child must not survive it.
+			test "$probe_hundredths" -le 250
+			readiness_blackhole_probes=$((readiness_blackhole_probes + 1))
+		done </tmp/readiness-blackhole-probes.log
+		test "$readiness_blackhole_probes" -ge 1
+		test "$readiness_blackhole_probes" -le 2
 		grep -q "responsive BoronDNS listener for two consecutive probes" /tmp/configure-blackhole.log
 		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
 		test "$configure_live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
