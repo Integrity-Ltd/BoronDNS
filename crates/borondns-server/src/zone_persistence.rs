@@ -23,6 +23,9 @@ const FRESHNESS_MAGIC: &[u8; 8] = b"BORONF01";
 const JOURNAL_MAGIC: &[u8; 8] = b"BORONJ01";
 const MAX_RECORDS: u64 = u32::MAX as u64;
 const MIN_RECORD_BYTES: u64 = 13;
+// A journal deletion has owner length (2), root wire name (1), type (2),
+// class (2), and an absent-replacement marker (1), but no TTL or RDATA.
+const MIN_JOURNAL_CHANGE_BYTES: u64 = 8;
 const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JOURNAL_ENTRIES: u32 = 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -842,7 +845,8 @@ fn decode_journal(
         }
         let persisted_unix_secs = take_u64(&mut cursor)?;
         let change_count = take_u32(&mut cursor)?;
-        if change_count as u64 > bytes.len() as u64 / MIN_RECORD_BYTES {
+        let remaining_bytes = bytes.len() as u64 - cursor.position();
+        if change_count as u64 > remaining_bytes / MIN_JOURNAL_CHANGE_BYTES {
             return Err("journal change count cannot fit");
         }
         let mut changes = Vec::with_capacity(change_count as usize);
@@ -1176,6 +1180,129 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn root_zone_deletion_journal_restores_latest_serial() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-zone-cache-root-deletions-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let origin = DomainName::from_absolute_str(".").unwrap();
+        let nameserver = DomainName::from_absolute_str("ns.example.test.").unwrap();
+        let mut rrsets = vec![
+            Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata(7)],
+            ),
+            Rrset::new(
+                origin.clone(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![nameserver.to_wire()],
+            ),
+        ];
+        let mut changes = vec![PersistenceRrsetChange {
+            owner: origin.clone(),
+            rr_type: RecordType::Soa as u16,
+            class: 1,
+            replacement: Some(Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata(8)],
+            )),
+        }];
+        for index in 0..200u16 {
+            let name = format!(
+                "{}{}.",
+                (b'a' + (index / 26) as u8) as char,
+                (b'a' + (index % 26) as u8) as char
+            );
+            let owner = DomainName::from_absolute_str(&name).unwrap();
+            rrsets.push(Rrset::new(
+                owner.clone(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![nameserver.to_wire()],
+            ));
+            changes.push(PersistenceRrsetChange {
+                owner,
+                rr_type: RecordType::Ns as u16,
+                class: 1,
+                replacement: None,
+            });
+        }
+        let original = ZoneSnapshot::active(origin.clone(), Some(7), rrsets);
+        let updated = original.with_persistence_changes(8, changes);
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        persistence.persist(&original).unwrap();
+        assert_eq!(
+            persistence
+                .restore(&origin, 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(7)
+        );
+        persistence
+            .stage_incremental(&original, &updated)
+            .unwrap()
+            .promote()
+            .unwrap();
+        assert!(persistence.journal_path_for(&origin).exists());
+        let restored = persistence.restore(&origin, 1);
+        // Remove the fixture even when the regression assertion fails.
+        fs::remove_dir_all(&root).unwrap();
+        let restored = restored.unwrap().unwrap().snapshot;
+        assert_eq!(restored.serial(), Some(8));
+        assert_eq!(restored.persistence_record_count(), 2);
+
+        // A subsequent IXFR must also be able to read and extend this journal.
+        persistence.persist(&original).unwrap();
+        persistence
+            .stage_incremental(&original, &updated)
+            .unwrap()
+            .promote()
+            .unwrap();
+        let next = updated.with_persistence_changes(
+            9,
+            vec![PersistenceRrsetChange {
+                owner: origin.clone(),
+                rr_type: RecordType::Soa as u16,
+                class: 1,
+                replacement: Some(Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata(9)],
+                )),
+            }],
+        );
+        persistence
+            .stage_incremental(&updated, &next)
+            .unwrap()
+            .promote()
+            .unwrap();
+        assert_eq!(
+            persistence
+                .restore(&origin, 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(9)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn incremented_snapshot(previous: &ZoneSnapshot, serial: u32) -> ZoneSnapshot {
         let owner = DomainName::from_absolute_str("ns.example.test.").unwrap();
         let apex = previous.origin().clone();
@@ -1443,6 +1570,28 @@ mod tests {
         assert_eq!(
             decode_journal(&duplicate, &origin).err(),
             Some("duplicate journal RRset change")
+        );
+    }
+
+    #[test]
+    fn journal_change_count_uses_remaining_bytes_and_shortest_encoding() {
+        let origin = DomainName::from_absolute_str(".").unwrap();
+        let mut shortest = journal_payload_prefix(&origin, 1);
+        append_journal_change_key(&mut shortest, &origin);
+        shortest.push(0);
+        assert!(decode_journal(&shortest, &origin).is_ok());
+
+        // One byte short of even a root-owner deletion: the header cannot be
+        // counted as available storage for the advertised changes.
+        shortest.pop();
+        assert_eq!(
+            decode_journal(&shortest, &origin).err(),
+            Some("journal change count cannot fit")
+        );
+        let impossible = journal_payload_prefix(&origin, u32::MAX);
+        assert_eq!(
+            decode_journal(&impossible, &origin).err(),
+            Some("journal change count cannot fit")
         );
     }
 

@@ -2265,7 +2265,7 @@ fn decode_cookie_server_secret(parameter: &str, value: &str) -> Result<[u8; 16],
         )));
     }
     let mut secret = [0u8; 16];
-    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = decode_hex_nibble(chunk[0]).ok_or_else(|| {
             ConfigError::Invalid(format!(
                 "{parameter} must contain only hexadecimal characters"

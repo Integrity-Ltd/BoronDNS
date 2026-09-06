@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/native-package-common.sh"
+version="$(native_package_version "$repo_root")"
 command -v docker >/dev/null || {
     printf 'skipping Debian package lifecycle: Docker is unavailable\n'
     exit 0
@@ -19,18 +21,18 @@ debian_trixie="debian@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b58
 ubuntu_2204="ubuntu@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc"
 ubuntu_2404="ubuntu@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54"
 
-cat >"$workdir/bin/borondns" <<'EOF'
+cat >"$workdir/bin/borondns" <<EOF
 #!/bin/sh
-case "${1:-}" in
---version) echo 'borondns 1.0.0' ;;
+case "\${1:-}" in
+--version) echo 'borondns $version' ;;
 check-config) exit 0 ;;
 *) exit 0 ;;
 esac
 EOF
-cat >"$workdir/bin/boron-gun" <<'EOF'
+cat >"$workdir/bin/boron-gun" <<EOF
 #!/bin/sh
-case "${1:-}" in
---version) echo 'boron-gun 1.0.0' ;;
+case "\${1:-}" in
+--version) echo 'boron-gun $version' ;;
 *) exit 0 ;;
 esac
 EOF
@@ -40,6 +42,7 @@ build_package() {
     local revision="$1" output="$2"
     docker run --rm \
         -e SOURCE_DATE_EPOCH=1700000000 \
+        -e BORONDNS_RELEASE_TAG="v$version" \
         -e BORONDNS_DEB_REVISION="$revision" \
         -e BORONDNS_DIST_DIR=/output \
         -e BORONDNS_DEB_BORONDNS_BIN=/inputs/borondns \
@@ -60,12 +63,15 @@ for image_case in \
     printf 'Testing Debian package lifecycle on %s\n' "$image_label"
     docker run --rm \
         -e DEBIAN_FRONTEND=noninteractive \
+        -e BORONDNS_PACKAGE_VERSION="$version" \
         -v "$workdir/dist-r1:/packages/r1:ro" -v "$workdir/dist-r2:/packages/r2:ro" \
         -v "$workdir/bin:/inputs:ro" \
         "$image" /bin/sh -euxc '
             apt-get update
-            apt-get install -y /packages/r1/borondns_1.0.0-1_amd64.deb
-            dpkg-query -W borondns | grep -q "^borondns[[:space:]]"
+            apt-get install -y "/packages/r1/borondns_${BORONDNS_PACKAGE_VERSION}-1_amd64.deb"
+            test "$(dpkg-query -W -f="\${Version}" borondns)" = "$BORONDNS_PACKAGE_VERSION-1"
+            test "$(borondns --version)" = "borondns $BORONDNS_PACKAGE_VERSION"
+            test "$(boron-gun --version)" = "boron-gun $BORONDNS_PACKAGE_VERSION"
             cmp /usr/bin/borondns /inputs/borondns
             cmp /usr/bin/boron-gun /inputs/boron-gun
             getent passwd borondns
@@ -76,7 +82,8 @@ for image_case in \
             chown root:borondns /etc/borondns-secondary/config.toml
             chmod 0640 /etc/borondns-secondary/config.toml
             printf retained > /var/lib/borondns/zone-cache/lifecycle-test
-            apt-get install -y /packages/r2/borondns_1.0.0-2_amd64.deb
+            apt-get install -y "/packages/r2/borondns_${BORONDNS_PACKAGE_VERSION}-2_amd64.deb"
+            test "$(dpkg-query -W -f="\${Version}" borondns)" = "$BORONDNS_PACKAGE_VERSION-2"
             test -s /etc/borondns-secondary/config.toml
             test -s /var/lib/borondns/zone-cache/lifecycle-test
             dpkg --remove borondns
@@ -91,15 +98,19 @@ done
 
 # A legacy archive-installed unit would shadow the packaged service definition.
 docker run --rm -e DEBIAN_FRONTEND=noninteractive \
+    -e BORONDNS_PACKAGE_VERSION="$version" \
     -v "$workdir/dist-r1:/packages:ro" "$debian_bookworm" /bin/sh -euxc '
         apt-get update
         apt-get install -y adduser init-system-helpers
         mkdir -p /etc/systemd/system
         : > /etc/systemd/system/borondns.service
-        if dpkg --install /packages/borondns_1.0.0-1_amd64.deb; then
+        package="/packages/borondns_${BORONDNS_PACKAGE_VERSION}-1_amd64.deb"
+        test -f "$package"
+        if dpkg --install "$package" > /tmp/install.log 2>&1; then
             echo "package accepted a shadowing archive-installer unit" >&2
             exit 1
         fi
+        grep -F "remove or migrate /etc/systemd/system/borondns.service before installing the .deb" /tmp/install.log
         dpkg --purge borondns || true
     '
 

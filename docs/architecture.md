@@ -196,7 +196,7 @@ boundary; loaded secret material is zeroized where owned.
 
 ## Toolchain and maintainability
 
-The workspace declares Rust 1.95 as its minimum and pins Rust 1.96.1 in
+The workspace declares Rust 1.95 as its minimum and pins Rust 1.98.1 in
 `rust-toolchain.toml` for development and release builds. It uses edition 2024
 and resolver 3. The [interface policy](interface-compatibility-policy.md)
 covers supported product interfaces; Rust internals are not a stable library

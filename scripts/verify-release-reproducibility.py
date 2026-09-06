@@ -152,7 +152,7 @@ def main() -> None:
     if len(manifest) != 4 or {(row["artifact"], row["builder"]) for row in manifest} != expected_pairs:
         fail("artifact manifest must contain exactly two builders for both artifacts")
     rust_versions = {row["rust_version"] for row in manifest}
-    if len(rust_versions) != 1 or not next(iter(rust_versions)).startswith("rustc 1.96.1 "):
+    if len(rust_versions) != 1 or not next(iter(rust_versions)).startswith("rustc 1.98.1 "):
         fail("artifact manifest has an inconsistent or unpinned Rust version")
     for row in manifest:
         artifact, builder = row["artifact"], row["builder"]

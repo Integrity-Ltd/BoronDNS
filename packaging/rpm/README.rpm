@@ -10,3 +10,15 @@ no longer required.
 
 Remove or migrate an archive installation and its locally managed
 `/etc/systemd/system/borondns.service` before installing this RPM.
+
+## Building a package
+
+`scripts/package-rpm.sh` uses `workspace.package.version` in `Cargo.toml`.
+GitHub tag refs, `BORONDNS_RELEASE_TAG`, and local release tags at HEAD must
+match `vX.Y.Z` for that version when present. Pass `BORONDNS_RELEASE_TAG` when
+building a source archive if you want to check its intended release tag.
+
+`BORONDNS_RPM_VERSION`, if set, must match Cargo. Packaging-only revisions use
+`BORONDNS_RPM_RELEASE`. Both input executables must run on the build host and
+report the Cargo version with `--version`. Lifecycle tests use the same version
+for their stubs, filenames, and installed-package assertions.

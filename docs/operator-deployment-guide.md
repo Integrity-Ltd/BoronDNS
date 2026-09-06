@@ -65,7 +65,7 @@ directory so the bytes verified are the bytes later extracted and executed.
 Install `cosign` from a trusted source before running it.
 
 ```sh
-tag=v1.0.0
+tag=v1.0.1
 target_triple=x86_64-unknown-linux-musl
 asset="borondns-${tag#v}-$target_triple.tar.xz"
 install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
@@ -94,9 +94,9 @@ the verified copy from that directory. For example:
 
 ```sh
 # After verifying the corresponding package in "$install_root":
-sudo apt install "$install_root/borondns_1.0.0-1_amd64.deb"
+sudo apt install "$install_root/borondns_${tag#v}-1_amd64.deb"
 # Or, on Fedora/RHEL-compatible systems:
-sudo dnf install "$install_root/borondns-1.0.0-1.x86_64.rpm"
+sudo dnf install "$install_root/borondns-${tag#v}-1.x86_64.rpm"
 ```
 
 Archive installer path overrides (`--bin-dir`, `--config`) must be normalized
@@ -168,8 +168,8 @@ Load the verified archive from the protected directory:
 
 ```sh
 sudo /bin/sh -c 'xz -dc "$1" | docker load' sh \
-  "$install_root/borondns-1.0.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
-docker run --rm borondns:1.0.0 --version
+  "$install_root/borondns-${tag#v}-x86_64-unknown-linux-musl-docker-image.tar.xz"
+docker run --rm "borondns:${tag#v}" --version
 ```
 
 The image runs as UID/GID `53053`. For bridge networking, use DNS port 5300
@@ -211,7 +211,7 @@ docker run -d --name borondns \
   -p 127.0.0.1:8080:8080/tcp \
   --mount type=volume,src=borondns-state,dst=/var/lib/borondns \
   --mount type=bind,src=/etc/borondns-secondary,dst=/etc/borondns-secondary,readonly \
-  borondns:1.0.0 serve --config /etc/borondns-secondary/config.toml
+  "borondns:${tag#v}" serve --config /etc/borondns-secondary/config.toml
 ```
 
 Adjust memory and CPU limits after measuring the workload. Do not let transfer

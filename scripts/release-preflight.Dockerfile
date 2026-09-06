@@ -1,6 +1,6 @@
 FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
-ARG RUST_TOOLCHAIN_VERSION=1.96.1
+ARG RUST_TOOLCHAIN_VERSION=1.98.1
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 ARG SYFT_VERSION=v1.45.1
 ARG SYFT_LINUX_AMD64_SHA256=20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash build-essential ca-certificates curl docker.io file git jq \
-        musl-tools python3 ripgrep shellcheck xz-utils \
+        lintian musl-tools python3 ripgrep rpm shellcheck xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \

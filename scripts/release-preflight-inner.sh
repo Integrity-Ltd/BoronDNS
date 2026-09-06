@@ -55,6 +55,7 @@ evidence="$work_root/reproducibility"
 release_target="$work_root/release-target"
 
 python3 scripts/check-version-consistency.py
+python3 scripts/test-native-package-version.py
 python3 scripts/check-release-signing-policy.py
 scripts/test-package-publication-recovery.sh
 
@@ -81,12 +82,12 @@ done
 
 scripts/test-installer-docker.sh
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
-    BORONDNS_DEB_BORONDNS_BIN="${release_borondns[0]}" \
-    BORONDNS_DEB_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-deb.sh
+BORONDNS_DEB_BORONDNS_BIN="${release_borondns[0]}" \
+BORONDNS_DEB_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-deb.sh
 scripts/test-deb-package-docker.sh
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
-    BORONDNS_RPM_BORONDNS_BIN="${release_borondns[0]}" \
-    BORONDNS_RPM_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-rpm.sh
+BORONDNS_RPM_BORONDNS_BIN="${release_borondns[0]}" \
+BORONDNS_RPM_BORON_GUN_BIN="${release_boron_gun[0]}" scripts/package-rpm.sh
 scripts/test-rpm-package-docker.sh
 CARGO="$cargo_path" RUSTC="$rustc_path" scripts/package-docker-image.sh
 scripts/test-docker-image.sh

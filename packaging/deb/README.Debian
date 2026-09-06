@@ -20,3 +20,17 @@ longer required.
 The archive installer and this package use different executable locations.
 Remove or migrate an archive install, including its locally managed
 `/etc/systemd/system/borondns.service`, before installing this package.
+
+## Building a package
+
+`scripts/package-deb.sh` takes the upstream version from
+`workspace.package.version` in `Cargo.toml`. A release tag must be `v` followed
+by that version. GitHub tag refs, an explicit `BORONDNS_RELEASE_TAG`, and local
+release tags at HEAD are checked when available. For a source archive without
+Git metadata, pass `BORONDNS_RELEASE_TAG=vX.Y.Z` to check the intended tag.
+
+`BORONDNS_DEB_VERSION`, if set, must match Cargo; it cannot rename a release.
+Use `BORONDNS_DEB_REVISION` for packaging-only revisions. Both input executables
+must run on the build host and report the same upstream version with `--version`.
+The lifecycle test derives its package filenames and stub versions from the
+same source, and checks the installed package version after install and upgrade.

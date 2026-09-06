@@ -264,7 +264,7 @@ fn secret_store_xot_budget_counts_repeated_material_at_exact_and_over_limit() {
         borondns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE
     );
     let one_byte_path = root.join("one-byte.pem");
-    std::fs::write(&one_byte_path, [b'x']).expect("write one-byte aggregate material");
+    std::fs::write(&one_byte_path, b"x").expect("write one-byte aggregate material");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

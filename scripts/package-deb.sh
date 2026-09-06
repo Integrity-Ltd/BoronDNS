@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 umask 022
 
-workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo_root/Cargo.toml" | head -n 1)"
-version="${BORONDNS_DEB_VERSION:-$workspace_version}"
+source "$repo_root/scripts/native-package-common.sh"
+version="$(native_package_version "$repo_root")"
 revision="${BORONDNS_DEB_REVISION:-1}"
 architecture="${BORONDNS_DEB_ARCHITECTURE:-amd64}"
 dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
@@ -52,6 +52,9 @@ for binary in "$borondns_bin" "$boron_gun_bin"; do
         exit 1
     }
 done
+
+native_package_check_binary_version "$borondns_bin" borondns "$version"
+native_package_check_binary_version "$boron_gun_bin" boron-gun "$version"
 
 mkdir -p "$dist_dir"
 dist_dir="$(realpath -e "$dist_dir")"

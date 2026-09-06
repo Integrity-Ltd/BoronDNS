@@ -9,12 +9,12 @@ exercise the packaging tools. To deploy a downloaded release, use the
 ```sh
 git clone https://github.com/Integrity-Ltd/BoronDNS.git borondns
 cd borondns
-rustup toolchain install 1.96.1
+rustup toolchain install 1.98.1
 cargo build --locked --release -p borondns-cli --features af-xdp
 ./target/release/borondns --version
 ```
 
-The repository pins Rust `1.96.1` in `rust-toolchain.toml`; rustup selects it
+The repository pins Rust `1.98.1` in `rust-toolchain.toml`; rustup selects it
 inside the checkout. `--locked` uses the checked-in dependency resolution.
 AF_XDP is included in the release feature set but remains inactive unless
 configured.

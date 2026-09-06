@@ -35,7 +35,7 @@ DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 RELEASE_TAG_VERIFIER = ROOT / "scripts" / "verify-release-tag-signature.sh"
 EXPECTED_RELEASE_HELPER_SHA256 = {
     RELEASE_API_SUPERVISOR: "1e72e525bdf588ea486c984f0d6146485b0b6166c8a7957be3b4f27a687f8714",
-    RELEASE_REPRODUCIBILITY_VERIFIER: "5c78e231ae1148d46a7e597eb9d91298e1708d06836dff8c65dc9a2b16db229e",
+    RELEASE_REPRODUCIBILITY_VERIFIER: "b0937b341eaa4c11dc9e2c1ae877a8e2f559cf352de8256f3e8d4078d074cdfe",
     DOCKER_ARCHIVE_VERIFIER: "e461cb8aadf7b3fea389e3210e3a49ad69f0cbb33a8216a69a9710b421ba3923",
     RELEASE_TAG_VERIFIER: "645eb1af3a62a647c1f4c197d487e24d7ed49e4c097268178cd6646f3e3bac1b",
 }
@@ -146,16 +146,16 @@ SIGN_STEPS = [
     "Create GitHub release",
 ]
 EXPECTED_RUNNER = "ubuntu-24.04"
-EXPECTED_RUST_TOOLCHAIN = '[toolchain]\nchannel = "1.96.1"\n'
+EXPECTED_RUST_TOOLCHAIN = '[toolchain]\nchannel = "1.98.1"\n'
 
 
 def rust_toolchain_errors(text: str) -> list[str]:
     return [] if text == EXPECTED_RUST_TOOLCHAIN else [
-        "rust-toolchain.toml must pin the exact reviewed Rust 1.96.1 release"
+        "rust-toolchain.toml must pin the exact reviewed Rust 1.98.1 release"
     ]
 EXPECTED_GLOBAL_ENV = [
     '  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"',
-    '  RUST_TOOLCHAIN_VERSION: "1.96.1"',
+    '  RUST_TOOLCHAIN_VERSION: "1.98.1"',
     '  CARGO_CYCLONEDX_VERSION: "0.5.9"',
     '  SYFT_VERSION: "v1.45.1"',
     f'  SYFT_LINUX_AMD64_SHA256: "{EXPECTED_SYFT_LINUX_AMD64_SHA256}"',
@@ -175,7 +175,7 @@ VERIFY_STEP_SHA256 = {
     "Checkout": "b0495f7d6653c379fc61ffc839a5cd74c75cae6cdc2d97dc46f6df7e8fbc6d0d",
     "Verify clean source checkout": "d21ec3586293bde9e484f1a3720becf77ea9cbe22df05a27b9c05c3109742af8",
     "Record verified source commit": "7420c3820884d1daeca7c6cf74634fed5d9abd987a898cb584ca0dad24052eae",
-    "Check release tag matches Cargo version": "be3ed9134c708925b7d7df3edaa69aca5e40628730ad8bef67564532e12a4db5",
+    "Check release tag matches Cargo version": "b6639e0ef780ad895f32e6b9b18baa41f54e2ca02402e61d544ee63b9db4c5cd",
     "Verify Tibor-signed annotated release tag": "f5dd4479db59cbd41bb70d39b4f3742aed52cebc8ded15533b0a1770a8ae9a5f",
     "Verify release source remained clean": "9bbece38d3041cbfba688171b5165afeb0e85cc54fc405e59ae6a251ad84cd0f",
 }
@@ -2013,8 +2013,8 @@ def run_mutation_regressions(text: str) -> None:
         )
 
     global_tool_override = text.replace(
-        '  RUST_TOOLCHAIN_VERSION: "1.96.1"\n',
-        '  RUST_TOOLCHAIN_VERSION: "1.96.1"\n'
+        '  RUST_TOOLCHAIN_VERSION: "1.98.1"\n',
+        '  RUST_TOOLCHAIN_VERSION: "1.98.1"\n'
         "  RUSTC_WRAPPER: /tmp/attacker\n",
         1,
     )
@@ -2804,7 +2804,7 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
         for builder in ("a", "b"):
             manifest_rows.append(
                 f"{artifact}\t{builder}\tx86_64-unknown-linux-musl\trelease\t"
-                f"{features}\t{commit}\trustc 1.96.1 (fixture 1970-01-01)\t"
+                f"{features}\t{commit}\trustc 1.98.1 (fixture 1970-01-01)\t"
                 f"/fixture/cargo build --locked --release --target-dir "
                 f"<builder-target-dir> --target x86_64-unknown-linux-musl -p "
                 f"{'borondns-cli' if artifact == 'borondns' else 'boron-gun'}"
@@ -2957,7 +2957,7 @@ def main() -> int:
     run_docker_package_mutation_regressions(docker_package_text, dockerfile_text)
     run_reproducible_build_mutation_regressions(reproducible_build_text)
     run_installer_readme_mutation_regressions(installer_readme)
-    if not rust_toolchain_errors(rust_toolchain.replace("1.96.1", "stable", 1)):
+    if not rust_toolchain_errors(rust_toolchain.replace("1.98.1", "stable", 1)):
         raise RuntimeError("release policy checker missed mutable Rust toolchain mutation")
     errors, pins = policy_errors(text)
     errors.extend(package_policy_errors(package_text))

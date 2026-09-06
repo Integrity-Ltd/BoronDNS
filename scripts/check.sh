@@ -53,6 +53,7 @@ python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-rfc-compliance-assertions.py
 python3 scripts/check-srs-identifier-registry.py
 python3 scripts/check-version-consistency.py
+python3 scripts/test-native-package-version.py
 python3 scripts/check-release-signing-policy.py
 python3 scripts/check-doc-hygiene.py
 python3 scripts/test-doc-hygiene.py

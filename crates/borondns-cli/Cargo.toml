@@ -17,8 +17,8 @@ tokio.workspace = true
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-borondns-core = { path = "../borondns-core", version = "1.0.0" }
-borondns-server = { path = "../borondns-server", version = "1.0.0" }
+borondns-core = { path = "../borondns-core", version = "1.0.1" }
+borondns-server = { path = "../borondns-server", version = "1.0.1" }
 
 [dev-dependencies]
 getrandom.workspace = true

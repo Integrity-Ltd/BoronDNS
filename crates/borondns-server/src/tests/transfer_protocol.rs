@@ -1084,7 +1084,7 @@ fn direct_xot_material_loader_counts_repeated_files_against_profile_budget() {
     );
 
     let one_byte_path = unique_test_path("borondns-direct-xot-aggregate-plus-one", "pem");
-    std::fs::write(&one_byte_path, [b'x']).expect("write one-byte aggregate material");
+    std::fs::write(&one_byte_path, b"x").expect("write one-byte aggregate material");
     std::fs::set_permissions(&one_byte_path, std::fs::Permissions::from_mode(0o644))
         .expect("one-byte aggregate material mode");
     let one_byte_path = one_byte_path.to_str().expect("UTF-8 one-byte path");

@@ -11925,14 +11925,14 @@ grep -Fq 'refusing reproducible-build comparison from dirty or untracked source'
 # shellcheck disable=SC2016
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'case "${1:-}" in' \
-    '--version) printf "cargo 1.96.1 (fixture)\n" ;;' \
+    '--version) printf "cargo 1.98.1 (fixture)\n" ;;' \
     'metadata) printf "%s\n" "{\"packages\":[]}" ;;' \
     'build) target_dir=""; target=""; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; case "$package" in borondns-cli) binary=borondns ;; boron-gun) binary=boron-gun ;; *) exit 91 ;; esac; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"fixture $binary\\n\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary" ;;' \
     '*) exit 92 ;;' \
     'esac' >"$repro_fixture_bin/cargo"
 # shellcheck disable=SC2016
 printf '%s\n' '#!/usr/bin/env bash' \
-    'case "${1:-}" in --version) printf "rustc 1.96.1 (fixture)\n" ;; -vV) printf "rustc 1.96.1 (fixture)\nhost: x86_64-unknown-linux-gnu\n" ;; *) exit 93 ;; esac' \
+    'case "${1:-}" in --version) printf "rustc 1.98.1 (fixture)\n" ;; -vV) printf "rustc 1.98.1 (fixture)\nhost: x86_64-unknown-linux-gnu\n" ;; *) exit 93 ;; esac' \
     >"$repro_fixture_bin/rustc"
 chmod +x "$repro_fixture_bin/cargo" "$repro_fixture_bin/rustc"
 set +e
