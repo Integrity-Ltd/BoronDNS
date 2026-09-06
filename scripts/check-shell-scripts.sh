@@ -73,5 +73,5 @@ else
 fi
 python3 "$repo_root/scripts/check-release-signing-policy.py"
 
-printf 'shell script check passed: shfmt validated %s files; ShellCheck validated production scripts and bounded fixtures; the 20 GiB operations fixture passed bash -n and its runtime suite\n' \
+printf 'shell script check passed: shfmt validated %s files; ShellCheck validated production scripts and bounded fixtures; operations fixture passed bash -n (runtime suite runs separately in scripts/check.sh)\n' \
     "${#shell_files[@]}"

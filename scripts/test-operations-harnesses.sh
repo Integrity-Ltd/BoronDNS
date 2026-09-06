@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Keep unexpected assertion failures actionable without timing-sensitive xtrace.
+report_harness_failure() {
+    # Several fault-injection fixtures intentionally capture a nonzero status.
+    if [[ "$-" == *e* ]]; then
+        printf 'operations harness failed at %s:%s (status=%s): %s\n' \
+            "$2" "$3" "$1" "$4" >&2
+    fi
+}
+trap 'report_harness_failure "$?" "${BASH_SOURCE[0]}" "$LINENO" "$BASH_COMMAND"' ERR
 umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
