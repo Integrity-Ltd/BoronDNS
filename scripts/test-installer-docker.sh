@@ -210,6 +210,7 @@ payload_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 }
 
 docker run --rm -i \
+    --ulimit nofile=65536:65536 \
     -v "$payload_dir:/pkg-source:ro" \
     -e BORONDNS_ZONE=installer-smoke.example. \
     -e BORONDNS_PRIMARY=127.0.0.1:9 \
@@ -219,6 +220,9 @@ docker run --rm -i \
     -e BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
     "$image" \
     /bin/bash -Eeuo pipefail <<'BORONDNS_UBUNTU_TEST'
+			# Fake service managers launch the real daemon directly, so Docker
+			# must provide the same descriptor limit as the shipped units.
+			test "$(ulimit -n)" -ge 65536
 			report_installer_fixture_failure() {
 				if [[ "$-" == *e* ]]; then
 					printf "installer Ubuntu fixture failed at line %s (status=%s): %s\n" \
