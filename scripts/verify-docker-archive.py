@@ -304,9 +304,84 @@ def digest_from_blob_path(path: str) -> str | None:
     return digest
 
 
+def oci_image_identity(
+    metadata: dict[str, bytearray], members: dict[str, tuple[str, int]],
+    config_path: str, layers: list[str], tag: str,
+) -> str | None:
+    """Bind Docker's containerd identity to the same saved config and layers."""
+    if "index.json" not in members:
+        return None
+
+    def document(path: str) -> dict:
+        try:
+            value = json.loads(metadata[path])
+        except (KeyError, ValueError, UnicodeDecodeError) as error:
+            fail(f"missing or invalid bounded OCI metadata {path}: {error}")
+        if not isinstance(value, dict) or value.get("schemaVersion") != 2:
+            fail(f"invalid OCI schema: {path}")
+        return value
+
+    def descriptor(value: object) -> str:
+        if not isinstance(value, dict):
+            fail("invalid OCI descriptor")
+        digest, size = value.get("digest"), value.get("size")
+        if not isinstance(digest, str) or not digest.startswith("sha256:"):
+            fail("OCI descriptor must use SHA-256")
+        path = "blobs/sha256/" + digest[7:]
+        digest_from_blob_path(path)
+        if type(size) is not int or size < 0 or members.get(path) != (digest[7:], size):
+            fail(f"OCI descriptor content or size mismatch: {path}")
+        return path
+
+    index = document("index.json")
+    roots = index.get("manifests")
+    if not isinstance(roots, list) or len(roots) != 1:
+        fail("OCI index must identify exactly one image")
+    root = roots[0]
+    path = descriptor(root)
+    annotations = root.get("annotations", {})
+    if not isinstance(annotations, dict):
+        fail("invalid OCI image annotations")
+    name = annotations.get("io.containerd.image.name")
+    # Docker save emits the fully qualified name while manifest.json may use
+    # Docker Hub's familiar short spelling. No other tag aliases are accepted.
+    def familiar(value: str) -> str:
+        return value.removeprefix("docker.io/").removeprefix("library/")
+
+    if not isinstance(name, str) or familiar(name) != familiar(tag):
+        fail("OCI index tag does not match Docker manifest tag")
+    ref_name = annotations.get("org.opencontainers.image.ref.name")
+    if ref_name is not None and ref_name not in {tag.rsplit(":", 1)[-1], tag, name}:
+        fail("OCI index reference annotation conflicts with image tag")
+    identity = root["digest"]
+    current = root
+    for _ in range(8):
+        value = document(path)
+        media = current.get("mediaType")
+        if media in ("application/vnd.oci.image.index.v1+json",
+                     "application/vnd.docker.distribution.manifest.list.v2+json"):
+            children = value.get("manifests")
+            if not isinstance(children, list) or len(children) != 1:
+                fail("OCI nested index must identify exactly one image")
+            current = children[0]
+            path = descriptor(current)
+            continue
+        if media not in ("application/vnd.oci.image.manifest.v1+json",
+                         "application/vnd.docker.distribution.manifest.v2+json"):
+            fail("unsupported OCI image manifest type")
+        if descriptor(value.get("config")) != config_path:
+            fail("OCI config differs from Docker manifest config")
+        oci_layers = value.get("layers")
+        if not isinstance(oci_layers, list) or [descriptor(item) for item in oci_layers] != layers:
+            fail("OCI layers differ from Docker manifest layers")
+        return identity
+    fail("OCI index nesting exceeds hard bound")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stream-verified-archive", action="store_true")
+    parser.add_argument("--expected-image-id")
     parser.add_argument("archive")
     arguments = parser.parse_args()
     archive_path = arguments.archive
@@ -400,7 +475,7 @@ def main() -> None:
                 retained = (
                     bytearray()
                     if member.size <= MAX_SINGLE_RETAINED_JSON_BYTES
-                    and (name == "manifest.json" or name.endswith(".json"))
+                    and (name.endswith(".json") or digest_from_blob_path(name) is not None)
                     else None
                 )
                 actual_size = 0
@@ -413,6 +488,10 @@ def main() -> None:
                     if actual_size > member.size:
                         fail(f"archive member exceeded its declared size: {name}")
                     digest.update(chunk)
+                    if retained is not None and actual_size == len(chunk) and not (
+                        name.endswith(".json") or chunk.lstrip().startswith((b"{", b"["))
+                    ):
+                        retained = None
                     if retained is not None:
                         if retained_json_bytes > max_retained_json_bytes - len(chunk):
                             fail(
@@ -433,7 +512,7 @@ def main() -> None:
                     if manifest_payload is not None or retained is None:
                         fail("manifest.json is duplicated or unreasonably large")
                     manifest_payload = retained
-                elif retained is not None and name.endswith(".json"):
+                elif retained is not None:
                     small_json[name] = retained
 
         # tarfile stops at the end-of-archive marker. Drain the same bounded
@@ -502,7 +581,14 @@ def main() -> None:
                 if not isinstance(diff_id, str) or diff_id != "sha256:" + members[layer][0]:
                     fail(f"legacy layer content digest mismatch for {layer}")
 
-        result = f"sha256:{config_digest}\t{tags[0]}"
+        config_identity = f"sha256:{config_digest}"
+        oci_identity = oci_image_identity(small_json, members, config_path, layers, tags[0])
+        selected_identity = oci_identity or config_identity
+        if arguments.expected_image_id is not None:
+            if arguments.expected_image_id not in {config_identity, oci_identity}:
+                fail("expected image identity is not bound to this archive")
+            selected_identity = arguments.expected_image_id
+        result = f"{selected_identity}\t{tags[0]}"
         if arguments.stream_verified_archive:
             offset = 0
             while offset < archive_stat.st_size:

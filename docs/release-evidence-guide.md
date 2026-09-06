@@ -138,6 +138,11 @@ experimental and opt-in. Docker packaging builds its inputs separately under
 `target/docker-installer-input/` so it does not overwrite the installer assets
 already tested in `target/dist/`.
 
+Docker archives contain one runnable image. Buildx's default extra attestation
+manifests are disabled; release authentication uses the signed handoff and its
+SBOMs. Archive verification binds classic config IDs or containerd manifest IDs
+to the same config, layers, and tag, and rejects inconsistent OCI metadata.
+
 ## Reproducibility and Recovery
 
 `scripts/reproducible-build-compare.sh` builds the two static binaries twice in

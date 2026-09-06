@@ -69,6 +69,7 @@ release_target="$work_root/release-target"
 
 python3 scripts/check-version-consistency.py
 python3 scripts/test-native-package-version.py
+python3 scripts/test-docker-archive-identity.py
 python3 scripts/check-release-signing-policy.py
 scripts/test-package-publication-recovery.sh
 

@@ -322,7 +322,15 @@ mkdir -p "$run_docker_context"
 install -m 0755 "$docker_binary_asset" "$run_docker_context/borondns"
 install -m 0644 "$repo_root/config/borondns.example.toml" "$run_docker_context/borondns.example.toml"
 
-docker build \
+# Publish one runnable image; release provenance is supplied by the signed
+# handoff and SBOMs, not Buildx's additional default attestation manifests.
+docker_build=(docker build)
+image_metadata_file=""
+if docker buildx version >/dev/null 2>&1; then
+    image_metadata_file="$run_root/build-metadata.json"
+    docker_build=(docker buildx build --load --metadata-file "$image_metadata_file")
+fi
+BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${docker_build[@]}" \
     --iidfile "$image_iid_file" \
     --build-arg "ALPINE_BASE_IMAGE=$alpine_base_image" \
     --build-arg "VERSION=$version" \
@@ -343,6 +351,33 @@ rm -f -- "$image_iid_file"
     printf 'Docker build returned an invalid immutable image ID: %s\n' "$image_id" >&2
     exit 1
 }
+if [[ -n "$image_metadata_file" ]]; then
+    [[ -f "$image_metadata_file" && ! -L "$image_metadata_file" ]]
+    # Buildx's iidfile is a config ID. A containerd store may resolve only the
+    # root manifest ID, unlike the classic store; authenticate both build
+    # outputs before selecting an ID the daemon can actually address.
+    metadata_image_id="$(
+        python3 - "$image_metadata_file" "$image_id" <<'PY'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    metadata = json.load(handle)
+root = metadata.get("containerimage.digest")
+config = metadata.get("containerimage.config.digest")
+if not all(isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+           for value in (root, config)) or sys.argv[2] not in (root, config):
+    raise SystemExit("Docker build metadata is inconsistent with its iidfile")
+print(root)
+PY
+    )"
+    if resolved_image_id="$(docker image inspect --format '{{.Id}}' "$image_id" 2>/dev/null)"; then
+        [[ "$resolved_image_id" == "$image_id" || "$resolved_image_id" == "$metadata_image_id" ]]
+        image_id="$resolved_image_id"
+    else
+        image_id="$metadata_image_id"
+    fi
+fi
 docker image inspect "$image_id" >"$run_image_inspect"
 
 # The release archive promises that a fresh `docker load` publishes this exact
@@ -374,7 +409,8 @@ docker save "$image_ref" | xz -T0 -c >"$run_image_archive"
     sha256_file "$(basename "$run_image_archive")" >"$(basename "$run_image_archive").sha256"
 )
 
-archive_image_id="$(python3 "$repo_root/scripts/verify-docker-archive.py" "$run_image_archive")"
+archive_image_id="$(python3 "$repo_root/scripts/verify-docker-archive.py" \
+    --expected-image-id "$image_id" "$run_image_archive")"
 IFS=$'\t' read -r archive_image_id archive_image_ref <<<"$archive_image_id"
 [[ "$archive_image_id" == "$image_id" ]] || {
     printf 'saved Docker archive identity mismatch: expected=%s actual=%s\n' "$image_id" "$archive_image_id" >&2

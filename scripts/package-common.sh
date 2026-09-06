@@ -1540,7 +1540,7 @@ package_verify_docker_archive_bundle() {
         return 1
     fi
     [[ "$actual_checksum" == "$expected_checksum" ]] || return 1
-    observed="$(python3 "$verifier" "$archive_path")" || return 1
+    observed="$(python3 "$verifier" --expected-image-id "$expected_image_id" "$archive_path")" || return 1
     IFS=$'\t' read -r observed_image_id observed_image_ref <<<"$observed"
     [[ "$observed_image_id" == "$expected_image_id" &&
         "$observed_image_ref" == "$expected_image_ref" ]]

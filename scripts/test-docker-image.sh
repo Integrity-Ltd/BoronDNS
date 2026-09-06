@@ -140,6 +140,15 @@ package_load_verified_docker_archive "$image_archive" \
 }
 
 loaded_image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+# Classic Docker uses the config digest; containerd uses the OCI root digest.
+# Both must resolve to the same verified config/layers, not merely a cached tag.
+archive_identity="$(python3 "$repo_root/scripts/verify-docker-archive.py" \
+    --expected-image-id "$loaded_image_id" "$image_archive")"
+IFS=$'\t' read -r archive_image_id archive_image_ref <<<"$archive_identity"
+[[ "$archive_image_ref" == "$image_ref" ]] || {
+    printf 'Docker smoke archive tag changed during load\n' >&2
+    exit 1
+}
 [[ "$loaded_image_id" == "$archive_image_id" ]] || {
     printf 'freshly loaded Docker tag identity mismatch: expected=%s actual=%s\n' \
         "$archive_image_id" "$loaded_image_id" >&2

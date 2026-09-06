@@ -28,6 +28,8 @@ Changes since `v1.0.0`.
   configuration with a clean environment.
 - Release manifests and SBOMs include the shipped AF_XDP feature. The release
   API supervisor tolerates a nonblocking signal read with no pending signal.
+- Docker archive verification handles both classic config IDs and containerd
+  manifest IDs, and rejects inconsistent OCI index, config, layer, or tag data.
 
 ### Changed
 
