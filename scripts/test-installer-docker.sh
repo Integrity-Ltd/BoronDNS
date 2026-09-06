@@ -218,7 +218,14 @@ docker run --rm -i \
     -e BORONDNS_MGMT_LISTEN=127.0.0.1:18080 \
     -e BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
     "$image" \
-    /bin/bash -euo pipefail <<'BORONDNS_UBUNTU_TEST'
+    /bin/bash -Eeuo pipefail <<'BORONDNS_UBUNTU_TEST'
+			report_installer_fixture_failure() {
+				if [[ "$-" == *e* ]]; then
+					printf "installer Ubuntu fixture failed at line %s (status=%s): %s\n" \
+						"$2" "$1" "$3" >&2
+				fi
+			}
+			trap 'report_installer_fixture_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 			mutable_payload_root=/tmp/mutable-installer-payload
 			cp -a /pkg-source "$mutable_payload_root"
 			chown -R 1000:1000 "$mutable_payload_root"
@@ -1205,11 +1212,18 @@ mkdir -p -m 0755 "$service_target_root/units"
 					INSTALLER_SIGNAL_HELPER_LEAF="$leaf" \
 					"$@" >"$signal_window_root/$case_name.log" 2>&1 &
 				installer_pid=$!
-				for _ in $(seq 1 200); do
-					test ! -e "$marker" || break
+				# Payload validation can exceed two seconds on a cold container.
+				# Bound startup separately from the helper's one-second signal window.
+				signal_window_start_deadline=$((SECONDS + 30))
+				until test -e "$marker"; do
+					if ! kill -0 "$installer_pid" 2>/dev/null ||
+						((SECONDS >= signal_window_start_deadline)); then
+						echo "installer did not reach $case_name signal window within 30 seconds" >&2
+						cat "$signal_window_root/$case_name.log" >&2
+						return 1
+					fi
 					sleep 0.01
 				done
-				test -e "$marker"
 				kill -TERM "$installer_pid"
 				# Continue delivering TERM across the transition into EXIT cleanup.
 				# The first signal selects status 143; later signals must be ignored
