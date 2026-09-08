@@ -53,6 +53,21 @@ This policy does not authorize testing of Integrity systems, public DNS
 services, third-party infrastructure, or systems you do not own or have
 permission to test.
 
+## Deployment trust boundaries
+
+Treat catalog publishers as provisioning administrators, not untrusted tenants.
+Catalogs can provision root and TLD zones as well as ordinary zones. The opt-in
+member-transfer extensions also let a publisher select outbound destinations
+and a TLS server name within the configured trust profile. TSIG authenticates
+the catalog; it does not restrict that authority. See the
+[catalog trust model](docs/catalog-zone-rfc9432.md#catalog-authority).
+
+External transfer telemetry is off by default. When configured, it sends zone
+names, transfer outcomes and diagnostic text to the selected service using
+bearer authentication. Review the
+[payload inventory](docs/configuration.md#optional-external-control-plane)
+before enabling it for private zones.
+
 ## What to expect
 
 Reports are handled as project capacity permits. We aim to review useful

@@ -2,13 +2,15 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/physical-benchmark-inputs.sh
+source "$repo_root/scripts/physical-benchmark-inputs.sh"
 runs_root="${BORONDNS_PHYSICAL_DETACHED_ROOT:-$repo_root/target/physical-detached-runs}"
 harness="${BORONDNS_PHYSICAL_DETACHED_HARNESS:-$repo_root/scripts/physical-udp-knot-comparison.sh}"
-server_ssh="${BORONDNS_PHYSICAL_SERVER_SSH:-borondns-1}"
-player_ssh="${BORONDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
+server_ssh="${BORONDNS_PHYSICAL_SERVER_SSH:-}"
+player_ssh="${BORONDNS_PHYSICAL_PLAYER_SSH:-}"
 server_root="${BORONDNS_PHYSICAL_SERVER_ROOT:-~/borondns}"
 player_workdir="${BORONDNS_PHYSICAL_PLAYER_WORKDIR:-~/borondns-tools/bench}"
-interface="${BORONDNS_PHYSICAL_INTERFACE:-eno1np0}"
+interface="${BORONDNS_PHYSICAL_INTERFACE:-}"
 
 usage() {
     cat >&2 <<EOF
@@ -17,6 +19,9 @@ Usage:
   $0 status RUN_DIR
 
 Environment:
+  Set BORONDNS_PHYSICAL_SERVER_SSH, PLAYER_SSH, INTERFACE, TARGET_IP and SOURCE_IP.
+  With PLAYER_TOOL=boron-gun, also set SOURCE_MAC and TARGET_MAC (same prefix).
+  Set PLAYER_TOOL explicitly when using a custom detached harness.
   BORONDNS_PHYSICAL_* variables are passed through to the detached harness.
   SSH_AUTH_SOCK is passed through when set so systemd-launched monitors can SSH.
   BORONDNS_PHYSICAL_DETACHED_ROOT overrides the local run directory root.
@@ -65,6 +70,12 @@ record_command() {
 start_run() {
     local launcher monitor_pid timestamp unit run_dir
 
+    physical_validate_inputs
+    if [[ -n "${BORONDNS_PHYSICAL_DETACHED_HARNESS:-}" &&
+        -z "${BORONDNS_PHYSICAL_PLAYER_TOOL:-}" ]]; then
+        printf 'set BORONDNS_PHYSICAL_PLAYER_TOOL explicitly for a custom detached harness\n' >&2
+        return 64
+    fi
     require_tool ssh
 
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

@@ -27,6 +27,10 @@ The [feature reference](docs/implemented-feature-scope.md) describes the limits
 of each capability. BoronDNS serves DNSSEC records but does not sign zones or
 validate DNSSEC chains. AF_XDP is opt-in; ordinary UDP sockets are the default.
 
+External transfer telemetry is off by default. Enabling it sends zone names and
+transfer outcomes to an operator-configured service; see the
+[payload and configuration](docs/configuration.md#optional-external-control-plane).
+
 ## Get started
 
 For installation, configuration, upgrades, and troubleshooting, use the

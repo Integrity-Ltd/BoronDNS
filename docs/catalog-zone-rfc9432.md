@@ -24,6 +24,24 @@ Catalog transfers always require TSIG: the catalog controls which zones this
 server will serve. TSIG authenticates data but does not encrypt it; use XoT when
 the transfer also needs confidentiality.
 
+### Catalog authority
+
+A configured catalog publisher is trusted to provision any valid zone name,
+including `.` and single-label TLDs. There is no per-catalog namespace allowlist.
+Static/catalog ownership conflicts are still filtered, and query selection uses
+the most-specific visible zone: an allowed root zone does not replace a more
+specific local zone. Keep catalogs from mutually untrusted administrators on
+separate server instances if their provisioning authority must be isolated.
+
+Enabling member-transfer extensions grants additional network authority. There
+is no general destination, port, or TLS-name allowlist for authenticated member
+transfers. A catalog can change the destination and select `server_name` within
+an existing XoT profile; the profile's certificate verification and client
+credentials remain in use. TSIG authenticates transferred data, not permission
+to contact a destination. Enable extensions only for trusted provisioning
+administrators, and use network egress policy when destinations must be bounded.
+The private-address check for legacy unsigned TCP is not a general egress policy.
+
 `serve_catalog_zone` defaults to `false`. BoronDNS transfers and processes the
 catalog but hides its management records from ordinary DNS queries. Its member
 zones remain independently visible. Set this option to `true` only if the
@@ -100,7 +118,9 @@ _udns-notify.ext.a.zones.catalog.example. TXT "source=198.51.100.54"
 The `primaries.ext` A/AAAA records and TXT key-name reference use the
 BIND-compatible form. The transfer/NOTIFY TXT properties are BoronDNS
 extensions. All custom properties belong below `ext`; legacy extension owners
-outside `ext` are ignored.
+outside `ext` are ignored. The `_udns-*` labels are retained wire-format names
+from the original control-plane integration, not a separate DNS server or
+telemetry feature.
 
 Malformed extensions do not invalidate the member PTR. For a new member,
 BoronDNS uses its configured fallback policy; an existing member retains its

@@ -19,6 +19,7 @@ RUN apt-get update \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN_VERSION" \
     && rustup target add --toolchain "$RUST_TOOLCHAIN_VERSION" x86_64-unknown-linux-musl \
+    && rustup component add --toolchain "$RUST_TOOLCHAIN_VERSION" rust-docs \
     && cargo install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
 
 RUN syft_version="${SYFT_VERSION#v}" \

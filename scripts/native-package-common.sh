@@ -68,3 +68,16 @@ native_package_check_binary_version() {
         return 1
     fi
 }
+
+# Native packages reuse the inventory generated alongside the installer binary.
+# Source-archive/custom binary builders must supply it explicitly; silently
+# packaging only the project's own licenses is not an acceptable fallback.
+native_package_notices() {
+    local binary="$1" notices
+    notices="${BORONDNS_PACKAGE_NOTICES:-${binary%.bin}/THIRD-PARTY-NOTICES.html}"
+    [[ -f "$notices" && ! -L "$notices" && -s "$notices" ]] || {
+        printf 'native package notices: missing nonempty regular THIRD-PARTY-NOTICES.html; build the installer first or set BORONDNS_PACKAGE_NOTICES\n' >&2
+        return 1
+    }
+    printf '%s\n' "$notices"
+}

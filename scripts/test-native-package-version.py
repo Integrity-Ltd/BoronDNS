@@ -51,6 +51,27 @@ class NativePackageVersionTests(unittest.TestCase):
     def test_workspace_is_the_version_source(self):
         self.assert_version()
 
+    def test_native_notices_require_a_nonempty_regular_file(self):
+        notices = self.root / "THIRD-PARTY-NOTICES.html"
+        def resolve_notices():
+            return subprocess.run(
+                ["bash", "-euo", "pipefail", "-c",
+                 'source "$1/scripts/native-package-common.sh"; native_package_notices fixture.bin',
+                 "test", str(self.root)],
+                env=self.env | {"BORONDNS_PACKAGE_NOTICES": str(notices)},
+                text=True, capture_output=True,
+            )
+        self.assertNotEqual(resolve_notices().returncode, 0)
+        notices.touch()
+        self.assertNotEqual(resolve_notices().returncode, 0)
+        notices.write_text("<html>Fixture notices</html>")
+        result = resolve_notices()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(notices))
+        notices.unlink()
+        notices.symlink_to(self.root / "Cargo.toml")
+        self.assertNotEqual(resolve_notices().returncode, 0)
+
     def test_matching_tags_and_overrides_are_assertions(self):
         self.assert_version(
             BORONDNS_RELEASE_TAG="v7.8.9", GITHUB_REF="refs/tags/v7.8.9",

@@ -1,8 +1,10 @@
 # Rust Audit Remediation Evidence — 2026-08-17
 
-This note records current-revision evidence for the actionable findings in
+This note records historical evidence for the actionable findings in
 Tibor's 2026-08-16 Rust/performance audit. The finding-by-finding disposition is
 maintained outside the repository with the original review material.
+The QPS interpretation below was corrected on 2026-09-08 after inspecting the
+retained response-code counts.
 
 ## Hot-path evidence
 
@@ -20,23 +22,34 @@ The absence of cardinality-proportional growth is the acceptance criterion;
 absolute nanoseconds are host- and build-dependent.
 
 Query observation now parses Header/Question once for metrics and CHAOS
-handling and classifies DNS Cookies once. A direct-link regression run used the
-retained best 25 Gbit/s profile: `oxidedns-1` server, `oxidegun-1` requester,
+handling and classifies DNS Cookies once. An intended direct-link regression
+run used the tuned 25 Gbit/s profile: `oxidedns-1` server, `oxidegun-1` requester,
 48 dedicated workers, batch 256, metrics off, spin idle, identical socket/fq
 tuning, benchmark-scoped NOTRACK, and kxdpgun generic mode. At 4.25M offered
-QPS it returned 4,247,533 replies/s (99.961379%). The prior same-profile row was
-4,247,663 replies/s, a 130 replies/s or 0.0031% difference. This is noise and
-proves no small-zone QPS regression; it does not claim a measurable gain from
-removing the duplicate parsing. The retained artifact is:
+QPS it returned 4,247,533 replies/s (99.961379%), but all 42,484,016 replies
+were `REFUSED`, averaging 37 DNS bytes. The requester queried `perf.test.`
+instead of the server's configured `alpha.test.` zone because the harness had
+not copied the staged query database. The prior 4,247,663 replies/s small-zone
+row returned `NOERROR`, averaging 54 bytes: these are different workloads.
+The earlier claim that their similarity proved no small-zone QPS regression is
+withdrawn. This run does not measure successful authoritative lookup throughput
+or the benefit of removing duplicate parsing. The retained artifact is:
 
 `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260817T054956Z`
 
-A process-perf companion run returned 4,146,410 replies/s while sampling. Its
-largest merged userspace address range was optimized hash-table probing; kernel
-UDP receive/enqueue and copying remained prominent. Stripped release symbols
-do not support a narrower source-level optimization claim. Artifact:
+A process-perf companion run returned 4,146,410 replies/s while sampling;
+all 41,469,930 replies were also `REFUSED`, averaging 37 bytes. Its profiles
+describe that refusal workload, not positive-answer lookup cost. Neither these
+profiles nor their stripped release symbols support a source-level lookup
+optimization claim. Artifact:
 
 `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260817T055053Z`
+
+The separate cardinality microbenchmark above is unaffected. See the
+[loss-matrix evidence](dns-server-loss-matrix-benchmark.md) for the verified
+June and August small-zone results and the invalid large-zone comparisons.
+Positive-answer regression evidence needs a new matched run with validated
+query names, answer content, and response-code counts.
 
 ## Transfer and publication memory
 

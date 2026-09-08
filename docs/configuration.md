@@ -223,6 +223,30 @@ polls durable operations from an external service. Both use outbound HTTPS.
 Cleartext HTTP requires the explicit development override and an IP-literal
 loopback address.
 
+Telemetry is off by default. To enable it, set all three telemetry fields:
+`endpoint_url`, `node_id`, and `bearer_token`. Partial configuration is rejected;
+remove all three and restart to disable reporting. There is no default reporting
+destination. Operations polling is configured separately.
+
+Transfer reports are best-effort JSON POSTs. BoronDNS appends
+`secondary-nodes/{node_id}/transfer-events` to the configured endpoint path
+(for example, `/api/v1`), with the token in the `Authorization: Bearer` header.
+The node ID is encoded as one path segment. HTTP redirects are not followed.
+
+| JSON fields | When present |
+| --- | --- |
+| `zone_name`, `status`, `transfer_mode`, `message` | Every report; mode is `axfr_ixfr`, not the protocol observed on a particular transfer. The message includes the refresh reason. |
+| `serial` | Success/skipped reports when known; encoded as a decimal string. |
+| `refresh_seconds`, `retry_seconds` | Success/skipped reports with known SOA timers. |
+| `failure_reason` | Failed reports; free-text diagnostic or a fallback message. |
+
+There are no RRset or credential fields in the report schema. Reports do
+contain zone names and may include addresses or other operational detail in
+failure text. Treat the endpoint and its logs as trusted recipients of that
+metadata. A bounded worker queue keeps reporting off the transfer publication
+path; full queues and failed HTTP requests can lose reports, so this is not an
+audit log or a substitute for local transfer monitoring.
+
 | Operation | Effect |
 | --- | --- |
 | `retry` | Request an immediate refresh of a configured zone. |
@@ -231,7 +255,8 @@ loopback address.
 | `republish_feed` | Reload the configured secret store, then refresh catalogs. |
 | `rotate_tsig` | Reload the configured secret store, then refresh the named zone. |
 
-The poll path is `/api/v1/secondary-nodes/{node_id}/operations`. Responses are
+The poll path appends `secondary-nodes/{node_id}/operations` to its configured
+endpoint path. Responses are
 bounded to 256 KiB and 20 operations. This integration does not change
 listeners, static primaries, or the configured secret-store root, and does not
 expose an inbound administration API.
@@ -252,6 +277,19 @@ expose an inbound administration API.
 BoronDNS serves existing DNSSEC signatures and denial records; it does not sign
 or validate the primary's zone as a resolver would. Keep the primary's signing
 and signature-expiry monitoring in place.
+
+`limits.max_udp_payload` defaults to 1232 bytes and accepts values from 512 to
+65,535. The response also respects the client's advertised EDNS size. Increasing
+the server limit can expose responses to IP fragmentation and path-MTU loss;
+`TC=0` does not mean the IP packet was unfragmented. There is currently no
+separate high-payload warning. Keep the default unless a larger value has been
+tested on the deployment's paths.
+
+`limits.max_tcp_connections` defaults to 1,024 globally.
+`max_tcp_connections_per_source` is unset by default, so one source can consume
+the global allowance. Set a per-source limit when fairness requires it, while
+allowing for many legitimate clients behind one resolver or NAT address. This
+limits connections, not queries on a connection.
 
 DNS Cookies default to the lenient policy. For anycast or load-balanced
 instances, configure the same 32-hex-character `cookie.server_secret` across

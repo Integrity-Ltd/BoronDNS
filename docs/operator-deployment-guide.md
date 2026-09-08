@@ -156,11 +156,27 @@ high-port deployments need no such capability. A root-launched process requires
 `[process].run_as_user` and drops privileges before processing network input.
 Leave core dumps disabled and no-new-privileges enabled.
 
+When BoronDNS changes from root to the configured user, it initializes that
+account's supplementary groups and verifies the resulting user/group IDs and
+that no Linux effective, permitted or inheritable capabilities remain. Retained
+capabilities cause startup rejection, not an automatic policy rewrite.
+When already running as the target user, it retains
+the service manager's primary/supplementary groups and capabilities and checks
+ID consistency; this preserves capabilities deliberately granted by the unit.
+Restrict those privileges in the service configuration.
+
 The runtime user needs read access to configuration and credentials and write
 access to `server.zone_cache_directory`. Make that path available through any
 service sandbox. Start with `LimitNOFILE=65536`; BoronDNS rejects startup when
 the actual descriptor limit cannot cover configured connections, transfer
 workers, listeners, and reserves. Tune the limit with the workload.
+
+The shipped unit is a socket-backend starting point, not a validated AF_XDP
+sandbox profile. Extra address-family, syscall and capability restrictions need
+testing with the selected backend: AF_XDP needs facilities ordinary UDP does
+not. Do not add broad privileges merely to make an attachment failure disappear.
+If setting cgroup memory limits, budget for peak transfer, cache restore and
+compaction as well as steady-state serving; no one fixed limit fits all zones.
 
 ## Run the Docker image
 

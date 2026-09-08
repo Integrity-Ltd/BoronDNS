@@ -182,7 +182,7 @@ VERIFY_STEP_SHA256 = {
 PACKAGE_STEP_SHA256 = {
     "Checkout verified source": "7eca7f77d7449358104f62e3fa7d337dfeed951c5769e0e1718fbfda313ae250",
     "Verify packaging source commit": "cb5e0c0c712eb7f630af958cbf4aa76a5cc10254739e7a55adf1286c177aabf9",
-    "Install packaging tools": "af5e36d40ef91aae88b4a0d066cd7cc0fdbd95910742247da7c1429f51c6d534",
+    "Install packaging tools": "cba82168f469f4176282624b8fc87672daa062111969daa1a956827f68f15faa",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
     "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
     "Build installer": "a19e5a8a4448a1af99905d319d426c80d80ed01d864764f6f350fbf71125565b",
@@ -204,7 +204,7 @@ SIGN_STEP_SHA256 = {
     "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
     "Create GitHub release": "57a2cff7e647473921f02f30ecb5f1768accd7a14fcc1d5c2489a3b63c63be17",
 }
-PACKAGE_TARGET_CONTRACT_SHA256 = "5efacc07b7490f97f5eb1f46af3d49390dc37134d144b4eea44295d23628a1ac"
+PACKAGE_TARGET_CONTRACT_SHA256 = "c2264e91bc743b6698686d9a8d12a0266b35083b4b06cb5a53a8ba06517dce52"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -846,6 +846,7 @@ def package_policy_errors(text: str) -> list[str]:
         "printf 'source_clean=%s\\n' \"$source_clean\"",
         "printf 'release_eligible=%s\\n' \"$release_eligible\"",
         "printf 'dirty_source_override=%s\\n' \"$allow_dirty_non_release\"",
+        "sha256_file \"$run_staging/THIRD-PARTY-NOTICES.html\" | awk '{print \"third_party_notices_sha256=\"$1}'",
     )
     for marker in required:
         if text.count(marker) != 1:
@@ -2238,6 +2239,11 @@ def run_package_mutation_regressions(text: str) -> None:
         raise RuntimeError("package policy fixture requires absolute cargo build")
     if not package_policy_errors(path_cargo_build):
         raise RuntimeError("package policy checker missed PATH cargo proxy mutation")
+
+    notice_hash = "    sha256_file \"$run_staging/THIRD-PARTY-NOTICES.html\" | awk '{print \"third_party_notices_sha256=\"$1}'\n"
+    without_notice_hash = text.replace(notice_hash, "", 1)
+    if without_notice_hash == text or not package_policy_errors(without_notice_hash):
+        raise RuntimeError("package policy checker missed third-party notice hash removal")
 
     forged_build_metadata = text.replace(
         'BORONDNS_BUILD_COMMIT="$commit"',

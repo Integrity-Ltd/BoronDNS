@@ -34,6 +34,7 @@ cat >"$workdir/bin/boron-gun" <<EOF
 test "\${1:-}" != --version || echo 'boron-gun $version'
 EOF
 chmod 0755 "$workdir/bin/borondns" "$workdir/bin/boron-gun"
+cp "$repo_root/tests/fixtures/third-party-notices.html" "$workdir/bin/THIRD-PARTY-NOTICES.html"
 
 build_package() {
     local image="$1" release="$2" output="$3"
@@ -42,6 +43,7 @@ build_package() {
         -e BORONDNS_RPM_RELEASE="$release" -e BORONDNS_DIST_DIR=/output \
         -e BORONDNS_RPM_BORONDNS_BIN=/inputs/borondns \
         -e BORONDNS_RPM_BORON_GUN_BIN=/inputs/boron-gun \
+        -e BORONDNS_PACKAGE_NOTICES=/inputs/THIRD-PARTY-NOTICES.html \
         -v "$workdir/source:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
         "$image" /bin/bash -euxc 'dnf -y install rpm-build >/dev/null; /src/scripts/package-rpm.sh' >/dev/null
 }
@@ -61,6 +63,7 @@ for image_case in "Fedora 42|$fedora_image" "Rocky Linux 9|$rocky_image"; do
             test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" borondns)" = "$BORONDNS_PACKAGE_VERSION-1"
             test "$(borondns --version)" = "borondns $BORONDNS_PACKAGE_VERSION"
             test "$(boron-gun --version)" = "boron-gun $BORONDNS_PACKAGE_VERSION"
+            test "$(sha256sum /usr/share/doc/borondns/THIRD-PARTY-NOTICES.html | sed "s/ .*//")" = "$(sha256sum /inputs/THIRD-PARTY-NOTICES.html | sed "s/ .*//")"
             test "$(sha256sum /usr/bin/borondns | sed "s/ .*//")" = "$(sha256sum /inputs/borondns | sed "s/ .*//")"
             test "$(sha256sum /usr/bin/boron-gun | sed "s/ .*//")" = "$(sha256sum /inputs/boron-gun | sed "s/ .*//")"
             getent passwd borondns
@@ -76,6 +79,7 @@ for image_case in "Fedora 42|$fedora_image" "Rocky Linux 9|$rocky_image"; do
             test -s /var/lib/borondns/zone-cache/lifecycle-test
             rpm -e borondns
             test ! -e /usr/bin/borondns
+            test ! -e /usr/share/doc/borondns/THIRD-PARTY-NOTICES.html
             test -s /etc/borondns-secondary/config.toml
             test -s /var/lib/borondns/zone-cache/lifecycle-test
         '

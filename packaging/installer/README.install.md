@@ -3,6 +3,10 @@
 This archive installs statically linked `borondns` and `boron-gun` Linux
 binaries plus a systemd or OpenRC service for `borondns`.
 
+The archive also contains `THIRD-PARTY-NOTICES.html` and the project license
+texts. Keep these with any redistributed binaries; the shell installer does not
+copy the notice document into its managed installation directory.
+
 ## Quick install
 
 ```sh

@@ -44,6 +44,7 @@ case "\${1:-}" in
 esac
 EOF
 chmod 0755 "$workdir/bin/borondns" "$workdir/bin/boron-gun"
+cp "$repo_root/tests/fixtures/third-party-notices.html" "$workdir/bin/THIRD-PARTY-NOTICES.html"
 
 build_package() {
     local revision="$1" output="$2"
@@ -54,6 +55,7 @@ build_package() {
         -e BORONDNS_DIST_DIR=/output \
         -e BORONDNS_DEB_BORONDNS_BIN=/inputs/borondns \
         -e BORONDNS_DEB_BORON_GUN_BIN=/inputs/boron-gun \
+        -e BORONDNS_PACKAGE_NOTICES=/inputs/THIRD-PARTY-NOTICES.html \
         -v "$workdir/source:/src:ro" -v "$workdir/bin:/inputs:ro" -v "$output:/output" \
         "$debian_bookworm" \
         /bin/bash /src/scripts/package-deb.sh >/dev/null
@@ -75,12 +77,15 @@ for image_case in \
         -v "$workdir/bin:/inputs:ro" \
         "$image" /bin/sh -euxc '
             apt-get update
-            apt-get install -y "/packages/r1/borondns_${BORONDNS_PACKAGE_VERSION}-1_amd64.deb"
+            # Minimal container images omit most docs by default. Explicitly
+            # retain BoronDNS docs to exercise installed notice payloads.
+            apt-get -o Dpkg::Options::="--path-include=/usr/share/doc/borondns/*" install -y "/packages/r1/borondns_${BORONDNS_PACKAGE_VERSION}-1_amd64.deb"
             test "$(dpkg-query -W -f="\${Version}" borondns)" = "$BORONDNS_PACKAGE_VERSION-1"
             test "$(borondns --version)" = "borondns $BORONDNS_PACKAGE_VERSION"
             test "$(boron-gun --version)" = "boron-gun $BORONDNS_PACKAGE_VERSION"
             cmp /usr/bin/borondns /inputs/borondns
             cmp /usr/bin/boron-gun /inputs/boron-gun
+            cmp /usr/share/doc/borondns/THIRD-PARTY-NOTICES.html /inputs/THIRD-PARTY-NOTICES.html
             getent passwd borondns
             getent group borondns
             test "$(stat -c %a /var/lib/borondns/zone-cache)" = 770
@@ -89,12 +94,13 @@ for image_case in \
             chown root:borondns /etc/borondns-secondary/config.toml
             chmod 0640 /etc/borondns-secondary/config.toml
             printf retained > /var/lib/borondns/zone-cache/lifecycle-test
-            apt-get install -y "/packages/r2/borondns_${BORONDNS_PACKAGE_VERSION}-2_amd64.deb"
+            apt-get -o Dpkg::Options::="--path-include=/usr/share/doc/borondns/*" install -y "/packages/r2/borondns_${BORONDNS_PACKAGE_VERSION}-2_amd64.deb"
             test "$(dpkg-query -W -f="\${Version}" borondns)" = "$BORONDNS_PACKAGE_VERSION-2"
             test -s /etc/borondns-secondary/config.toml
             test -s /var/lib/borondns/zone-cache/lifecycle-test
             dpkg --remove borondns
             test ! -e /usr/bin/borondns
+            test ! -e /usr/share/doc/borondns/THIRD-PARTY-NOTICES.html
             test -s /etc/borondns-secondary/config.toml
             test -s /var/lib/borondns/zone-cache/lifecycle-test
             dpkg --purge borondns

@@ -130,6 +130,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lintian musl-tools rpm
           "$HOME/.cargo/bin/rustup" target add --toolchain "$RUST_TOOLCHAIN_VERSION" x86_64-unknown-linux-musl
+          "$HOME/.cargo/bin/rustup" component add --toolchain "$RUST_TOOLCHAIN_VERSION" rust-docs
           RUSTC="$verified_rustc" "$verified_cargo" install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
           mkdir -p "$HOME/.local/bin"
           syft_version="${SYFT_VERSION#v}"

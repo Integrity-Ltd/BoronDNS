@@ -244,6 +244,11 @@ boron_gun_binary="$run_build_target/$target_triple/release/boron-gun"
 }
 
 mkdir -p "$run_staging/bin" "$run_staging/share/borondns"
+env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
+    PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+    python3 "$repo_root/scripts/package-third-party-notices.py" \
+    --cargo "$cargo_bin" --rustc "$rustc_bin" --target "$target_triple" \
+    --output "$run_staging/THIRD-PARTY-NOTICES.html"
 install -m 0755 "$binary" "$run_staging/bin/borondns"
 install -m 0755 "$boron_gun_binary" "$run_staging/bin/boron-gun"
 install -m 0755 "$repo_root/packaging/installer/install.sh" "$run_staging/install.sh"
@@ -280,6 +285,7 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
     sha256_file "$run_staging/share/borondns/openrc/borondns" |
         awk '{print "openrc_template_sha256="$1}'
     sha256_file "$run_staging/README.install.md" | awk '{print "readme_sha256="$1}'
+    sha256_file "$run_staging/THIRD-PARTY-NOTICES.html" | awk '{print "third_party_notices_sha256="$1}'
 } >"$run_staging/manifest.txt"
 
 if command -v file >/dev/null 2>&1; then

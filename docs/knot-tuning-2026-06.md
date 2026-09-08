@@ -481,6 +481,8 @@ bypassed DNS parsing/lookup, RRL, cookies, TSIG, and normal composition, patched
 the query ID into a one-record answer with minimal OPT, and retained normal
 UDP/IP rewrite. It was not production DNS behavior. Its limited improvement
 suggested transport/requester orchestration dominated this profile.
+The legacy environment activation has since been removed; setting this
+variable in current builds does not bypass normal DNS handling.
 Knot's system profile exposed `knot_xdp_recv`, `knot_xdp_send`,
 `knot_xdp_reply_alloc`, lookup and packet assembly. Its
 prepare/receive/reply-allocate/receive-finish/send/send-finish lifecycle

@@ -10,14 +10,23 @@ addresses, MACs, and installed server paths, and avoid concurrent campaigns.
 See the [comparison runbook](knot-comparison-benchmark.md) for prerequisites.
 The measurements below belong to dated builds, not the latest release.
 
-Run the forward direction with:
+Run the forward direction with explicit lab inputs. The MAC values below are
+example placeholders: replace them with the verified player/server NIC MACs.
 
 ```sh
+BORONDNS_PHYSICAL_SERVER_SSH=borondns-1 \
+BORONDNS_PHYSICAL_PLAYER_SSH=oxidegun-1 \
+BORONDNS_PHYSICAL_INTERFACE=eno1np0 \
+BORONDNS_PHYSICAL_TARGET_IP=198.18.0.1 \
+BORONDNS_PHYSICAL_SOURCE_IP=198.18.0.2 \
+BORONDNS_PHYSICAL_PLAYER_TOOL=boron-gun \
+BORONDNS_PHYSICAL_SOURCE_MAC=02:00:00:00:00:02 \
+BORONDNS_PHYSICAL_TARGET_MAC=02:00:00:00:00:01 \
 BORONDNS_PHYSICAL_DETACHED_HARNESS="$PWD/scripts/physical-dns-server-loss-matrix.sh" \
 scripts/physical-udp-detached-batch.sh start
 ```
 
-The default forward direction is:
+The example forward direction is:
 
 - server: `BORONDNS_PHYSICAL_SERVER_SSH=borondns-1`
 - player: `BORONDNS_PHYSICAL_PLAYER_SSH=oxidegun-1`
@@ -29,10 +38,12 @@ Run the reverse direction after the forward run finishes:
 ```sh
 BORONDNS_PHYSICAL_SERVER_SSH=oxidegun-1 \
 BORONDNS_PHYSICAL_PLAYER_SSH=borondns-1 \
+BORONDNS_PHYSICAL_INTERFACE=eno1np0 \
 BORONDNS_PHYSICAL_TARGET_IP=198.18.0.2 \
 BORONDNS_PHYSICAL_SOURCE_IP=198.18.0.1 \
-BORONDNS_PHYSICAL_SOURCE_MAC=1c:34:da:60:67:00 \
-BORONDNS_PHYSICAL_TARGET_MAC=b8:59:9f:4b:73:2c \
+BORONDNS_PHYSICAL_PLAYER_TOOL=boron-gun \
+BORONDNS_PHYSICAL_SOURCE_MAC=02:00:00:00:00:01 \
+BORONDNS_PHYSICAL_TARGET_MAC=02:00:00:00:00:02 \
 BORONDNS_PHYSICAL_DETACHED_HARNESS="$PWD/scripts/physical-dns-server-loss-matrix.sh" \
 scripts/physical-udp-detached-batch.sh start
 ```
@@ -59,6 +70,9 @@ The loss-band summary reports the best row for each target at allowed requester
 loss percentages `0`, `1`, `2`, `3`, `5`, and `10`. Keep the raw `summary.tsv`
 for detailed rate-by-rate analysis; use `loss-bands.tsv` for high-level
 comparison statements.
+Reply counts alone do not establish useful DNS throughput: also inspect each
+row's response-code counts and verify that the requester queried names served
+by that row. A fast `REFUSED` response is not a successful authoritative lookup.
 
 NSD notes:
 
@@ -86,11 +100,11 @@ Raw artifacts:
 - BoronDNS and Knot:
   `target/physical-detached-runs/20260612T052045Z-udp-tuned-knot-borondns`
 - BoronDNS and Knot remote evidence:
-  `/home/codex/borondns/target/physical-knot-comparison-20260605T132306Z/staged/evidence/physical-udp-knot-comparison-20260612T052047Z`
+  `/home/codex/oxidedns/target/physical-knot-comparison-20260605T132306Z/staged/evidence/physical-udp-knot-comparison-20260612T052047Z`
 - NSD:
   `target/physical-detached-runs/20260612T083547Z-udp-tuned-nsd`
 - NSD remote evidence:
-  `/home/codex/borondns/target/physical-knot-comparison-20260605T132306Z/staged/evidence/physical-udp-knot-comparison-20260612T083550Z`
+  `/home/codex/oxidedns/target/physical-knot-comparison-20260605T132306Z/staged/evidence/physical-udp-knot-comparison-20260612T083550Z`
 
 Host and link evidence:
 
@@ -139,7 +153,20 @@ In this tuned UDP slice, BoronDNS reached
 NSD at 3.234M replies/s. At the <=5% loss band, BoronDNS reached 4.763M
 replies/s, Knot reached 4.573M replies/s, and NSD reached 3.419M replies/s.
 
-## Kernel and large-zone comparison, 2026-08-15
+The retained BoronDNS peak was rechecked on 2026-09-08. Its
+`oxidedns-std-w48-q4800000-batch-64-metrics-off-idle-spin/kxdpgun.log`
+records 23,826,131 replies, all `NOERROR`, averaging 54 DNS bytes over 5.0022
+seconds. This remains valid historical small-zone evidence; it is not a result
+for the current build. The `oxidedns` directory names above are the actual
+retained paths, predating the project rename.
+
+## August 15 runs: small-zone results and invalid large-zone comparisons
+
+Response-code verification on 2026-09-08 found that the large-zone rows and
+later recovery sweeps queried an unserved zone and received only `REFUSED`.
+The original size-scaling and host-versus-code conclusions from those rows are
+withdrawn. The small-zone batch sweep and Knot reference below did return
+`NOERROR`; they are not invalidated by the separate workload mismatch.
 
 The forward 25 Gbit/s pair was rechecked after the server moved from Linux
 `7.0.0-22-generic` to `7.0.0-28-generic`. The requester remained
@@ -162,42 +189,45 @@ and queue pressure. Raising fq to limit 100,000 and per-flow limit 5,000 merely
 moved loss from qdisc drops to UDP receive-buffer exhaustion and is not a
 recommended profile.
 
-| workload | offered qps | replies/s | reply % | UDP batch | result |
+| intended workload | offered qps | replies/s | reply % | UDP batch | actual responses |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Knot, small reference zone | 4,250,000 | 4,176,697 | 98.294968% | Knot-managed | current-kernel reference |
-| BoronDNS, small reference zone | 4,250,000 | 4,247,663 | 99.960584% | 256 | best small-zone sweep row |
-| BoronDNS, 9.1M-record static NSEC3 zone | 4,250,000 | 4,245,748 | 99.920916% | 256 | perf-recorded large-zone row |
-| BoronDNS, same zone with active IXFR overlay | 4,250,000 | 4,243,016 | 99.848230% | 256 | 23-generation catch-up plus a live update |
+| Knot, small reference zone | 4,250,000 | 4,176,697 | 98.294968% | Knot-managed | 41,775,784 `NOERROR`, average 54 B |
+| BoronDNS, small reference zone | 4,250,000 | 4,247,663 | 99.960584% | 256 | 42,483,678 `NOERROR`, average 54 B |
+| BoronDNS, 9.1M-record static NSEC3 zone | 4,250,000 | 4,245,748 | 99.920916% | 256 | 42,466,819 `REFUSED`, average 37 B |
+| BoronDNS, same zone with active IXFR overlay | 4,250,000 | 4,243,016 | 99.848230% | 256 | 42,435,927 `REFUSED`, average 37 B |
 
 The best small-zone BoronDNS row was 70,966 replies/s (1.70%) above the matched
-Knot row. Large static QPS was 0.045% below the small row, and the active IXFR
-overlay was 0.109% below it. These small differences do not establish a
-size-related regression without repeated runs and a variability estimate.
-This workload alone did not justify a separate large-zone lookup structure.
+Knot row in these individual runs, not a repeated-trial estimate of an enduring
+advantage. The large-zone server served `load.borongen.`, while the requester
+used `perf.test.`: the physical harness had not copied the staged query
+database to the requester. Those rows measure refusal throughput while a large
+zone was resident, not lookups in that zone. They cannot establish large-zone
+lookup speed, IXFR lookup overhead, or whether a different lookup structure
+would help. Transfer/catch-up observations are separate from this failed QPS
+comparison.
 
-A follow-up batch-256/NOTRACK sweep put the August 15 setup's knee
-near 4.25M offered QPS: the tested build returned 3.968M replies/s at
-4.50M and 3.822M replies/s at 4.80M. To separate application changes from the
-host regression, historical commit `ae2b1f82` (the exact BoronDNS revision used
-for the retained 4.763M result) was rebuilt and rerun on the same current host.
-It returned 3.979M replies/s at 4.50M and 3.838M replies/s at 4.80M. The
-similar saturation and qdisc/receive-buffer loss signatures point to the host
-packet path, rather than the intervening application changes, as the main
-limitation. They do not isolate the exact cause. An old-kernel control run or
-further host profiling would be needed to explain the former 4.763M result;
-these measurements alone do not identify an application hot-path fix.
+The follow-up batch-256/NOTRACK recovery sweeps also returned only `REFUSED`
+(average 37 B), for both the then-current build and historical commit
+`ae2b1f82`. Their recorded rates remain available in the raw logs, but they
+do not reproduce June's positive-answer workload. Similar saturation in those
+sweeps therefore does not isolate the cause of the difference from June's
+4.763M result or exclude an application lookup regression. A fresh matched
+positive-answer workload, response validation, and repeated trials are needed
+before making either claim.
 
 Retained remote artifacts:
 
 - Knot/current BoronDNS baseline ladder:
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-stage/evidence/physical-udp-knot-comparison-20260815T162514Z`
+- NOTRACK Knot reference (the 4,176,697 replies/s row):
+  `/home/codex/borondns-layout-profile-20260815/target/high-qps-stage/evidence/physical-udp-knot-comparison-20260815T163336Z`
 - batch-size sweep:
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-stage/evidence/physical-udp-knot-comparison-20260815T164713Z`
-- large static zone with system-wide perf:
+- large static zone with system-wide perf (QPS workload invalid):
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165148Z`
-- active IXFR overlay:
+- active IXFR overlay (QPS workload invalid):
   `/home/codex/borondns-layout-profile-20260815/target/high-qps-large-stage/evidence/physical-udp-knot-comparison-20260815T165744Z`
-- current-build 4.50M-4.80M recovery sweep:
+- current-build 4.50M-4.80M recovery sweep (`REFUSED` only):
   `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260815T190133Z`
-- historical-commit current-kernel control:
+- historical-commit current-kernel control (`REFUSED` only):
   `/home/codex/borondns-qps-recovery-20260815/target/qps-recovery-small-stage/evidence/physical-udp-knot-comparison-20260815T190651Z`

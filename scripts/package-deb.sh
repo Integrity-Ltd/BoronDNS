@@ -55,6 +55,7 @@ done
 
 native_package_check_binary_version "$borondns_bin" borondns "$version"
 native_package_check_binary_version "$boron_gun_bin" boron-gun "$version"
+third_party_notices="$(native_package_notices "$borondns_bin")"
 
 mkdir -p "$dist_dir"
 dist_dir="$(realpath -e "$dist_dir")"
@@ -81,6 +82,7 @@ install -m 0644 "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" \
     "$staging/usr/share/doc/borondns/"
 install -m 0644 "$repo_root/packaging/deb/copyright" \
     "$staging/usr/share/doc/borondns/copyright"
+install -m 0644 "$third_party_notices" "$staging/usr/share/doc/borondns/THIRD-PARTY-NOTICES.html"
 changelog_date="$(LC_ALL=C date --utc --date="@$source_date_epoch" \
     '+%a, %d %b %Y %H:%M:%S +0000')"
 cat >"$staging/usr/share/doc/borondns/changelog.Debian" <<EOF

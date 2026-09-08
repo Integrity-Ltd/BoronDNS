@@ -8,3 +8,7 @@ License: MIT or Apache-2.0
  The complete license texts are installed as
  /usr/share/doc/borondns/LICENSE-MIT and
  /usr/share/doc/borondns/LICENSE-APACHE.
+ .
+ Bundled dependency and Rust runtime license/attribution texts are in
+ /usr/share/doc/borondns/THIRD-PARTY-NOTICES.html. The project license above
+ does not replace those third-party terms.

@@ -86,6 +86,35 @@ run. Loopback measurements are not physical-link throughput.
 
 Prepare the stage on the server and the requester tools on the traffic host.
 The lab uses a direct 25 Gbit/s link at `198.18.0.1` and `198.18.0.2`.
+
+The wrapper snapshots **the selected stage's `querydb`**, transfers that exact
+file to a read-only, per-row requester directory, and verifies SHA-256 on both
+hosts. It never uses or overwrites the requester's shared `querydb`. Each row
+retains a manifest, sampled DNS preflight, workload hash and raw generator log;
+the summary includes `querydb_sha256`, `query_count`, `response_validation` and
+`response_rcodes`. Keep this identity with the results: changing query names or
+getting REFUSED responses does not measure the same lookup workload.
+
+Before starting perf or timed traffic, up to 32 evenly spaced queries (including
+the first and last) are checked from the actual requester address. The default
+`BORONDNS_PHYSICAL_WORKLOAD_POLICY=positive` requires authoritative NOERROR with
+an answer of the requested type, following CNAMEs. For an intentional mixture of
+positive answers, NODATA and NXDOMAIN, select `mixed`; this permits authoritative
+NOERROR/NXDOMAIN but does not establish the desired mix or validate DNSSEC.
+Query files currently use two columns, absolute name and type, with optional
+blank/comment lines; richer EDNS/DO traces need their own explicit validator.
+
+The kxdpgun run must also report a complete RCODE breakdown consistent with the
+chosen policy. REFUSED or SERVFAIL traffic fails the row rather than becoming a
+successful QPS result. These counters cannot prove the contents or AA flag of
+every answer: only the preflight sample checks those. BoronGun count mode does
+not establish RCODEs; its summary is explicitly marked `unverified`, not proof
+of positive-answer throughput. Per-row requester directories are retained for
+inspection, alongside the server evidence, rather than deleted after the run.
+
+Reserve both hosts exclusively before using this lab wrapper. Its existing
+startup/cleanup terminates benchmark-named DNS processes on the server and
+changes interface tuning; do not overlap it with other test services.
 Both SSH targets must work noninteractively, and the wrapper needs privileges
 for its configured host/XDP setup.
 
@@ -107,9 +136,13 @@ BORONDNS_PHYSICAL_IDLE_STRATEGIES=spin \
 scripts/physical-udp-knot-comparison.sh
 ```
 
-These are explicit example settings, not a universal best profile. The wrapper
-defaults to server alias `borondns-1`, one 24-worker selection, a 2M offered
-rate, five-second rows, and no Knot reference row unless enabled.
+These are explicit example settings, not a universal best profile. Both SSH
+targets, the NIC, and both link IPs are required; there are no implicit lab
+targets. The wrapper defaults to one 24-worker selection, a 2M offered rate,
+five-second rows, and no Knot reference row unless enabled. With
+`BORONDNS_PHYSICAL_PLAYER_TOOL=boron-gun`, also set
+`BORONDNS_PHYSICAL_SOURCE_MAC` and `BORONDNS_PHYSICAL_TARGET_MAC` from the
+reserved link. Missing inputs fail before SSH or network changes.
 
 Each run gets an artifact directory under the stage's `evidence/` directory.
 The wrapper starts Knot for the secondary's transfer, checks readiness,

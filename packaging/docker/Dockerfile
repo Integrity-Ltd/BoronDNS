@@ -24,6 +24,7 @@ RUN addgroup -S -g "${BORONDNS_GID}" borondns \
     && install -d -m 0700 -o borondns -g borondns /var/lib/borondns/zones
 
 COPY --chown=root:root borondns /usr/local/bin/borondns
+COPY --chown=root:root THIRD-PARTY-NOTICES.html LICENSE-MIT LICENSE-APACHE /usr/share/doc/borondns/
 COPY --chown=root:borondns borondns.example.toml /etc/borondns-secondary/config.toml
 
 RUN chmod 0755 /usr/local/bin/borondns \

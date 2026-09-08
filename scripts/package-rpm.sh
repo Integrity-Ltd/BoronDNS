@@ -51,6 +51,7 @@ done
 
 native_package_check_binary_version "$borondns_bin" borondns "$version"
 native_package_check_binary_version "$boron_gun_bin" boron-gun "$version"
+third_party_notices="$(native_package_notices "$borondns_bin")"
 
 mkdir -p "$dist_dir"
 dist_dir="$(realpath -e "$dist_dir")"
@@ -64,6 +65,7 @@ install -m 0644 "$repo_root/packaging/rpm/README.rpm" "$build_root/SOURCES/READM
 install -m 0644 "$repo_root/packaging/installer/README.install.md" "$build_root/SOURCES/README.install.md"
 install -m 0644 "$repo_root/config/borondns.example.toml" "$build_root/SOURCES/config.toml"
 install -m 0644 "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" "$build_root/SOURCES/"
+install -m 0644 "$third_party_notices" "$build_root/SOURCES/THIRD-PARTY-NOTICES.html"
 
 cat >"$build_root/SPECS/borondns.spec" <<'EOF'
 Name:           borondns
@@ -99,6 +101,7 @@ install -m 0644 %{_sourcedir}/README.rpm %{buildroot}%{_docdir}/borondns/README.
 install -m 0644 %{_sourcedir}/README.install.md %{buildroot}%{_docdir}/borondns/README.install.md
 install -m 0644 %{_sourcedir}/config.toml %{buildroot}%{_docdir}/borondns/examples/config.toml
 install -m 0644 %{_sourcedir}/LICENSE-MIT %{_sourcedir}/LICENSE-APACHE %{buildroot}%{_docdir}/borondns/
+install -m 0644 %{_sourcedir}/THIRD-PARTY-NOTICES.html %{buildroot}%{_docdir}/borondns/
 
 %pre
 if [ "$1" -eq 1 ] && [ -e /etc/systemd/system/borondns.service ]; then
@@ -129,6 +132,7 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 %files
 %license %{_docdir}/borondns/LICENSE-MIT
 %license %{_docdir}/borondns/LICENSE-APACHE
+%license %{_docdir}/borondns/THIRD-PARTY-NOTICES.html
 %doc %{_docdir}/borondns/README.rpm
 %doc %{_docdir}/borondns/README.install.md
 %doc %{_docdir}/borondns/examples/config.toml

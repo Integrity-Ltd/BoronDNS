@@ -2,15 +2,28 @@
 # shellcheck disable=SC2029
 set -euo pipefail
 
-server_ssh="${BORONDNS_PHYSICAL_SERVER_SSH:-borondns-1}"
-player_ssh="${BORONDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
+# Refuse before opening SSH sessions or creating a run when the lab is not selected.
+# shellcheck source=scripts/physical-benchmark-inputs.sh
+source "$(dirname "${BASH_SOURCE[0]}")/physical-benchmark-inputs.sh"
+physical_validate_inputs
+# shellcheck source=scripts/physical-benchmark-workload.sh
+source "$(dirname "${BASH_SOURCE[0]}")/physical-benchmark-workload.sh"
+workload_verifier="$(dirname "${BASH_SOURCE[0]}")/physical-benchmark-workload.py"
+workload_policy="${BORONDNS_PHYSICAL_WORKLOAD_POLICY:-positive}"
+if [[ "$workload_policy" != positive && "$workload_policy" != mixed ]]; then
+    printf 'BORONDNS_PHYSICAL_WORKLOAD_POLICY must be positive or mixed\n' >&2
+    exit 64
+fi
+
+server_ssh="$BORONDNS_PHYSICAL_SERVER_SSH"
+player_ssh="$BORONDNS_PHYSICAL_PLAYER_SSH"
 server_root="${BORONDNS_PHYSICAL_SERVER_ROOT:-~/borondns}"
 server_bin="${BORONDNS_PHYSICAL_SERVER_BIN:-}"
 server_prefix="${BORONDNS_PHYSICAL_SERVER_PREFIX:-}"
 player_workdir="${BORONDNS_PHYSICAL_PLAYER_WORKDIR:-~/borondns-tools/bench}"
-target_ip="${BORONDNS_PHYSICAL_TARGET_IP:-198.18.0.1}"
-source_ip="${BORONDNS_PHYSICAL_SOURCE_IP:-198.18.0.2}"
-interface="${BORONDNS_PHYSICAL_INTERFACE:-eno1np0}"
+target_ip="$BORONDNS_PHYSICAL_TARGET_IP"
+source_ip="$BORONDNS_PHYSICAL_SOURCE_IP"
+interface="$BORONDNS_PHYSICAL_INTERFACE"
 borondns_port="${BORONDNS_PHYSICAL_BORONDNS_PORT:-5300}"
 knot_port="${BORONDNS_PHYSICAL_KNOT_PORT:-5301}"
 duration="${BORONDNS_PHYSICAL_DURATION:-5}"
@@ -42,8 +55,11 @@ boron_gun_borondns_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_BORONDNS_SOUR
 boron_gun_nsd_source_port_list="${BORONDNS_PHYSICAL_BORON_GUN_NSD_SOURCE_PORT_LIST:-$boron_gun_knot_source_port_list}"
 boron_gun_source_port_select="${BORONDNS_PHYSICAL_BORON_GUN_SOURCE_PORT_SELECT:-sequential}"
 boron_gun_response_timeout_ms="${BORONDNS_PHYSICAL_BORON_GUN_RESPONSE_TIMEOUT_MS:-1000}"
-boron_gun_source_mac="${BORONDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
-boron_gun_target_mac="${BORONDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
+# kxdpgun does not use MAC arguments, but nonempty placeholders preserve the
+# remote positional argument layout through SSH command serialization. The
+# input validator still requires explicit valid MACs for BoronGun.
+boron_gun_source_mac="${BORONDNS_PHYSICAL_SOURCE_MAC:-__unused__}"
+boron_gun_target_mac="${BORONDNS_PHYSICAL_TARGET_MAC:-__unused__}"
 perf_record="${BORONDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_scope="${BORONDNS_PHYSICAL_PERF_SCOPE:-process}"
 perf_event="${BORONDNS_PHYSICAL_PERF_EVENT:-__default__}"
@@ -267,6 +283,7 @@ server_root_abs="$(remote_server_root)"
 stage_abs="$(resolve_stage)"
 player_workdir_abs="$(remote_player_workdir)"
 out_abs="$stage_abs/evidence/physical-udp-knot-comparison-$(date -u +%Y%m%dT%H%M%SZ)"
+snapshot_physical_workload
 server_bin_arg="${server_bin:-__default__}"
 if [[ -n "$server_prefix" ]]; then
     server_prefix_arg="$(printf '%s' "$server_prefix" | base64 | tr -d '\n')"
@@ -274,7 +291,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\tboron_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tplayer_rx_packets_delta\\tplayer_tx_packets_delta\\tplayer_softnet_dropped_delta\\tplayer_softnet_time_squeeze_delta\\tplayer_rx_packets_phy_delta\\tplayer_tx_packets_phy_delta\\tplayer_rx_discards_phy_delta\\tplayer_tx_discards_phy_delta\\tplayer_rx_xsk_xdp_redirect_delta\\tplayer_tx_xsk_xmit_delta\\tplayer_tx_xsk_wakeup_delta\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\tboron_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tplayer_rx_packets_delta\\tplayer_tx_packets_delta\\tplayer_softnet_dropped_delta\\tplayer_softnet_time_squeeze_delta\\tplayer_rx_packets_phy_delta\\tplayer_tx_packets_phy_delta\\tplayer_rx_discards_phy_delta\\tplayer_tx_discards_phy_delta\\tplayer_rx_xsk_xdp_redirect_delta\\tplayer_tx_xsk_xmit_delta\\tplayer_tx_xsk_wakeup_delta\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\tquerydb_sha256\\tquery_count\\tresponse_validation\\tresponse_rcodes\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -1685,6 +1702,10 @@ af_xdp_worker_active, af_xdp_worker_received_min, af_xdp_worker_received_max = (
 _, af_xdp_worker_sent_min, af_xdp_worker_sent_max = prom_series_summary(
     prom, "borondns_af_xdp_worker_sent_packets_total"
 )
+with open(f"{run_abs}/workload-manifest.json", encoding="utf-8") as manifest_file:
+    workload_manifest = json.load(manifest_file)
+with open(f"{run_abs}/response-validation.json", encoding="utf-8") as validation_file:
+    response_validation = json.load(validation_file)
 
 print("\t".join([
     target,
@@ -1766,6 +1787,10 @@ print("\t".join([
     delta(soft_before, soft_after, "dropped"),
     delta(soft_before, soft_after, "time_squeeze"),
     delta(qdisc_before, qdisc_after, "flows_plimit"),
+    workload_manifest["sha256"],
+    str(workload_manifest["query_count"]),
+    response_validation["status"],
+    json.dumps(response_validation.get("rcodes", {}), sort_keys=True, separators=(",", ":")),
 ]))
 PY
 
@@ -1963,13 +1988,15 @@ run_player_kxdpgun() {
     local row_source_port_list="${5:-$boron_gun_source_port_list}"
     local row_queue_list="${6:-$boron_gun_queue_list}"
     local local_log="$id.kxdpgun.tmp"
-    local player_run_dir
-    local remote_run_dir
+    local player_run_dir="$prepared_player_run_dir"
+    local remote_run_dir="$prepared_player_remote_dir"
     local status="255"
     local done="false"
 
-    player_run_dir=".borondns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-    remote_run_dir="$player_workdir_abs/$player_run_dir"
+    [[ "$prepared_player_row_id" == "$id" ]] || {
+        printf 'row workload was not prepared: %s\n' "$id" >&2
+        return 1
+    }
 
     capture_player_row_state "$run_abs" before
 
@@ -2011,7 +2038,7 @@ mkdir -p "$workdir/$run_dir"
     set +e
     case "$player_tool" in
         kxdpgun)
-            sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i querydb "$target_ip"
+            sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i "$workdir/$run_dir/querydb" "$target_ip"
             ;;
         boron-gun)
             if [[ "$boron_gun_bin" == "__default__" ]]; then
@@ -2062,7 +2089,7 @@ mkdir -p "$workdir/$run_dir"
                 "${source_port_args[@]}" \
                 --source-mac "$boron_gun_source_mac" \
                 --target-mac "$boron_gun_target_mac" \
-                --query-list querydb \
+                --query-list "$workdir/$run_dir/querydb" \
                 --query-select sequential \
                 --max-packets 0 \
                 --duration-seconds "$duration" \
@@ -2105,9 +2132,12 @@ REMOTE
         fi
     fi
     ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$local_log" || true
+    python3 "$workload_verifier" classify "$local_log" --player "$player_tool" \
+        --policy "$workload_policy" --output "$ssh_control_dir/response-validation.json" || status=1
+    ssh_control "$server_ssh" "cat > '$run_abs/response-validation.json'" <"$ssh_control_dir/response-validation.json"
     capture_player_row_state "$run_abs" after
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
-    ssh_control "$player_ssh" "rm -rf '$remote_run_dir'" >/dev/null 2>&1 || true
+    # Retain the immutable player trace, manifest, probe and raw response evidence.
     rm -f "$local_log"
     [[ "$status" == "0" ]]
 }
@@ -2124,6 +2154,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; the
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
+        prepare_player_workload "$run_abs" "$run_id" "$knot_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2139,6 +2170,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
+        prepare_player_workload "$run_abs" "$run_id" "$knot_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2154,6 +2186,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_nsd" == true ]]; then
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "std"
+        prepare_player_workload "$run_abs" "$run_id" "$nsd_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
         run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2169,6 +2202,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_nsd_xdp" == true ]]; 
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "xdp"
+        prepare_player_workload "$run_abs" "$run_id" "$nsd_xdp_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
         run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2214,6 +2248,7 @@ if [[ "$include_borondns" == true ]]; then
                                 printf 'running %s\n' "$run_id"
                                 cleanup_server_row_state
                                 run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
+                                prepare_player_workload "$run_abs" "$run_id" "$borondns_port"
                                 run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
                                 run_server_socket_sample_start "$run_abs" "$socket_sample" "$borondns_port" "$duration" "$socket_sample_interval"
                                 run_player_kxdpgun "$run_abs" "$run_id" "$borondns_port" "$rate" "$boron_gun_borondns_source_port_list" "$boron_gun_borondns_queue_list"
@@ -2236,6 +2271,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_knot" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
+        prepare_player_workload "$run_abs" "$run_id" "$knot_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2251,6 +2287,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_knot_xdp" == true
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
+        prepare_player_workload "$run_abs" "$run_id" "$knot_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$boron_gun_knot_source_port_list" "$boron_gun_knot_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2266,6 +2303,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd" == true ]]; 
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "std"
+        prepare_player_workload "$run_abs" "$run_id" "$nsd_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
         run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
@@ -2281,6 +2319,7 @@ if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd_xdp" == true 
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_nsd_reference_start "$run_abs" "$interface" "xdp"
+        prepare_player_workload "$run_abs" "$run_id" "$nsd_xdp_port"
         run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
         run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$boron_gun_nsd_source_port_list" "$boron_gun_nsd_queue_list"
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"

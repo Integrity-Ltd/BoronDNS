@@ -321,6 +321,8 @@ manifest_dynamic_override="$(manifest_value dynamic_link_override '^[01]$')"
 mkdir -p "$run_docker_context"
 install -m 0755 "$docker_binary_asset" "$run_docker_context/borondns"
 install -m 0644 "$repo_root/config/borondns.example.toml" "$run_docker_context/borondns.example.toml"
+install -m 0644 "$installer_root/THIRD-PARTY-NOTICES.html" \
+    "$installer_root/LICENSE-MIT" "$installer_root/LICENSE-APACHE" "$run_docker_context/"
 
 # Publish one runnable image; release provenance is supplied by the signed
 # handoff and SBOMs, not Buildx's additional default attestation manifests.

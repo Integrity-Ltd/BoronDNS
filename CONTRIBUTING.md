@@ -29,6 +29,21 @@ privileged networking, AF_XDP hardware, multiple hosts, or retained external
 evidence. Do not weaken or bypass a release, security, or invariant check merely
 to make a change pass.
 
+Hosted Actions remain tag/manual release builds, not PR or main-push validation.
+Retain the tested commit/tree identity and tool versions with gate results;
+evidence from a different revision does not validate a release candidate.
+Changing hosted triggers or mandatory review ownership is a maintainer policy
+decision, not an implicit part of a bug-fix PR.
+
+The dependency gate already runs `cargo deny check` for the workspace and both
+eBPF manifests. Its default checks include advisories even without an explicit
+`[advisories]` table in `deny.toml`; the broad evidence snapshot records the
+checker version. Retain advisory-database errors and warnings in the report,
+rather than describing an incomplete audit as clean. Scheduled advisory checks,
+a pinned checker, and an expiring-exception workflow are not currently enforced
+by hosted release automation. Propose any exception with a reason, owner and
+review date instead of silently adding an ignore entry.
+
 ## Pull requests
 
 Keep each pull request focused and explain:

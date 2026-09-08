@@ -10765,6 +10765,14 @@ cp "$repo_root/Cargo.toml" "$package_dirty_repo/Cargo.toml"
 cp "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" "$package_dirty_repo/"
 cp "$repo_root/config/borondns.example.toml" "$package_dirty_repo/config/"
 cp -R "$repo_root/packaging" "$package_dirty_repo/packaging"
+# This packaging fault harness uses fake binaries and a minimal fake Cargo
+# graph. The notice collector has separate real-graph/unit coverage; substitute
+# only its fixture output here, keeping archive/manifest/publication wiring real.
+printf '%s\n' 'import argparse' 'from pathlib import Path' \
+    'p = argparse.ArgumentParser(); p.add_argument("--output", required=True)' \
+    'a, _ = p.parse_known_args()' \
+    'Path(a.output).write_text("<!doctype html><title>Fixture dependency notices</title>\\n")' \
+    >"$package_dirty_repo/scripts/package-third-party-notices.py"
 git -C "$package_dirty_repo" init -q
 git -C "$package_dirty_repo" add .
 git -C "$package_dirty_repo" -c user.name=Test -c user.email=test@example.invalid commit -qm fixture
@@ -11117,6 +11125,9 @@ grep -Fqx 'source_clean=1' "$package_clean_manifest"
 grep -Fqx 'release_eligible=1' "$package_clean_manifest"
 grep -Fqx 'dirty_source_override=0' "$package_clean_manifest"
 package_clean_prefix="$package_clean_dist/borondns-0.9.1-x86_64-unknown-linux-musl"
+[[ -s "$package_clean_prefix/THIRD-PARTY-NOTICES.html" ]]
+grep -Fqx "third_party_notices_sha256=$(sha256sum "$package_clean_prefix/THIRD-PARTY-NOTICES.html" | awk '{print $1}')" \
+    "$package_clean_manifest"
 [[ "$(stat -c '%a' "$package_clean_prefix")" == 755 ]]
 [[ "$(stat -c '%a' "$package_clean_manifest")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz")" == 644 ]]

@@ -54,6 +54,9 @@ python3 scripts/check-rfc-compliance-assertions.py
 python3 scripts/check-srs-identifier-registry.py
 python3 scripts/check-version-consistency.py
 python3 scripts/test-native-package-version.py
+python3 scripts/test-third-party-notices.py
+python3 scripts/test-physical-benchmark-inputs.py
+python3 scripts/test-physical-benchmark-workload.py
 python3 scripts/check-release-signing-policy.py
 python3 scripts/check-doc-hygiene.py
 python3 scripts/test-doc-hygiene.py
@@ -71,6 +74,7 @@ python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
 scripts/audit-invariants.sh
+python3 scripts/test-invariant-audit.py
 scripts/audit-safe-rust.sh
 bash -n scripts/audit-unused-code.sh
 bash -n scripts/capture-log-evidence.sh
