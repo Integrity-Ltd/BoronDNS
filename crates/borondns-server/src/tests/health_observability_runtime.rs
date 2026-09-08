@@ -1247,21 +1247,37 @@ fn metrics_body_reports_loading_duration_seconds() {
         std::time::Duration::from_secs(60),
         std::time::Duration::from_secs(3600),
     );
+    // A zone added long after startup must not inherit process uptime.
+    let process_started = Instant::now();
+    let zone_added = process_started + Duration::from_secs(3600);
+    // A scrape may race publication before scheduler bookkeeping catches up.
+    // An active zone must still report zero, while an unregistered loading
+    // zone must not invent an interval from process startup.
+    refresh_registry.record_loading_start_at(&active_origin, process_started);
+    zones.insert_loading(DomainName::from_absolute_str("unregistered.test.").unwrap());
+    refresh_registry.record_loading_start_at(
+        &DomainName::from_absolute_str("loading.test.").unwrap(),
+        zone_added,
+    );
     let metrics = metrics_body(
         &zones,
         &RuntimeMetrics::new(),
         &CatalogManager::default(),
         &refresh_registry,
-        3600,
+        zone_added + Duration::from_secs(5),
         false,
     );
 
     assert!(metrics.contains("borondns_zone_loading_seconds{zone=\"example.test.\"} 0"));
-    assert!(metrics.contains("borondns_zone_loading_seconds{zone=\"loading.test.\"} 3600"));
+    assert!(metrics.contains("borondns_zone_loading_seconds{zone=\"loading.test.\"} 5\n"));
     assert!(metrics.contains("borondns_secondary_zone_loading_seconds{zone=\"example.test.\"} 0"));
     assert!(
-        metrics.contains("borondns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
+        metrics.contains("borondns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 5\n")
     );
+    assert!(metrics.contains("borondns_zone_loading_seconds{zone=\"unregistered.test.\"} 0\n"));
+    assert!(metrics.contains(
+        "borondns_secondary_zone_loading_seconds{zone=\"unregistered.test.\"} 0\n"
+    ));
     assert!(!metrics.contains("borondns_zone_shape_rrsets"));
 }
 
@@ -1310,7 +1326,7 @@ fn metrics_body_reports_denial_index_fallback_per_zone() {
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         true,
     );
 
@@ -1358,7 +1374,7 @@ fn metrics_body_reports_catalog_membership() {
         &RuntimeMetrics::new(),
         &catalog_manager,
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 

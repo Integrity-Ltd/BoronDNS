@@ -605,7 +605,7 @@ fn query_latency_histogram_uses_configured_buckets() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -666,7 +666,7 @@ fn opt_in_pipeline_metrics_report_cache_planning_counters() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -696,7 +696,7 @@ fn pipeline_metrics_are_absent_by_default() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -752,7 +752,7 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -815,7 +815,7 @@ fn af_xdp_packet_io_metrics_are_reported() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -871,7 +871,7 @@ fn af_xdp_kick_observation_is_exposed_without_a_batched_stats_flush() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -899,7 +899,7 @@ fn zero_transport_admission_does_not_create_udp_send_batch_metrics() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -1000,7 +1000,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
 
@@ -1585,6 +1585,7 @@ impl ControlledUdpIoError {
 
 struct ControlledUdpPacketIo {
     inbound: Vec<UdpInbound>,
+    captured_responses: Arc<Mutex<Vec<Vec<u8>>>>,
     recv_started: Arc<Notify>,
     release_recv: Arc<Notify>,
     send_started: Arc<Notify>,
@@ -1622,6 +1623,7 @@ impl ControlledUdpPacketIo {
             .collect();
         Self {
             inbound,
+            captured_responses: Arc::new(Mutex::new(Vec::new())),
             recv_started: Arc::new(Notify::new()),
             release_recv: Arc::new(Notify::new()),
             send_started: Arc::new(Notify::new()),
@@ -1733,6 +1735,10 @@ impl PacketIo for ControlledUdpPacketIo {
         if outbound.is_empty() {
             return Ok(0);
         }
+        self.captured_responses
+            .lock()
+            .unwrap()
+            .extend(outbound.iter().map(|packet| packet.response.clone()));
         self.send_started.notify_one();
         self.release_send.notified().await;
         let queued = self
@@ -1754,6 +1760,64 @@ impl PacketIo for ControlledUdpPacketIo {
         }
         Ok(queued)
     }
+}
+
+#[cfg(feature = "af-xdp")]
+#[test]
+fn af_xdp_ignores_legacy_fixed_response_environment() {
+    const CHILD: &str = "BORONDNS_TEST_FIXED_RESPONSE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        for value in ["", "0", "1"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::af_xdp_ignores_legacy_fixed_response_environment",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("BORONDNS_BENCH_AF_XDP_FIXED_RESPONSE", value)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "legacy value {value:?}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr));
+        }
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut packet_io = ControlledUdpPacketIo::new();
+            packet_io.is_af_xdp = true;
+            let captured = packet_io.captured_responses.clone();
+            let recv_started = packet_io.recv_started.clone();
+            let release_recv = packet_io.release_recv.clone();
+            let send_started = packet_io.send_started.clone();
+            let release_send = packet_io.release_send.clone();
+            let admission = Arc::new(AtomicBool::new(true));
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let server = tokio::spawn(serve_udp_packet_io_until(
+                packet_io,
+                active_example_zone(),
+                udp_settings_for_test(RuntimeMetrics::new(), RrlConfig::default()),
+                0, 1, admission.clone(),
+                async move { shutdown_rx.await.unwrap() },
+            ));
+            recv_started.notified().await;
+            release_recv.notify_one();
+            send_started.notified().await;
+            admission.store(false, Ordering::Release);
+            shutdown_tx.send(tokio::time::Instant::now() + Duration::from_secs(1)).unwrap();
+            release_send.notify_one();
+            tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+            let responses = captured.lock().unwrap();
+            assert_eq!(responses.len(), 1);
+            assert!(responses[0].len() >= 12, "query handler must emit a real DNS response, not a canned-frame marker");
+            assert_eq!(u16::from_be_bytes([responses[0][6], responses[0][7]]), 1);
+            assert_eq!(responses[0][3] & 0x0f, 0);
+        });
 }
 
 async fn assert_pending_af_xdp_send_recovery_preserves_provenance(error: ControlledUdpIoError) {
@@ -1837,7 +1901,7 @@ async fn assert_pending_af_xdp_send_recovery_preserves_provenance(error: Control
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_af_xdp_tx_wakeups_total 4"));
@@ -1916,7 +1980,7 @@ async fn af_xdp_worker_metric_uses_exact_tx_ring_admission_count_on_wakeup_error
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_af_xdp_worker_send_batches_total{worker=\"2\"} 1"));
@@ -2071,7 +2135,7 @@ fn dedicated_udp_partial_fatal_send_records_successes_exactly_once() {
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_mmsg_send_syscalls_total 1"));
@@ -2152,7 +2216,7 @@ fn dedicated_udp_resource_pressure_records_error_and_backoffs_without_double_cou
         &metrics,
         &CatalogManager::default(),
         &refresh_registry,
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_send_errors_total 1"));
@@ -2211,7 +2275,7 @@ fn dedicated_udp_wouldblock_retry_exhaustion_surfaces_outer_send_error_without_b
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_send_errors_total 1"));
@@ -2244,7 +2308,7 @@ fn dedicated_udp_idle_shutdown_flushes_one_wouldblock_receive() {
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_mmsg_receive_syscalls_total 0"));
@@ -2283,7 +2347,7 @@ fn dedicated_udp_post_receive_admission_close_flushes_exact_receive_stats() {
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_mmsg_receive_syscalls_total 1"));
@@ -2322,7 +2386,7 @@ fn dedicated_udp_post_receive_deadline_flushes_without_double_counting() {
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         ),
-        0,
+        Instant::now(),
         false,
     );
     assert!(body.contains("borondns_udp_mmsg_receive_syscalls_total 1"));

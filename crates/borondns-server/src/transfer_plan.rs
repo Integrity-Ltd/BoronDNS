@@ -22,6 +22,7 @@ use crate::{RuntimeError, transfer::TransferIngestBudget};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ZoneTransferPlan {
+    pub(crate) cache_binding: Option<crate::zone_persistence::CatalogCacheBinding>,
     pub(crate) origin: DomainName,
     pub(crate) qclass: u16,
     pub(crate) primaries: Vec<TransferPrimaryConfig>,
@@ -69,6 +70,7 @@ impl ZoneTransferPlan {
 
     pub(crate) fn for_member_origin(&self, origin: DomainName) -> Self {
         Self {
+            cache_binding: None,
             origin,
             qclass: self.qclass,
             primaries: self.primaries.clone(),
@@ -83,7 +85,8 @@ impl ZoneTransferPlan {
     }
 
     fn same_transfer_shape(&self, other: &Self) -> bool {
-        self.origin == other.origin
+        self.cache_binding == other.cache_binding
+            && self.origin == other.origin
             && self.qclass == other.qclass
             && self.primaries == other.primaries
             && self.tsig_key_name == other.tsig_key_name
@@ -384,6 +387,7 @@ fn transfer_plan_from_zone_config(
         primary_start_index(primaries.len()).map_err(RuntimeError::PrimaryRotationRandom)?;
     let primaries = rotate_transfer_targets(primaries, primary_start);
     Ok(ZoneTransferPlan {
+        cache_binding: None,
         origin,
         qclass: 1,
         primaries,

@@ -1403,7 +1403,7 @@ fn validate_response_question(
     Ok(offset + 4)
 }
 
-fn soa_serial(rdata: &[u8]) -> Result<u32, AxfrError> {
+pub(crate) fn soa_serial(rdata: &[u8]) -> Result<u32, AxfrError> {
     let (_, consumed_mname) = DomainName::parse(rdata, 0)?;
     let rname_offset = consumed_mname;
     let (_, consumed_rname) = DomainName::parse(rdata, rname_offset)?;

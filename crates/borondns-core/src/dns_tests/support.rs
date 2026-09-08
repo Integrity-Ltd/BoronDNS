@@ -354,14 +354,10 @@
     }
 
     fn assert_semantic_response_eq(left: &[u8], right: &[u8]) {
-        let left_header = Header::parse(left).unwrap();
-        let right_header = Header::parse(right).unwrap();
-        assert_eq!(left_header.flags & 0x800f, right_header.flags & 0x800f);
-        assert_eq!(left_header.qdcount, right_header.qdcount);
-        assert_eq!(left_header.ancount, right_header.ancount);
-        assert_eq!(left_header.nscount, right_header.nscount);
-        assert_eq!(left_header.arcount, right_header.arcount);
-        assert_eq!(response_sections(left), response_sections(right));
+        assert_eq!(
+            semantic_response(left).expect("malformed left response"),
+            semantic_response(right).expect("malformed right response"),
+        );
     }
 
     fn parse_response_records(response: &[u8], offset: &mut usize, count: u16) -> ParsedSection {

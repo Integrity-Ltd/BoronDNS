@@ -18,6 +18,9 @@ use borondns_core::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod catalog_lifecycle;
+pub(crate) use catalog_lifecycle::CatalogCacheBinding;
+
 const MAGIC: &[u8; 8] = b"BORONZ01";
 const FRESHNESS_MAGIC: &[u8; 8] = b"BORONF01";
 const JOURNAL_MAGIC: &[u8; 8] = b"BORONJ01";
@@ -44,6 +47,7 @@ pub(crate) enum ZonePersistenceError {
 pub(crate) struct ZonePersistence {
     directory: PathBuf,
     max_file_bytes: u64,
+    binding: Option<CatalogCacheBinding>,
 }
 
 pub(crate) struct RestoredZone {
@@ -73,29 +77,67 @@ pub(crate) struct StagedZoneCache {
     promoted: bool,
 }
 
+/// A cache filename has been replaced. Memory must publish the matching prepared
+/// snapshot even if cleanup or the later directory sync fails. A failed sync
+/// makes crash durability uncertain; it cannot undo the successful rename.
+#[must_use = "finish directory durability outside publication guards"]
+#[derive(Debug)]
+pub(crate) struct PromotedZoneCache {
+    persistence: ZonePersistence,
+    cleanup_error: Option<ZonePersistenceError>,
+}
+
+impl PromotedZoneCache {
+    pub(crate) fn finish(self) -> Result<(), ZonePersistenceError> {
+        self.finish_with_directory_sync(|path| File::open(path)?.sync_all())
+    }
+
+    fn finish_with_directory_sync(
+        self,
+        sync: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Result<(), ZonePersistenceError> {
+        let synced = sync(&self.persistence.directory).map_err(|source| {
+            self.persistence
+                .io_error(&self.persistence.directory, source)
+        });
+        // Attempt the directory sync even after cleanup failure: the rename
+        // still needs durability. Report either failure without rolling back.
+        synced?;
+        self.cleanup_error.map_or(Ok(()), Err)
+    }
+}
+
 impl StagedZoneCache {
-    pub(crate) fn promote(mut self) -> Result<(), ZonePersistenceError> {
+    pub(crate) fn promote(mut self) -> Result<PromotedZoneCache, ZonePersistenceError> {
         fs::rename(&self.temp_path, &self.final_path)
             .map_err(|source| self.persistence.io_error(&self.final_path, source))?;
         self.promoted = true;
+        let mut cleanup_error = None;
         if self.remove_journal {
             match fs::remove_file(self.persistence.journal_path_for(&self.origin)) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(source) => return Err(self.persistence.io_error(&self.final_path, source)),
+                Err(source) => {
+                    cleanup_error = Some(self.persistence.io_error(&self.final_path, source))
+                }
             }
         }
         match fs::remove_file(self.persistence.freshness_path_for(&self.origin)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(source) => return Err(self.persistence.io_error(&self.final_path, source)),
+            Err(source) => {
+                cleanup_error = Some(self.persistence.io_error(&self.final_path, source))
+            }
         }
-        File::open(&self.persistence.directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|source| {
-                self.persistence
-                    .io_error(&self.persistence.directory, source)
-            })
+        Ok(PromotedZoneCache {
+            persistence: self.persistence.clone(),
+            cleanup_error,
+        })
+    }
+
+    #[cfg(test)]
+    fn promote_and_sync(self) -> Result<(), ZonePersistenceError> {
+        self.promote()?.finish()
     }
 }
 
@@ -112,12 +154,13 @@ impl ZonePersistence {
         Self {
             directory,
             max_file_bytes,
+            binding: None,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn persist(&self, snapshot: &ZoneSnapshot) -> Result<(), ZonePersistenceError> {
-        self.stage(snapshot)?.promote()
+        self.stage(snapshot)?.promote_and_sync()
     }
 
     pub(crate) fn stage(
@@ -613,7 +656,16 @@ impl ZonePersistence {
     }
 
     fn path_for(&self, origin: &DomainName) -> PathBuf {
-        let digest = Sha256::digest(origin.canonical_key().as_bytes());
+        let digest = match self.binding {
+            Some(binding) => {
+                let mut digest = Sha256::new();
+                digest.update(b"borondns-catalog-cache-v1\0");
+                digest.update(binding.namespace);
+                digest.update(origin.canonical_key().as_bytes());
+                digest.finalize()
+            }
+            None => Sha256::digest(origin.canonical_key().as_bytes()),
+        };
         let name = digest
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -1181,6 +1233,198 @@ mod tests {
     }
 
     #[test]
+    fn post_rename_cleanup_failure_is_not_an_uncommitted_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-cache-promotion-outcome-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let initial = snapshot();
+        persistence.persist(&initial).unwrap();
+        let candidate = incremented_snapshot(&initial, 8);
+        let staged = persistence.stage(&candidate).unwrap();
+        // A directory at the stale sidecar name forces a deterministic cleanup
+        // error without permissions or process-global fault injection.
+        fs::create_dir(persistence.freshness_path_for(initial.origin())).unwrap();
+        let promoted = staged.promote();
+        assert!(
+            promoted.is_ok(),
+            "the new checkpoint is already installed; it must not be reported as an uncommitted failure"
+        );
+        assert!(
+            promoted.unwrap().finish().is_err(),
+            "cleanup failure must remain visible after publication"
+        );
+        assert_eq!(
+            persistence
+                .restore(initial.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .serial(),
+            Some(8)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_and_journal_promotion_failure_boundaries_preserve_complete_generations() {
+        use borondns_core::zone::ZoneStore;
+        use std::sync::Arc;
+        for incremental in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "borondns-promotion-boundaries-{}-{}",
+                std::process::id(),
+                TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+            let initial = snapshot();
+            let candidate = incremented_snapshot(&initial, 8);
+            persistence.persist(&initial).unwrap();
+            let store = ZoneStore::new();
+            store.try_insert_snapshot(initial.clone()).unwrap();
+            let stage = || {
+                if incremental {
+                    persistence.stage_incremental(&initial, &candidate).unwrap()
+                } else {
+                    persistence.stage(&candidate).unwrap()
+                }
+            };
+            let staged = stage();
+            fs::remove_file(&staged.temp_path).unwrap();
+            let prepared = store
+                .prepare_snapshot_arc_for_transfer(Arc::new(candidate.clone()))
+                .unwrap();
+            assert!(
+                store
+                    .publish_prepared_snapshot_for_transfer(prepared, || staged
+                        .promote()
+                        .map(|_| ()))
+                    .unwrap()
+                    .is_err()
+            );
+            assert_eq!(
+                store
+                    .exact_zone_control_metadata(initial.origin())
+                    .unwrap()
+                    .serial,
+                Some(7)
+            );
+            assert_eq!(
+                persistence
+                    .restore(initial.origin(), 1)
+                    .unwrap()
+                    .unwrap()
+                    .snapshot
+                    .serial(),
+                Some(7)
+            );
+
+            let staged = stage();
+            let prepared = store
+                .prepare_snapshot_arc_for_transfer(Arc::new(candidate.clone()))
+                .unwrap();
+            let mut promoted = None;
+            store
+                .publish_prepared_snapshot_for_transfer(prepared, || {
+                    promoted = Some(staged.promote()?);
+                    // Interruption after rename and before publication can restore
+                    // the complete new generation, while current readers see old.
+                    assert_eq!(
+                        store
+                            .exact_zone_control_metadata(initial.origin())
+                            .unwrap()
+                            .serial,
+                        Some(7)
+                    );
+                    assert_eq!(
+                        persistence
+                            .restore(initial.origin(), 1)
+                            .unwrap()
+                            .unwrap()
+                            .snapshot
+                            .serial(),
+                        Some(8)
+                    );
+                    Ok::<_, ZonePersistenceError>(())
+                })
+                .unwrap()
+                .unwrap();
+            let error = promoted.unwrap().finish_with_directory_sync(|_| {
+                Err(io::Error::other("injected directory sync failure"))
+            });
+            assert!(error.is_err());
+            assert_eq!(
+                store
+                    .exact_zone_control_metadata(initial.origin())
+                    .unwrap()
+                    .serial,
+                Some(8)
+            );
+            let restarted = ZonePersistence::new(root.clone(), 1024 * 1024);
+            let restored = restarted.restore(initial.origin(), 1).unwrap().unwrap();
+            assert_eq!(restored.snapshot, candidate);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn blocked_post_publication_sync_does_not_hold_zone_publication_lock() {
+        use borondns_core::zone::ZoneStore;
+        use std::{
+            sync::{Arc, mpsc},
+            time::Duration,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "borondns-promotion-concurrency-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let initial = snapshot();
+        let store = ZoneStore::new();
+        let prepared = store
+            .prepare_snapshot_arc_for_transfer(Arc::new(initial.clone()))
+            .unwrap();
+        let staged = persistence.stage(&initial).unwrap();
+        let mut promoted = None;
+        store
+            .publish_prepared_snapshot_for_transfer(prepared, || {
+                promoted = Some(staged.promote()?);
+                Ok::<_, ZonePersistenceError>(())
+            })
+            .unwrap()
+            .unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let sync = std::thread::spawn(move || {
+            promoted.unwrap().finish_with_directory_sync(|path| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                File::open(path)?.sync_all()
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Deterministic: the sync callback cannot finish until the channel is
+        // released, yet both another publication and expiry must complete.
+        let other = DomainName::from_absolute_str("other.test.").unwrap();
+        store.insert_loading(other.clone());
+        assert!(store.contains_exact_zone_for_control(&other));
+        assert_eq!(
+            store
+                .exact_zone_control_metadata(initial.origin())
+                .unwrap()
+                .serial,
+            Some(7)
+        );
+        assert!(store.expire_zone(initial.origin()));
+        release_tx.send(()).unwrap();
+        sync.join().unwrap().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn root_zone_deletion_journal_restores_latest_serial() {
         let root = std::env::temp_dir().join(format!(
             "borondns-zone-cache-root-deletions-{}-{}",
@@ -1254,7 +1498,7 @@ mod tests {
         persistence
             .stage_incremental(&original, &updated)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
         assert!(persistence.journal_path_for(&origin).exists());
         let restored = persistence.restore(&origin, 1);
@@ -1269,7 +1513,7 @@ mod tests {
         persistence
             .stage_incremental(&original, &updated)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
         let next = updated.with_persistence_changes(
             9,
@@ -1289,7 +1533,7 @@ mod tests {
         persistence
             .stage_incremental(&updated, &next)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
         assert_eq!(
             persistence
@@ -1352,7 +1596,7 @@ mod tests {
         persistence
             .stage_incremental(&original, &updated)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
 
         assert!(
@@ -1419,7 +1663,7 @@ mod tests {
         persistence
             .stage_incremental(&original, &updated)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
         let journal = persistence.journal_path_for(original.origin());
         let mut bytes = fs::read(&journal).unwrap();
@@ -1444,13 +1688,13 @@ mod tests {
         persistence
             .stage_incremental(&original, &second)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
         let third = incremented_snapshot(&second, 9);
         persistence
             .stage_incremental(&second, &third)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
 
         assert_eq!(
@@ -1463,7 +1707,11 @@ mod tests {
             Some(9)
         );
 
-        persistence.stage(&third).unwrap().promote().unwrap();
+        persistence
+            .stage(&third)
+            .unwrap()
+            .promote_and_sync()
+            .unwrap();
         assert!(!persistence.journal_path_for(original.origin()).exists());
         assert_eq!(
             persistence
@@ -1491,7 +1739,7 @@ mod tests {
         persistence
             .stage_incremental(&original, &updated)
             .unwrap()
-            .promote()
+            .promote_and_sync()
             .unwrap();
 
         let mut staged = persistence.stage(&updated).unwrap();

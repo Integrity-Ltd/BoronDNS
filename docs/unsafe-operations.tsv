@@ -36,6 +36,12 @@ UNSAFE-BORONDNS-SERVER-PRIVILEGE-005	crates/borondns-server/src/privilege.rs	err
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-006	crates/borondns-server/src/privilege.rs	unsafe { libc::geteuid() }
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-007	crates/borondns-server/src/privilege.rs	unsafe { libc::getegid() }
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-008	crates/borondns-server/src/privilege.rs	unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) }
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-009	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::getresuid(&mut real, &mut effective, &mut saved) })?;
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-010	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::getresgid(&mut real, &mut effective, &mut saved) })?;
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-011	crates/borondns-server/src/privilege.rs	let result = unsafe { libc::getgrouplist(user, gid, group_ptr, &mut count) };
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-TEST-001	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::setresuid(identity.uid, identity.uid, 0) }).unwrap();
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-TEST-002	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) }).unwrap();
+UNSAFE-BORONDNS-SERVER-PRIVILEGE-TEST-003	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::setresgid(identity.gid, identity.gid, 0) }).unwrap();
 UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-001	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) })
 UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-002	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, value, 0, 0, 0) })
 UNSAFE-BORONDNS-SERVER-PROCESS-HARDENING-003	crates/borondns-server/src/process_hardening.rs	errno_result(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) })

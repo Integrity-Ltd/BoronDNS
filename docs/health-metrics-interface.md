@@ -94,9 +94,12 @@ NOTIFY authorization, TSIG outcomes, DNS Cookies, truncation, CNAME loops,
 UDP batch/datagram I/O, and query-image serving. Metrics are process-local;
 restart resets counters and does not restore monitoring history.
 
-`borondns_secondary_zone_loading_seconds` reports process uptime for a zone
-still LOADING, and zero for ACTIVE or EXPIRED zones. It is useful for initial
-loading alerts, not a durable duration across restarts. The scheduler also logs
+`borondns_secondary_zone_loading_seconds` and its `borondns_zone_loading_seconds`
+alias report elapsed whole seconds since that zone's current LOADING interval
+began, including zones added after startup. Both report zero for ACTIVE or
+EXPIRED zones, or before the scheduler has registered a loading start. This
+duration resets on restart or removal and re-addition; it is not durable history.
+The scheduler also logs
 `zone_loading_threshold_exceeded` at
 `limits.zsm_loading_warning_threshold_secs` (default 3600 seconds).
 

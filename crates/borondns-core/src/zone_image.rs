@@ -190,7 +190,7 @@ pub struct ZoneImageLookupPlan {
     termination: Option<LookupTermination>,
     continuation: Option<ZoneImageIndirectionContinuation>,
     denial_context: Option<ZoneImageDenialContext>,
-    wildcard_proof_name: Option<Box<DomainName>>,
+    wildcard_proof_names: Option<Box<SmallVec<[DomainName; 1]>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -716,6 +716,7 @@ struct ChainState<'a> {
     original_node: Option<u32>,
     visited_target_nodes: SmallVec<[u32; 4]>,
     remaining: usize,
+    any_response: AnyResponseMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1108,7 +1109,15 @@ impl ZoneImage {
             && let Some(node_index) = closest_or_exact_node
             && let Some(dname) = self.dname_for_node(exact_node, node_index, qclass)
         {
-            return self.lookup_dname(qname, qtype, qclass, max_cname_chain, exact_node, dname);
+            return self.lookup_dname(
+                qname,
+                qtype,
+                qclass,
+                max_cname_chain,
+                exact_node,
+                dname,
+                any_response,
+            );
         }
 
         if qtype == 255 {
@@ -1153,7 +1162,7 @@ impl ZoneImage {
                 qtype,
                 qclass,
                 ZoneImageLookupPlan::positive(),
-                chain_state_start(qname, exact_node, max_cname_chain),
+                chain_state_start(qname, exact_node, max_cname_chain, any_response),
                 cname,
             );
             return plan;
@@ -1319,15 +1328,23 @@ impl ZoneImage {
                 }
             }
             if wildcard_candidate {
-                let wildcard_proof_name = plan.wildcard_proof_name.clone();
-                let proof_name = wildcard_proof_name.as_deref().unwrap_or(qname);
-                self.add_wildcard_nsec_augmentations(
-                    proof_name,
-                    qclass,
-                    wildcard_proof_name.is_some() || qname_ascii_lowercase,
-                    &mut plan,
-                    &mut state,
-                );
+                let proof_names = plan.wildcard_proof_names.take();
+                if let Some(names) = &proof_names {
+                    for name in names.iter() {
+                        self.add_wildcard_nsec_augmentations(
+                            name, qclass, true, &mut plan, &mut state,
+                        );
+                    }
+                } else {
+                    self.add_wildcard_nsec_augmentations(
+                        qname,
+                        qclass,
+                        qname_ascii_lowercase,
+                        &mut plan,
+                        &mut state,
+                    );
+                }
+                plan.wildcard_proof_names = proof_names;
             }
         }
         if self.dnssec_rrsig_augmentation_possible {
@@ -2228,7 +2245,16 @@ impl ZoneImage {
     ) -> u16 {
         let owner_wire = owner_override_wire(owner);
         let metrics = self.rrset_plan_metrics_with_owner_len(rrset, owner_wire.len());
-        plan.wildcard_proof_name = Some(Box::new(owner.clone()));
+        // DNSSEC augmentation treats stored proof names as canonical, including
+        // alias-derived expansions whose case can differ from the question.
+        // Keep the separate wire owner unchanged for presentation-case echo.
+        let proof_name = owner.to_ascii_lowercased();
+        let proof_names = plan
+            .wildcard_proof_names
+            .get_or_insert_with(Default::default);
+        if !proof_names.contains(&proof_name) {
+            proof_names.push(proof_name);
+        }
         plan.push_answer_rrset_with_owner_wire(rrset, owner_wire, metrics)
     }
 
@@ -2280,7 +2306,6 @@ impl ZoneImage {
         qclass: u16,
         plan: &mut ZoneImageLookupPlan,
     ) {
-        debug_assert!(plan.answer_rrsets.is_empty());
         debug_assert!(plan.additional_rrsets.is_empty());
         let mut seen_additionals = SmallVec::<[ZoneImageRrsetId; 4]>::new();
         self.for_each_any_rrset_at_node(node_index, qclass, |rrset| {
@@ -2296,15 +2321,19 @@ impl ZoneImage {
         owner: &DomainName,
         plan: &mut ZoneImageLookupPlan,
     ) {
-        debug_assert!(plan.answer_rrsets.is_empty());
-        debug_assert!(plan.answer_items.is_empty());
-        debug_assert!(plan.owner_overrides.is_empty());
         debug_assert!(plan.additional_rrsets.is_empty());
         let mut owner_index_and_len = None;
         let mut seen_additionals = SmallVec::<[(ZoneImageRrsetId, bool); 4]>::new();
         self.for_each_any_rrset_at_node(node_index, qclass, |rrset| {
             let (owner_index, owner_wire_len) = *owner_index_and_len.get_or_insert_with(|| {
                 plan.set_flag(PLAN_FLAG_WILDCARD_SYNTHESIZED, true);
+                let proof_name = owner.to_ascii_lowercased();
+                let proof_names = plan
+                    .wildcard_proof_names
+                    .get_or_insert_with(Default::default);
+                if !proof_names.contains(&proof_name) {
+                    proof_names.push(proof_name);
+                }
                 let owner_index = plan.owner_overrides.len();
                 plan.owner_overrides.push(owner_override_wire(owner));
                 (owner_index, plan.owner_overrides[owner_index].len())
@@ -2612,15 +2641,16 @@ impl ZoneImage {
             });
         }
 
+        let mut first_dname = None;
         loop {
             if Some(node_index) != exact_node
                 && let Some(rrset) =
                     self.find_rrset_at_node(node_index, RecordType::Dname as u16, qclass)
             {
-                return Some(rrset);
+                first_dname = Some(rrset);
             }
             if node_index == 0 {
-                return None;
+                return first_dname;
             }
             node_index = self.nodes[node_index as usize].parent;
         }
@@ -2696,6 +2726,7 @@ impl ZoneImage {
         self.nodes[parent as usize].nearest_in_dname
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lookup_dname(
         &self,
         qname: &DomainName,
@@ -2704,7 +2735,11 @@ impl ZoneImage {
         max_cname_chain: usize,
         exact_node: Option<u32>,
         dname: ZoneImageRrsetId,
+        any_response: AnyResponseMode,
     ) -> ZoneImageLookupPlan {
+        if max_cname_chain == 0 {
+            return ZoneImageLookupPlan::servfail(LookupTermination::CnameChainLimit);
+        }
         if self.rrsets[dname.0 as usize].record_count != 1 {
             let mut plan = ZoneImageLookupPlan::servfail(LookupTermination::MalformedDname);
             self.push_answer_rrset_to_plan(&mut plan, dname);
@@ -2717,34 +2752,9 @@ impl ZoneImage {
         };
         let dname_owner_wire = self.blob(&self.names, self.rrsets[dname.0 as usize].owner_wire);
         let target_wire = self.single_name_target_wire(target);
-        if target.node_hint == ImageTargetNode::OutOfZone {
-            let Some((synthesized_target_wire, _prefix_len)) = qname
-                .with_replaced_wire_suffix_wire_counted(
-                    dname_owner_wire,
-                    usize::from(self.rrsets[dname.0 as usize].owner_label_count),
-                    target_wire,
-                )
-            else {
-                let mut plan = ZoneImageLookupPlan::yxdomain();
-                self.push_answer_rrset_to_plan(&mut plan, dname);
-                if let Some(soa) = self.soa_rrset(qclass) {
-                    self.push_authority_rrset_to_plan(&mut plan, soa);
-                }
-                return plan;
-            };
-
-            let mut plan = ZoneImageLookupPlan::positive();
-            self.push_answer_rrset_to_plan(&mut plan, dname);
-            let synthesized_cname_fixed_fields =
-                synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize]);
-            plan.push_synthesized_answer(
-                qname,
-                synthesized_cname_fixed_fields,
-                PackedRdataEncoding::single_name(),
-                synthesized_target_wire,
-            );
-            return plan;
-        }
+        // Even an unrelated out-of-zone suffix may name another served zone.
+        // Build the synthesized name and let the shared resolver retain its
+        // continuation instead of returning only the partial DNAME chain.
         let Some((synthesized_target, synthesized_target_wire, prefix_len)) = qname
             .with_replaced_wire_suffix_and_stored_wire_parts_counted(
                 dname_owner_wire,
@@ -2777,7 +2787,7 @@ impl ZoneImage {
             qtype,
             qclass,
             plan,
-            chain_state_start(qname, exact_node, max_cname_chain.saturating_sub(1)),
+            chain_state_start(qname, exact_node, max_cname_chain - 1, any_response),
         )
     }
 
@@ -2806,33 +2816,6 @@ impl ZoneImage {
         };
         let dname_owner_wire = self.blob(&self.names, self.rrsets[dname.0 as usize].owner_wire);
         let target_wire = self.single_name_target_wire(target);
-        if target.node_hint == ImageTargetNode::OutOfZone {
-            let Some((synthesized_target_wire, _)) = current
-                .with_replaced_wire_suffix_wire_counted(
-                    dname_owner_wire,
-                    usize::from(self.rrsets[dname.0 as usize].owner_label_count),
-                    target_wire,
-                )
-            else {
-                plan.rcode = Rcode::YxDomain;
-                self.push_answer_rrset_to_plan(&mut plan, dname);
-                if let Some(soa) = self.soa_rrset(qclass) {
-                    self.push_authority_rrset_to_plan(&mut plan, soa);
-                }
-                return plan;
-            };
-            self.push_answer_rrset_to_plan(&mut plan, dname);
-            let fixed_fields =
-                synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize]);
-            plan.push_synthesized_answer(
-                current,
-                fixed_fields,
-                PackedRdataEncoding::single_name(),
-                synthesized_target_wire,
-            );
-            return plan;
-        }
-
         let Some((synthesized_target, synthesized_target_wire, prefix_len)) = current
             .with_replaced_wire_suffix_and_stored_wire_parts_counted(
                 dname_owner_wire,
@@ -2886,6 +2869,31 @@ impl ZoneImage {
         state: ChainState<'a>,
     ) -> Option<ZoneImageLookupPlan> {
         let wildcard_node = self.find_child(closest_node, b"*")?;
+        if qtype == 255 {
+            if state.any_response == AnyResponseMode::Minimal {
+                if let Some(rrset) = self.minimal_any_rrset_at_node(wildcard_node, qclass) {
+                    let owner_index =
+                        self.push_answer_rrset_with_owner_to_plan(&mut plan, rrset, target);
+                    self.add_precomputed_additionals_for_wildcard_answer_rrset(
+                        rrset,
+                        owner_index,
+                        &mut plan,
+                    );
+                    return Some(plan);
+                }
+            } else {
+                let before = plan.answer_record_count;
+                self.push_full_any_rrsets_with_owner_at_node(
+                    wildcard_node,
+                    qclass,
+                    target,
+                    &mut plan,
+                );
+                if plan.answer_record_count != before {
+                    return Some(plan);
+                }
+            }
+        }
         if self.low_rrtype_may_exist(qtype)
             && let Some(rrset) = self.find_rrset_at_node(wildcard_node, qtype, qclass)
         {
@@ -2997,6 +3005,11 @@ impl ZoneImage {
             && let Some(cname) =
                 self.find_rrset_at_node(wildcard_node, RecordType::Cname as u16, qclass)
         {
+            if max_cname_chain == 0 {
+                return Some(ZoneImageLookupPlan::servfail(
+                    LookupTermination::CnameChainLimit,
+                ));
+            }
             let mut plan = ZoneImageLookupPlan::positive();
             self.push_answer_rrset_with_owner_to_plan(&mut plan, cname, qname);
             let Some(target) = self.single_name_rrset_target(cname) else {
@@ -3009,7 +3022,7 @@ impl ZoneImage {
                 qtype,
                 qclass,
                 plan,
-                chain_state_start(qname, None, max_cname_chain.saturating_sub(1)),
+                chain_state_start(qname, None, max_cname_chain - 1, any_response),
             );
             return Some(plan);
         }
@@ -3064,6 +3077,7 @@ impl ZoneImage {
                 original_node: state.original_node,
                 visited_target_nodes: state.visited_target_nodes,
                 remaining: state.remaining - 1,
+                any_response: state.any_response,
             },
         )
     }
@@ -3155,6 +3169,24 @@ impl ZoneImage {
                     return plan.into_servfail(LookupTermination::CnameLoop);
                 }
                 state.visited_target_nodes.push(target_node);
+
+                if qtype == 255 {
+                    if state.any_response == AnyResponseMode::Minimal {
+                        if let Some(rrset) = self.minimal_any_rrset_at_node(target_node, qclass) {
+                            self.push_answer_rrset_to_plan(&mut plan, rrset);
+                            self.add_precomputed_additionals_for_single_answer_rrset(
+                                rrset, &mut plan,
+                            );
+                            return plan;
+                        }
+                    } else {
+                        let before = plan.answer_record_count;
+                        self.push_full_any_rrsets_at_node(target_node, qclass, &mut plan);
+                        if plan.answer_record_count != before {
+                            return plan;
+                        }
+                    }
+                }
 
                 if self.low_rrtype_may_exist(qtype)
                     && let Some(rrset) = self.find_rrset_at_node(target_node, qtype, qclass)
@@ -4703,7 +4735,7 @@ impl ZoneImageLookupPlan {
             termination: None,
             continuation: None,
             denial_context: None,
-            wildcard_proof_name: None,
+            wildcard_proof_names: None,
         }
     }
 
@@ -5557,10 +5589,15 @@ impl ZoneImageBuilder {
                     .map(|rrset| rrset.0)
                     .unwrap_or(u32::MAX)
             };
-            let nearest_in_dname =
+            // Retain the first DNAME from the apex: it occludes any nested
+            // DNAME just as it occludes ordinary descendant data.
+            let nearest_in_dname = if inherited_dname != u32::MAX {
+                inherited_dname
+            } else {
                 find_build_node_in_rrset(&self.image_rrsets, build_node, RecordType::Dname as u16)
                     .map(|rrset| rrset.0)
-                    .unwrap_or(inherited_dname);
+                    .unwrap_or(u32::MAX)
+            };
             let first_edge = checked_u32(edges.len(), "edges")?;
             let edge_count = checked_u32(build_node.children.len(), "edges")?;
             first_edge
@@ -7001,12 +7038,14 @@ fn chain_state_start(
     qname: &DomainName,
     original_node: Option<u32>,
     remaining: usize,
+    any_response: AnyResponseMode,
 ) -> ChainState<'_> {
     ChainState {
         original_qname: qname,
         original_node,
         visited_target_nodes: SmallVec::new(),
         remaining,
+        any_response,
     }
 }
 
@@ -7118,7 +7157,7 @@ fn nsec3_next_hash_bytes(rdata: &[u8]) -> Option<[u8; 20]> {
     fixed_sha1_hash_bytes(&rdata[hash_start..hash_end])
 }
 
-fn nsec3_type_bitmap_contains(rdata: &[u8], rr_type: u16) -> Option<bool> {
+pub(crate) fn nsec3_type_bitmap_contains(rdata: &[u8], rr_type: u16) -> Option<bool> {
     let params = nsec3_params_from_rdata(rdata)?;
     let hash_len_offset = 5 + params.salt.len();
     let hash_len = usize::from(*rdata.get(hash_len_offset)?);

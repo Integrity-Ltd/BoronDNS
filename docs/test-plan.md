@@ -88,6 +88,34 @@ the relevant catalog, XoT, TSIG, and IXFR commands from the
 [evidence catalog](evidence-command-catalog.md). Retain primary versions,
 configuration, logs, and results.
 
+For wildcard/NSEC3 canonicalization changes, run the signed-zone regression on
+the verification host:
+
+```sh
+ulimit -n 65536
+python3 tests/interop/nsec3_wildcard_validation.py --binary /absolute/path/to/borondns
+```
+
+It needs BIND's `named`, `dnssec-keygen`, `dnssec-signzone`, `dig` and `delv`.
+Run as an unprivileged user. On AppArmor hosts, pass `--work-parent` with a
+test-user-writable directory under `/var/cache/bind`; keep host confinement
+enabled. The test generates a signed zone, transfers it to BoronDNS and validates
+direct and alias-derived wildcard answers against an explicit test trust anchor.
+Its private evidence directory retains the zone, wire output, validator logs and
+binary hash. Default mode checks compact serving after AXFR. Add `--ixfr` to
+re-sign an updated primary and require a journal-backed dirty overlay before
+validation. Add `--opt-out` for omitted-delegation and empty-nonterminal cases;
+the primary and secondary must have matching validator classifications, including
+legitimate insecure answers. This is bounded scenario coverage, not general
+DNSSEC compliance certification.
+Synthetic RRSIGs in Rust selection fixtures do not replace this validation.
+
+`scripts/test-invariant-audit.py` exercises the source audit against isolated
+mutations: unauthorized filesystem writes, unsafe lifecycle-token handling,
+lost DNAME continuation or chain accounting, and refresh-result ownership and
+acknowledgement ordering. These structural checks complement the runtime tests;
+they are not a Rust control-flow proof.
+
 ## Periodic Execution
 
 The release engineer schedules and records these runs. The weekly/monthly

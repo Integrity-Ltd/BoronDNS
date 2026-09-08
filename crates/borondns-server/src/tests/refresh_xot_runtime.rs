@@ -252,6 +252,49 @@ fn refresh_registry_schedules_refresh_and_retry() {
 }
 
 #[test]
+fn refresh_registry_loading_elapsed_tracks_the_current_zone_lifecycle() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        Duration::from_secs(10),
+        Duration::from_secs(60),
+        Duration::from_secs(180),
+    );
+    let process_started = Instant::now();
+    let origin = DomainName::from_absolute_str("late.test.").unwrap();
+    let zone_added = process_started + Duration::from_secs(100);
+    registry.record_loading_start_at(&origin, zone_added);
+    let loading_seconds = |now| {
+        registry.snapshots_by_zone_at(now)[&origin.canonical_key()].loading_seconds
+    };
+    assert_eq!(loading_seconds(zone_added + Duration::from_secs(5)), 5);
+    // Re-observing the same loading zone must not reset its interval.
+    registry.record_loading_start_at(&origin, zone_added + Duration::from_secs(3));
+    assert_eq!(loading_seconds(zone_added + Duration::from_secs(5)), 5);
+    assert_eq!(loading_seconds(process_started), 0);
+
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata()],
+        )],
+    );
+    registry.record_success_at_with_timestamp(
+        &zone_metadata_for(&snapshot),
+        zone_added + Duration::from_secs(5),
+        1_700_000_000,
+    );
+    assert_eq!(loading_seconds(zone_added + Duration::from_secs(10)), 0);
+    registry.remove_zone(&origin);
+    let readded = zone_added + Duration::from_secs(50);
+    registry.record_loading_start_at(&origin, readded);
+    assert_eq!(loading_seconds(readded + Duration::from_secs(2)), 2);
+}
+
+#[test]
 fn refresh_registry_snapshots_scheduler_metrics() {
     let registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::from_secs(10),
@@ -2024,6 +2067,124 @@ allow_non_rfc5936_cold_start = true
         .expect("stale primary receives the first SOA poll")
         .expect("stale primary reports the peer");
     assert_eq!(metadata.serial, Some(11));
+}
+
+#[tokio::test]
+async fn blocked_or_cancelled_post_commit_maintenance_retains_bounded_fresh_expiry() {
+    let config = ServerConfig::from_toml_str(r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        listen_udp = ["127.0.0.1:5300"]
+        listen_tcp = []
+        allow_non_rfc9210_single_transport = true
+        [[zones]]
+        name = "example.test."
+        primaries = ["127.0.0.1:5301"]
+    "#).unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).unwrap();
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&origin).unwrap();
+    let registry = ZoneRefreshRegistry::without_jitter(std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
+    let now = Instant::now();
+    let make_snapshot = |serial| ZoneSnapshot::active(origin.clone(), Some(serial), vec![Rrset::new(
+        origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_serial(serial)],
+    )]);
+    let initial = make_snapshot(1);
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(initial.clone());
+    registry.record_success_at(&zone_metadata_for(&initial), now - std::time::Duration::from_secs(604_800));
+    let candidate = make_snapshot(2);
+    let metadata = zone_metadata_for(&candidate);
+    zones.insert_snapshot(candidate);
+    let mut attempt = registry.begin_attempt(&origin).await;
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let maintenance = tokio::spawn(async move {
+        crate::acknowledge_refresh_before_maintenance(&mut attempt, &transfer_plan, &plan, &metadata, async {
+            entered_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        }).await
+    });
+    entered_rx.await.unwrap();
+    assert!(registry.expire_due_zones(&zones, now).is_empty(), "old deadline cannot expire newly acknowledged serial while sync is blocked");
+    maintenance.abort();
+    assert!(maintenance.await.unwrap_err().is_cancelled());
+    assert!(registry.expire_due_zones(&zones, now + std::time::Duration::from_secs(60)).is_empty());
+    assert_eq!(registry.expire_due_zones(&zones, now + std::time::Duration::from_secs(604_810)), vec![origin.clone()], "cancellation must not suppress genuine expiry forever");
+    assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().state, ZoneState::Expired);
+}
+
+#[tokio::test]
+async fn final_transfer_serial_is_checked_after_a_newer_soa_probe() {
+    for use_ixfr in [false, true] {
+        for final_serial in [99_u32, 102] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let primary = listener.local_addr().unwrap();
+            let socket = UdpSocket::bind(primary).await.unwrap();
+            let primary_task = tokio::spawn(async move {
+                let mut request = [0_u8; 512];
+                let (len, peer) = socket.recv_from(&mut request).await.unwrap();
+                let header = Header::parse(&request[..len]).unwrap();
+                assert_eq!(query_qtype(&request[..len]), RecordType::Soa as u16);
+                socket.send_to(&soa_response(header.id, 101), peer).await.unwrap();
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let query = read_primary_query(&mut stream).await;
+                let header = Header::parse(&query).unwrap();
+                let response = if use_ixfr {
+                    assert_eq!(query_qtype(&query), RecordType::Ixfr as u16);
+                    ixfr_mode2_response(header.id, final_serial)
+                } else {
+                    assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+                    axfr_response(header.id, final_serial)
+                };
+                stream.write_all(&frame_tcp_message(&response)).await.unwrap();
+            });
+            let config = ServerConfig::from_toml_str(&format!(r#"
+                [server]
+                allow_non_rfc5936_cold_start = true
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+                allow_non_rfc9210_single_transport = true
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#)).unwrap();
+            let transfer_plan = TransferPlan::from_config(&config).unwrap();
+            let origin = DomainName::from_absolute_str("example.test.").unwrap();
+            let plan = transfer_plan.get(&origin).unwrap();
+            let zones = ZoneStore::new();
+            let nameserver = DomainName::from_absolute_str("ns.example.test.").unwrap();
+            let initial = ZoneSnapshot::active(origin.clone(), Some(100), vec![
+                Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_serial(100)]),
+                Rrset::new(origin.clone(), RecordType::Ns as u16, 1, 3600, vec![nameserver.to_wire()]),
+                Rrset::new(nameserver, RecordType::A as u16, 1, 3600, vec![vec![192, 0, 2, 53]]),
+            ]);
+            zones.insert_snapshot(initial.clone());
+            let cache = std::env::temp_dir().join(format!("borondns-final-serial-{}-{}", std::process::id(), unix_timestamp_nanos_for_tests()));
+            let persistence = ZonePersistence::new(cache.clone(), 1024 * 1024);
+            persistence.persist(&initial).unwrap();
+            let metrics = RuntimeMetrics::new();
+            let cooldown = IxfrCooldownRegistry::new(std::time::Duration::from_secs(60));
+            if !use_ixfr { cooldown.record_unsupported_if_current(&transfer_plan, &plan, primary); }
+            let result = refresh_zone_metadata_from_primaries(&zones, &plan, None, RefreshAttemptContext {
+                ixfr_cooldowns: &cooldown, metrics: &metrics, transfer_plan,
+                secrets: SecretManager::from_config(&config).unwrap(),
+                ixfr_timeout: std::time::Duration::from_secs(1),
+                axfr_timeout: std::time::Duration::from_secs(1),
+                tcp_connect_timeout: std::time::Duration::from_secs(1),
+                reason: "final SOA serial regression", zone_persistence: Some(persistence.clone()),
+            }).await;
+            primary_task.await.unwrap();
+            let expected = if final_serial == 99 { 100 } else { 102 };
+            assert_eq!(result.is_some(), final_serial == 102, "IXFR={use_ixfr}, candidate={final_serial}");
+            assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().serial, Some(expected));
+            assert_eq!(persistence.restore(&origin, 1).unwrap().unwrap().snapshot.serial(), Some(expected));
+            std::fs::remove_dir_all(cache).unwrap();
+        }
+    }
+}
+
+fn unix_timestamp_nanos_for_tests() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
 }
 
 #[tokio::test]

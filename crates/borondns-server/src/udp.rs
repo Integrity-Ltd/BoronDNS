@@ -384,13 +384,6 @@ where
     info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
     let mut outbound = Vec::with_capacity(bounded_udp_batch_size(settings.udp_batch_size));
     let is_af_xdp = packet_io.is_af_xdp();
-    let benchmark_fixed_response = is_af_xdp && benchmark_af_xdp_fixed_response_enabled();
-    if benchmark_fixed_response {
-        warn!(
-            udp_worker_id,
-            "AF_XDP benchmark fixed-response mode is enabled"
-        );
-    }
 
     loop {
         if !admission_open.load(Ordering::Acquire) {
@@ -475,9 +468,7 @@ where
                 if !udp_inbound_has_reply_port(packet) {
                     continue;
                 }
-                if benchmark_fixed_response {
-                    outbound.push(UdpOutbound::benchmark_fixed_response(packet.target()));
-                } else if let Some(response) =
+                if let Some(response) =
                     handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
                 {
                     outbound.push(response.with_target(packet.target()));
@@ -1399,36 +1390,9 @@ impl UdpOutbound {
         self.target = target;
         self
     }
-
-    #[cfg(feature = "af-xdp")]
-    fn benchmark_fixed_response(target: UdpPacketTarget) -> Self {
-        Self {
-            response: Vec::new(),
-            target,
-            query_metrics: None,
-            benchmark_fixed_response: true,
-        }
-    }
-
-    #[cfg(not(feature = "af-xdp"))]
-    fn benchmark_fixed_response(_target: UdpPacketTarget) -> Self {
-        unreachable!("AF_XDP fixed-response benchmark requires the af-xdp feature")
-    }
 }
 
 pub(crate) const UDP_PACKET_BUFFER_LEN: usize = 4096;
-
-#[cfg(feature = "af-xdp")]
-fn benchmark_af_xdp_fixed_response_enabled() -> bool {
-    // Benchmark-only diagnostic: bypass DNS parsing/composition and measure the
-    // AF_XDP userspace frame lifecycle with a valid fixed positive response.
-    std::env::var_os("BORONDNS_BENCH_AF_XDP_FIXED_RESPONSE").is_some()
-}
-
-#[cfg(not(feature = "af-xdp"))]
-fn benchmark_af_xdp_fixed_response_enabled() -> bool {
-    false
-}
 
 fn handle_udp_datagram(
     packet: &[u8],

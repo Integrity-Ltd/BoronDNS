@@ -42,7 +42,7 @@ use crate::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, CatalogManager,
     CatalogMemberMetric, CookiePrefixMetricSettings, IpPrefix, NotifyRefreshAction,
     NotifyTsigResult, RuntimeError, RuntimeStatus, RuntimeStatusValue, ZoneRefreshRegistry,
-    cookie_metric_prefix,
+    ZoneRefreshStatusSnapshot, cookie_metric_prefix,
     observability::{
         ObservabilityAuth, ObservabilityAuthError, TransferMaterial,
         certificate_observability_value, filesystem_observability_value, fraction_value,
@@ -612,7 +612,7 @@ async fn metrics(
         &state.metrics,
         &state.catalog_manager,
         &state.refresh_registry,
-        state.started_at.elapsed().as_secs(),
+        Instant::now(),
         state.zone_shape_metrics_enabled,
     );
     append_transfer_ingest_budget_metrics(&mut body, &state.transfer_ingest_budget);
@@ -1343,7 +1343,7 @@ pub(crate) fn metrics_body(
     metrics: &RuntimeMetrics,
     catalog_manager: &CatalogManager,
     refresh_registry: &ZoneRefreshRegistry,
-    uptime_seconds: u64,
+    now: Instant,
     zone_shape_metrics_enabled: bool,
 ) -> String {
     let snapshot = metrics.snapshot();
@@ -1430,11 +1430,12 @@ pub(crate) fn metrics_body(
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_catalog_member_metrics(&mut body, catalog_manager);
-    append_zone_status_metrics(&mut body, zones, uptime_seconds);
+    let refresh_statuses = refresh_registry.snapshots_by_zone_at(now);
+    append_zone_status_metrics(&mut body, zones, &refresh_statuses);
     if zone_shape_metrics_enabled {
         append_zone_shape_metrics(&mut body, zones);
     }
-    append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
+    append_zone_scheduler_metrics(&mut body, zones, &refresh_statuses);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
 }
@@ -2178,7 +2179,11 @@ fn rcode_label(rcode: u16) -> &'static str {
     }
 }
 
-fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_seconds: u64) {
+fn append_zone_status_metrics(
+    body: &mut String,
+    zones: &ZoneStore,
+    statuses: &HashMap<String, ZoneRefreshStatusSnapshot>,
+) {
     let zone_metadata = zones.zone_metadata();
 
     body.push_str(
@@ -2208,24 +2213,26 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
     }
 
     body.push_str(
-        "# HELP borondns_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
+        "# HELP borondns_zone_loading_seconds Seconds since the current LOADING interval began; zero when not loading or its start is not yet registered.\n\
          # TYPE borondns_zone_loading_seconds gauge\n",
     );
     for metadata in &zone_metadata {
         let zone = prometheus_label_value(metadata.origin_name.as_ref());
-        let loading_seconds = zone_loading_seconds(metadata.state, uptime_seconds);
+        let loading_seconds =
+            zone_loading_seconds(metadata.state, statuses.get(metadata.origin_key.as_ref()));
         body.push_str(&format!(
             "borondns_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
         ));
     }
 
     body.push_str(
-        "# HELP borondns_secondary_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
+        "# HELP borondns_secondary_zone_loading_seconds Seconds since the current LOADING interval began; zero when not loading or its start is not yet registered.\n\
          # TYPE borondns_secondary_zone_loading_seconds gauge\n",
     );
     for metadata in &zone_metadata {
         let zone = prometheus_label_value(metadata.origin_name.as_ref());
-        let loading_seconds = zone_loading_seconds(metadata.state, uptime_seconds);
+        let loading_seconds =
+            zone_loading_seconds(metadata.state, statuses.get(metadata.origin_key.as_ref()));
         body.push_str(&format!(
             "borondns_secondary_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
         ));
@@ -2258,9 +2265,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
     }
 }
 
-fn zone_loading_seconds(state: ZoneState, uptime_seconds: u64) -> u64 {
+fn zone_loading_seconds(state: ZoneState, status: Option<&ZoneRefreshStatusSnapshot>) -> u64 {
     if state == ZoneState::Loading {
-        uptime_seconds
+        status.map_or(0, |status| status.loading_seconds)
     } else {
         0
     }
@@ -2428,9 +2435,8 @@ fn append_zone_shape_histogram_metrics(
 fn append_zone_scheduler_metrics(
     body: &mut String,
     zones: &ZoneStore,
-    refresh_registry: &ZoneRefreshRegistry,
+    statuses: &HashMap<String, ZoneRefreshStatusSnapshot>,
 ) {
-    let statuses = refresh_registry.snapshots_by_zone();
     let zone_metadata = zones.zone_metadata();
 
     body.push_str(

@@ -1296,6 +1296,7 @@ fn answer_query_message(
                     metadata,
                     options,
                     query_observer,
+                    zone_store,
                     zone_image_provider,
                     &published_zone,
                 );
@@ -1342,6 +1343,7 @@ fn answer_with_incremental_overlay(
     metadata: RequestMetadata,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
+    zone_store: &ZoneStore,
     zone_image_provider: ZoneImageProvider<'_>,
     published_zone: &dyn PublishedZoneView,
 ) -> DatagramAction {
@@ -1427,7 +1429,7 @@ fn answer_with_incremental_overlay(
         }
     }
 
-    let lookup = published_zone.active_snapshot_ref().lookup_with_options(
+    let (lookup, context) = published_zone.active_snapshot_ref().lookup_with_context(
         &question.qname,
         question.qtype,
         question.qclass,
@@ -1439,7 +1441,7 @@ fn answer_with_incremental_overlay(
             .active_snapshot_ref()
             .augment_lookup_result_with_dnssec(
                 lookup,
-                &question.qname,
+                &context,
                 question.qtype,
                 question.qclass,
                 options.nsec3_max_iterations,
@@ -1452,6 +1454,30 @@ fn answer_with_incremental_overlay(
     } else {
         metadata
     };
+    if let Some((target, remaining)) = &context.continuation
+        && lookup.rcode == Rcode::NoError
+        && let Some(attempt) = try_answer_across_published_zones(
+            header,
+            question,
+            metadata,
+            options,
+            query_observer,
+            zone_store,
+            zone_image_provider,
+            published_zone,
+            CrossZoneInitialStage::Snapshot(&lookup, target, *remaining),
+        )
+    {
+        return match attempt {
+            ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
+            ZoneImageAnswerAttempt::Failure(reason) => {
+                query_observer.observe_zone_image_failure(reason);
+                DatagramAction::Respond(build_zone_image_failure_response(
+                    header, question, metadata, options,
+                ))
+            }
+        };
+    }
     query_observer.observe_snapshot_lookup(&lookup);
     DatagramAction::Respond(build_response(
         header,
@@ -1647,7 +1673,7 @@ fn try_answer_with_zone_image(
         plan
     };
     if plan.indirection_continuation().is_some()
-        && let Some(attempt) = try_answer_across_published_zone_images(
+        && let Some(attempt) = try_answer_across_published_zones(
             header,
             question,
             metadata,
@@ -1656,8 +1682,7 @@ fn try_answer_with_zone_image(
             zone_store,
             zone_image_provider,
             published_zone,
-            image,
-            plan.clone(),
+            CrossZoneInitialStage::Image(image, &plan),
         )
     {
         return attempt;
@@ -1689,8 +1714,38 @@ fn try_answer_with_zone_image(
     ZoneImageAnswerAttempt::Respond(response)
 }
 
+// Materialize records only after an alias crosses into another served zone.
+// Both publication layouts share the same iterative continuation and budget.
+enum CrossZoneInitialStage<'a> {
+    Image(&'a ZoneImage, &'a ZoneImageLookupPlan),
+    Snapshot(&'a LookupResult, &'a DomainName, usize),
+}
+
+impl CrossZoneInitialStage<'_> {
+    fn continuation(&self) -> Option<(&DomainName, usize)> {
+        match self {
+            Self::Image(_, plan) => plan.indirection_continuation(),
+            Self::Snapshot(_, target, remaining) => Some((target, *remaining)),
+        }
+    }
+
+    fn authoritative(&self) -> bool {
+        match self {
+            Self::Image(_, plan) => plan.authoritative(),
+            Self::Snapshot(lookup, _, _) => lookup.authoritative,
+        }
+    }
+
+    fn nsec3_iterations_exceeded(&self) -> bool {
+        match self {
+            Self::Image(_, plan) => plan.nsec3_iterations_exceeded(),
+            Self::Snapshot(lookup, _, _) => lookup.nsec3_iterations_exceeded,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn try_answer_across_published_zone_images(
+fn try_answer_across_published_zones(
     header: &Header,
     question: &Question,
     mut metadata: RequestMetadata,
@@ -1699,8 +1754,7 @@ fn try_answer_across_published_zone_images(
     zone_store: &ZoneStore,
     zone_image_provider: ZoneImageProvider<'_>,
     initial_published_zone: &dyn PublishedZoneView,
-    initial_image: &ZoneImage,
-    initial_plan: ZoneImageLookupPlan,
+    initial_stage: CrossZoneInitialStage<'_>,
 ) -> Option<ZoneImageAnswerAttempt> {
     #[expect(
         clippy::large_enum_variant,
@@ -1711,7 +1765,7 @@ fn try_answer_across_published_zone_images(
         Snapshot(LookupResult),
     }
 
-    let (first_target, first_remaining) = initial_plan.indirection_continuation()?;
+    let (first_target, first_remaining) = initial_stage.continuation()?;
     let mut target = first_target.clone();
     let mut remaining = first_remaining;
     let mut current_origin_key = initial_published_zone.origin_key().to_owned();
@@ -1749,7 +1803,7 @@ fn try_answer_across_published_zone_images(
         }
 
         if published_zone.has_incremental_overlay() {
-            let mut lookup = published_zone.active_snapshot_ref().lookup_with_options(
+            let (mut lookup, context) = published_zone.active_snapshot_ref().lookup_with_context(
                 &target,
                 question.qtype,
                 question.qclass,
@@ -1761,23 +1815,15 @@ fn try_answer_across_published_zone_images(
                     .active_snapshot_ref()
                     .augment_lookup_result_with_dnssec(
                         lookup,
-                        &target,
+                        &context,
                         question.qtype,
                         question.qclass,
                         options.nsec3_max_iterations,
                     );
             }
-            let continuation = lookup.answers.last().and_then(|record| {
-                (record.rr_type == RecordType::Cname as u16)
-                    .then(|| DomainName::parse(&record.rdata, 0).ok())
-                    .flatten()
-                    .filter(|(_, consumed)| *consumed == record.rdata.len())
-                    .map(|(name, _)| name)
-                    .filter(|next| {
-                        !next.is_equal_or_subdomain_of(published_zone.origin()) && remaining > 1
-                    })
-                    .map(|next| (next, remaining - 1))
-            });
+            let continuation = (lookup.rcode == Rcode::NoError)
+                .then_some(context.continuation)
+                .flatten();
             current_origin_key = published_zone.origin_key().to_owned();
             child_stages.push(CrossZoneStage::Snapshot(lookup));
             let Some((next_target, next_remaining)) = continuation else {
@@ -1826,35 +1872,48 @@ fn try_answer_across_published_zone_images(
     let mut answers = Vec::new();
     let mut authorities = Vec::new();
     let mut additionals = Vec::new();
-    if !append_zone_image_plan_answers(initial_image, &initial_plan, &mut answers) {
+    let initial_converted = match initial_stage {
+        CrossZoneInitialStage::Image(image, plan) => append_zone_image_plan_sections(
+            image,
+            plan,
+            &mut answers,
+            &mut authorities,
+            &mut additionals,
+        ),
+        CrossZoneInitialStage::Snapshot(lookup, _, _) => {
+            answers.extend(lookup.answers.iter().cloned());
+            authorities.extend(lookup.authorities.iter().cloned());
+            additionals.extend(lookup.additionals.iter().cloned());
+            true
+        }
+    };
+    if !initial_converted {
         return Some(ZoneImageAnswerAttempt::Failure(
             ZoneImageServeFailureReason::ResponseBuildFailed,
         ));
     }
+    retain_cross_zone_denial_proofs(&mut authorities);
+    additionals.clear();
 
+    // Earlier wildcard expansions need their own denial proofs even when the
+    // terminal answer is in another zone. Superseded referrals and their glue
+    // are not part of the terminal answer, but those proofs must survive.
     for (index, stage) in child_stages.iter().enumerate() {
-        let is_final = index + 1 == child_stages.len();
         let converted = match stage {
             CrossZoneStage::Image(published_zone, plan) => {
                 let image = zone_image_provider(published_zone);
-                if is_final {
-                    append_zone_image_plan_sections(
-                        image,
-                        plan,
-                        &mut answers,
-                        &mut authorities,
-                        &mut additionals,
-                    )
-                } else {
-                    append_zone_image_plan_answers(image, plan, &mut answers)
-                }
+                append_zone_image_plan_sections(
+                    image,
+                    plan,
+                    &mut answers,
+                    &mut authorities,
+                    &mut additionals,
+                )
             }
             CrossZoneStage::Snapshot(lookup) => {
                 answers.extend(lookup.answers.iter().cloned());
-                if is_final {
-                    authorities.extend(lookup.authorities.iter().cloned());
-                    additionals.extend(lookup.additionals.iter().cloned());
-                }
+                authorities.extend(lookup.authorities.iter().cloned());
+                additionals.extend(lookup.additionals.iter().cloned());
                 true
             }
         };
@@ -1863,10 +1922,14 @@ fn try_answer_across_published_zone_images(
                 ZoneImageServeFailureReason::ResponseBuildFailed,
             ));
         }
+        if index + 1 != child_stages.len() {
+            retain_cross_zone_denial_proofs(&mut authorities);
+            additionals.clear();
+        }
     }
 
     let final_stage = child_stages.last().expect("non-empty child stages");
-    if initial_plan.nsec3_iterations_exceeded()
+    if initial_stage.nsec3_iterations_exceeded()
         || child_stages.iter().any(|stage| match stage {
             CrossZoneStage::Image(_, plan) => plan.nsec3_iterations_exceeded(),
             CrossZoneStage::Snapshot(lookup) => lookup.nsec3_iterations_exceeded,
@@ -1892,7 +1955,7 @@ fn try_answer_across_published_zone_images(
             CrossZoneStage::Image(_, plan) => plan.rcode(),
             CrossZoneStage::Snapshot(lookup) => lookup.rcode,
         },
-        initial_plan.authoritative(),
+        initial_stage.authoritative(),
         Some(question),
         &answers,
         &authorities,
@@ -1907,22 +1970,14 @@ fn try_answer_across_published_zone_images(
     Some(ZoneImageAnswerAttempt::Respond(response))
 }
 
-fn append_zone_image_plan_answers(
-    image: &ZoneImage,
-    plan: &ZoneImageLookupPlan,
-    answers: &mut Vec<ResourceRecord>,
-) -> bool {
-    let valid = Cell::new(true);
-    image.visit_plan_record_sections(
-        plan,
-        |record| match zone_image_wire_record_to_resource_record(record) {
-            Some(record) => answers.push(record),
-            None => valid.set(false),
-        },
-        |_| {},
-        |_| {},
-    );
-    valid.get()
+fn retain_cross_zone_denial_proofs(authorities: &mut Vec<ResourceRecord>) {
+    authorities.retain(|record| {
+        matches!(record.rr_type, 47 | 50)
+            || (record.rr_type == RecordType::Rrsig as u16
+                && record.rdata.get(..2).is_some_and(|covered| {
+                    matches!(u16::from_be_bytes([covered[0], covered[1]]), 47 | 50)
+                }))
+    });
 }
 
 fn append_zone_image_plan_sections(
@@ -4791,6 +4846,11 @@ mod tests {
     use sha1::{Digest, Sha1};
 
     include!("dns_tests/support.rs");
+    include!("dns_tests/semantic_response.rs");
+    include!("dns_tests/overlay_semantics.rs");
+    include!("dns_tests/denial_completeness.rs");
+    include!("dns_tests/cross_zone_overlay_context.rs");
+    include!("dns_tests/wildcard_canonicalization.rs");
     include!("dns_tests/message_parse_notify.rs");
     include!("dns_tests/zone_image_serving.rs");
     include!("dns_tests/wire_names.rs");

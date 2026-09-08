@@ -1607,6 +1607,91 @@ impl CatalogManager {
         samples
     }
 
+    /// Prepare durable cache eligibility before the catalog itself can commit.
+    /// Namespace rotation is intentionally conservative: a later aborted catalog
+    /// transfer can require a cold member transfer after restart, never reuse a
+    /// removed lifecycle. Disk work runs without transfer/publication locks.
+    async fn prepare_catalog_cache_lifecycles(
+        &self,
+        origin: &DomainName,
+        parsed: Option<&ParsedCatalogMembers>,
+        transfer_plan: &TransferPlan,
+        persistence: Option<&ZonePersistence>,
+    ) -> Result<(), String> {
+        let (Some(parsed), Some(persistence)) = (parsed, persistence) else {
+            return Ok(());
+        };
+        let manager = self.clone();
+        let origin = origin.clone();
+        let parsed = parsed.clone();
+        let transfer_plan = transfer_plan.clone();
+        let persistence = persistence.clone();
+        let _reconcile = self.reconcile_lock.lock().await;
+        tokio::task::spawn_blocking(move || {
+            let catalog_key = origin.canonical_key();
+            let Some(catalog) = manager.catalogs_by_key.get(&catalog_key) else {
+                return Ok(());
+            };
+            let previous = manager
+                .desired_memberships_by_catalog
+                .lock()
+                .expect("catalog desired membership lock poisoned")
+                .get(&catalog_key)
+                .cloned()
+                .unwrap_or_default();
+            let owners = manager
+                .member_owners_by_key
+                .lock()
+                .expect("catalog member owner lock poisoned")
+                .clone();
+            let mut candidate_bindings = HashMap::new();
+            for member in &parsed.members {
+                let key = member.zone.canonical_key();
+                if manager.static_zone_keys.contains(&key)
+                    || manager.catalogs_by_key.contains_key(&key)
+                    || owners.get(&key).is_some_and(|owner| owner != &catalog_key)
+                {
+                    continue;
+                }
+                let enabled = catalog.config.member_transfer_extensions;
+                let malformed = enabled && member.transfer.is_malformed();
+                let existing = transfer_plan.get(&member.zone);
+                let plan = if malformed && existing.is_some() {
+                    existing
+                } else {
+                    transfer_plan.catalog_member_plan(
+                        &origin,
+                        member.zone.clone(),
+                        enabled.then_some(member.transfer.valid()).flatten(),
+                    )
+                };
+                if let Some(plan) = plan {
+                    let binding = persistence
+                        .catalog_binding(&origin, &member.member_node, &plan)
+                        .map_err(|error| error.to_string())?;
+                    candidate_bindings.insert(key, binding);
+                }
+            }
+            for (key, member) in previous {
+                if owners.get(&key) != Some(&catalog_key) {
+                    continue;
+                }
+                if let Some(binding) = transfer_plan
+                    .get(&member.zone)
+                    .and_then(|plan| plan.cache_binding)
+                    && candidate_bindings.get(&key) != Some(&binding)
+                {
+                    persistence
+                        .revoke_catalog_binding(binding)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|error| format!("catalog cache lifecycle task failed: {error}"))?
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn apply_parsed_snapshot(
         &self,
@@ -1786,6 +1871,9 @@ impl CatalogManager {
                     );
                     continue;
                 };
+                let removed_binding = transfer_plan
+                    .get(&member_origin)
+                    .and_then(|plan| plan.cache_binding);
                 transfer_plan.remove(&member_origin);
                 notify_authority.remove_zone(&member_origin);
                 // NOTIFY admission locks refresh status before its reservation.
@@ -1794,7 +1882,9 @@ impl CatalogManager {
                 refresh_registry.remove_zone(&member_origin);
                 self.remove_member_notify_registry_entry(&member_origin);
                 if let Some(persistence) = zone_persistence
-                    && let Err(error) = persistence.remove(&member_origin)
+                    && let Err(error) = persistence
+                        .with_binding(removed_binding)
+                        .remove(&member_origin)
                 {
                     warn!(
                         catalog_zone = %catalog.origin,
@@ -1825,12 +1915,17 @@ impl CatalogManager {
             if member_node_changed {
                 // RFC 9432 sections 5.4 and 5.6 require a member-node rename
                 // to be processed as remove/reset followed by a fresh add.
+                let removed_binding = transfer_plan
+                    .get(&owner_member.zone)
+                    .and_then(|plan| plan.cache_binding);
                 transfer_plan.remove(&owner_member.zone);
                 notify_authority.remove_zone(&owner_member.zone);
                 refresh_registry.remove_zone(&owner_member.zone);
                 self.remove_member_notify_registry_entry(&owner_member.zone);
                 if let Some(persistence) = zone_persistence
-                    && let Err(error) = persistence.remove(&owner_member.zone)
+                    && let Err(error) = persistence
+                        .with_binding(removed_binding)
+                        .remove(&owner_member.zone)
                 {
                     warn!(
                         catalog_zone = %owner_catalog.origin,
@@ -1876,7 +1971,7 @@ impl CatalogManager {
                         "new catalog member transfer extension is malformed; using the configured static fallback policy"
                     );
                 }
-                let Some(member_plan) = transfer_plan.catalog_member_plan(
+                let Some(mut member_plan) = transfer_plan.catalog_member_plan(
                     &owner_catalog.origin,
                     owner_member.zone.clone(),
                     transfer_override,
@@ -1890,6 +1985,22 @@ impl CatalogManager {
                     );
                     continue;
                 };
+
+                if let Some(persistence) = zone_persistence {
+                    match persistence.catalog_binding(
+                        &owner_catalog.origin,
+                        &owner_member.member_node,
+                        &member_plan,
+                    ) {
+                        Ok(binding) => member_plan.cache_binding = Some(binding),
+                        Err(error) => {
+                            warn!(zone = %owner_member.zone, %error,
+                                "catalog member cache binding unavailable; member not admitted");
+                            accepted_members_by_key.remove(&member_key);
+                            continue;
+                        }
+                    }
+                }
 
                 let plan_changed =
                     transfer_plan.insert_preserving_generation_if_unchanged(member_plan);
@@ -1917,7 +2028,11 @@ impl CatalogManager {
                 && !member_node_changed
                 && let Some(persistence) = zone_persistence
             {
-                match persistence.restore(&owner_member.zone, 1) {
+                let binding = current_plan.as_ref().and_then(|plan| plan.cache_binding);
+                match persistence
+                    .with_binding(binding)
+                    .restore(&owner_member.zone, 1)
+                {
                     Ok(Some(restored_zone)) => {
                         match zones.insert_restored_snapshot(restored_zone.snapshot, false) {
                             Ok(restored_metadata) => {
@@ -2190,6 +2305,7 @@ struct ZoneRefreshStatusSnapshot {
     last_success_unix_secs: Option<u64>,
     next_refresh_unix_secs: Option<u64>,
     failures_since_success: u64,
+    loading_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3072,6 +3188,10 @@ impl ZoneRefreshRegistry {
     }
 
     fn snapshots_by_zone(&self) -> HashMap<String, ZoneRefreshStatusSnapshot> {
+        self.snapshots_by_zone_at(Instant::now())
+    }
+
+    fn snapshots_by_zone_at(&self, now: Instant) -> HashMap<String, ZoneRefreshStatusSnapshot> {
         self.statuses
             .lock()
             .expect("zone refresh registry lock poisoned")
@@ -3083,6 +3203,9 @@ impl ZoneRefreshRegistry {
                         last_success_unix_secs: status.last_success_unix_secs,
                         next_refresh_unix_secs: status.next_refresh_unix_secs,
                         failures_since_success: status.failures_since_success,
+                        loading_seconds: status.loading_since.map_or(0, |started| {
+                            now.saturating_duration_since(started).as_secs()
+                        }),
                     },
                 )
             })
@@ -5267,14 +5390,21 @@ async fn serve_refresh_requests(
                 }
                 match outcome.success {
                     Some(success) => {
-                        let (metadata, updated, catalog_members) = success.into_parts();
-                        if !record_attempt_success_if_current_plan(
+                        let (metadata, updated, catalog_members, promoted_cache) =
+                            success.into_parts();
+                        let acknowledged = acknowledge_refresh_before_maintenance(
                             &mut attempt,
                             &catalog_runtime.transfer_plan,
                             &plan,
                             &metadata,
-                        ) {
+                            finish_last_good_after_publication(promoted_cache, &metadata.origin),
+                        )
+                        .await;
+                        if !acknowledged {
                             return request_key;
+                        }
+                        if updated {
+                            schedule_zone_overlay_compaction(&zones, &metadata.origin).await;
                         }
                         let telemetry_status = if updated { "success" } else { "skipped" };
                         if let Some(catalog_members) = catalog_members {
@@ -5502,6 +5632,53 @@ struct RefreshZoneOutcome {
     obsolete: bool,
 }
 
+async fn acknowledge_refresh_before_maintenance<F: Future<Output = ()>>(
+    attempt: &mut ZoneRefreshAttempt,
+    transfer_plan: &TransferPlan,
+    plan: &ZoneTransferPlan,
+    metadata: &ZoneMetadata,
+    maintenance: F,
+) -> bool {
+    let acknowledged =
+        record_attempt_success_if_current_plan(attempt, transfer_plan, plan, metadata);
+    // No await may separate publication acknowledgement from fresh expiry.
+    // Once acknowledged, cancellation of slow maintenance cannot leave old
+    // freshness attached to a newly served snapshot or disable future expiry.
+    maintenance.await;
+    acknowledged
+}
+
+async fn finish_last_good_after_publication(
+    promoted: Option<zone_persistence::PromotedZoneCache>,
+    origin: &DomainName,
+) {
+    let Some(promoted) = promoted else {
+        return;
+    };
+    let sync_origin = origin.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // Logging belongs to the worker: cancellation of the refresh future
+        // cannot suppress a post-publication durability failure.
+        if let Err(error) = promoted.finish() {
+            warn!(
+                event = "zone_cache_published_durability_warning",
+                zone = %sync_origin,
+                %error,
+                "zone is published, but last-good cache cleanup or crash durability is uncertain"
+            );
+        }
+    })
+    .await;
+    if let Err(error) = result {
+        warn!(
+            event = "zone_cache_published_durability_warning",
+            zone = %origin,
+            %error,
+            "zone is published, but the cache directory sync worker failed"
+        );
+    }
+}
+
 async fn stage_last_good_before_publication(
     persistence: &Option<ZonePersistence>,
     snapshot: Arc<ZoneSnapshot>,
@@ -5548,7 +5725,13 @@ async fn prepare_zone_publication(
     snapshot: Arc<ZoneSnapshot>,
 ) -> Result<PreparedZonePublication, String> {
     let zones = zones.clone();
-    run_zone_image_preparation(move || zones.prepare_snapshot_arc_for_transfer(snapshot)).await
+    let prepared =
+        run_zone_image_preparation(move || zones.prepare_snapshot_arc_for_transfer(snapshot))
+            .await?;
+    if !prepared.final_soa_is_admissible() {
+        return Err("final transferred SOA is invalid or does not advance the current serial under RFC 1982".to_owned());
+    }
+    Ok(prepared)
 }
 
 async fn renew_last_good_freshness(
@@ -5661,6 +5844,7 @@ enum RefreshZoneSuccess {
     Updated {
         metadata: ZoneMetadata,
         catalog_members: Option<ParsedCatalogMembers>,
+        promoted_cache: Option<zone_persistence::PromotedZoneCache>,
     },
 }
 
@@ -5673,11 +5857,16 @@ impl RefreshZoneOutcome {
         }
     }
 
-    fn updated(metadata: ZoneMetadata, catalog_members: Option<ParsedCatalogMembers>) -> Self {
+    fn updated(
+        metadata: ZoneMetadata,
+        catalog_members: Option<ParsedCatalogMembers>,
+        promoted_cache: Option<zone_persistence::PromotedZoneCache>,
+    ) -> Self {
         Self {
             success: Some(RefreshZoneSuccess::Updated {
                 metadata,
                 catalog_members,
+                promoted_cache,
             }),
             failure_cause: None,
             obsolete: false,
@@ -5702,13 +5891,21 @@ impl RefreshZoneOutcome {
 }
 
 impl RefreshZoneSuccess {
-    fn into_parts(self) -> (ZoneMetadata, bool, Option<ParsedCatalogMembers>) {
+    fn into_parts(
+        self,
+    ) -> (
+        ZoneMetadata,
+        bool,
+        Option<ParsedCatalogMembers>,
+        Option<zone_persistence::PromotedZoneCache>,
+    ) {
         match self {
-            Self::Current(metadata) => (metadata, false, None),
+            Self::Current(metadata) => (metadata, false, None, None),
             Self::Updated {
                 metadata,
                 catalog_members,
-            } => (metadata, true, catalog_members),
+                promoted_cache,
+            } => (metadata, true, catalog_members, promoted_cache),
         }
     }
 }
@@ -5798,14 +5995,19 @@ async fn run_initial_zone_loads(
                 }
                 match outcome.success {
                     Some(success) => {
-                        let (metadata, updated, catalog_members) = success.into_parts();
-                        if !record_attempt_success_if_current_plan(
+                        let (metadata, updated, catalog_members, promoted_cache) = success.into_parts();
+                        let acknowledged = acknowledge_refresh_before_maintenance(
                             &mut attempt,
                             &catalog_runtime.transfer_plan,
                             &plan,
                             &metadata,
-                        ) {
+                            finish_last_good_after_publication(promoted_cache, &metadata.origin),
+                        ).await;
+                        if !acknowledged {
                             return;
+                        }
+                        if updated {
+                            schedule_zone_overlay_compaction(&zones, &metadata.origin).await;
                         }
                         let telemetry_status = if updated {
                             "success"
@@ -6090,11 +6292,13 @@ async fn refresh_zone_metadata_from_primaries(
         context,
     )
     .await;
-    outcome.success.map(|success| match success {
-        RefreshZoneSuccess::Current(metadata) | RefreshZoneSuccess::Updated { metadata, .. } => {
-            metadata
-        }
-    })
+    let success = outcome.success?;
+    let (metadata, updated, _, promoted_cache) = success.into_parts();
+    finish_last_good_after_publication(promoted_cache, &metadata.origin).await;
+    if updated {
+        schedule_zone_overlay_compaction(zones, &metadata.origin).await;
+    }
+    Some(metadata)
 }
 
 async fn schedule_zone_overlay_compaction(zones: &ZoneStore, origin: &DomainName) {
@@ -6168,11 +6372,13 @@ async fn refresh_zone_metadata_from_primaries_preferring(
         context,
     )
     .await;
-    outcome.success.map(|success| match success {
-        RefreshZoneSuccess::Current(metadata) | RefreshZoneSuccess::Updated { metadata, .. } => {
-            metadata
-        }
-    })
+    let success = outcome.success?;
+    let (metadata, updated, _, promoted_cache) = success.into_parts();
+    finish_last_good_after_publication(promoted_cache, &metadata.origin).await;
+    if updated {
+        schedule_zone_overlay_compaction(zones, &metadata.origin).await;
+    }
+    Some(metadata)
 }
 
 async fn refresh_zone_from_primaries_with_outcome(
@@ -6231,9 +6437,12 @@ async fn refresh_zone_from_primaries_with_snapshot(
     _notify_serial_hint: Option<u32>,
     preferred_primary_ip: Option<IpAddr>,
     catalog_manager: &CatalogManager,
-    context: RefreshAttemptContext<'_>,
+    mut context: RefreshAttemptContext<'_>,
     secret_snapshot: Arc<secret_store::SecretSnapshot>,
 ) -> RefreshZoneOutcome {
+    context.zone_persistence = context
+        .zone_persistence
+        .map(|persistence| persistence.with_binding(plan.cache_binding));
     let current_serial = zones
         .exact_zone_control_metadata(&plan.origin)
         .and_then(|metadata| metadata.serial);
@@ -6433,6 +6642,22 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                         }
                                     };
                                     if let Some(catalog_members) = catalog_members {
+                                        if let Err(error) = catalog_manager
+                                            .prepare_catalog_cache_lifecycles(
+                                                &plan.origin,
+                                                catalog_members.as_ref(),
+                                                &context.transfer_plan,
+                                                context.zone_persistence.as_ref(),
+                                            )
+                                            .await
+                                        {
+                                            context.metrics.record_ixfr_failed();
+                                            last_failure_cause = Some(format!(
+                                                "IXFR catalog cache lifecycle preparation failed: {error}"
+                                            ));
+                                            warn!(zone = %plan.origin, %error, "catalog cache revocation failed before publication");
+                                            continue;
+                                        }
                                         let prepared = match prepare_zone_publication(
                                             zones,
                                             snapshot.clone(),
@@ -6473,6 +6698,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                     continue;
                                                 }
                                             };
+                                        let mut promoted_cache = None;
                                         match context
                                             .transfer_plan
                                             .if_current_plan(plan, || {
@@ -6483,9 +6709,12 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                             .publish_prepared_snapshot_for_transfer(
                                                                 prepared,
                                                                 || match staged {
-                                                                    Some(staged) => {
-                                                                        staged.promote()
-                                                                    }
+                                                                    Some(staged) => staged
+                                                                        .promote()
+                                                                        .map(|promoted| {
+                                                                            promoted_cache =
+                                                                                Some(promoted);
+                                                                        }),
                                                                     None => Ok(()),
                                                                 },
                                                             )
@@ -6512,11 +6741,6 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                 let generations = serial.map(|serial| {
                                                     serial.wrapping_sub(current_serial)
                                                 });
-                                                schedule_zone_overlay_compaction(
-                                                    zones,
-                                                    &metadata.origin,
-                                                )
-                                                .await;
                                                 info!(
                                                     zone = %plan.origin,
                                                     %primary,
@@ -6530,6 +6754,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                                 return RefreshZoneOutcome::updated(
                                                     metadata,
                                                     catalog_members,
+                                                    promoted_cache,
                                                 );
                                             }
                                             Some(Err(error)) => {
@@ -6730,6 +6955,22 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     reason = %context.reason,
                     "zone transfer publication phase"
                 );
+                if let Err(error) = catalog_manager
+                    .prepare_catalog_cache_lifecycles(
+                        &plan.origin,
+                        catalog_members.as_ref(),
+                        &context.transfer_plan,
+                        context.zone_persistence.as_ref(),
+                    )
+                    .await
+                {
+                    context.metrics.record_axfr_failed();
+                    last_failure_cause = Some(format!(
+                        "AXFR catalog cache lifecycle preparation failed: {error}"
+                    ));
+                    warn!(zone = %plan.origin, %error, "catalog cache revocation failed before publication");
+                    continue;
+                }
                 let prepared = match prepare_zone_publication(zones, snapshot.clone()).await {
                     Ok(prepared) => prepared,
                     Err(error) => {
@@ -6769,6 +7010,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
                         continue;
                     }
                 };
+                let mut promoted_cache = None;
                 match context
                     .transfer_plan
                     .if_current_plan(plan, || {
@@ -6776,7 +7018,9 @@ async fn refresh_zone_from_primaries_with_snapshot(
                             zones.publish_prepared_snapshot_for_transfer(
                                 prepared,
                                 || match staged {
-                                    Some(staged) => staged.promote(),
+                                    Some(staged) => staged.promote().map(|promoted| {
+                                        promoted_cache = Some(promoted);
+                                    }),
                                     None => Ok(()),
                                 },
                             )
@@ -6797,7 +7041,6 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     Some(Ok(metadata)) => {
                         context.metrics.record_axfr_succeeded();
                         let serial = metadata.serial;
-                        schedule_zone_overlay_compaction(zones, &metadata.origin).await;
                         info!(
                             zone = %plan.origin,
                             %primary,
@@ -6805,7 +7048,11 @@ async fn refresh_zone_from_primaries_with_snapshot(
                             reason = %context.reason,
                             "AXFR completed"
                         );
-                        return RefreshZoneOutcome::updated(metadata, catalog_members);
+                        return RefreshZoneOutcome::updated(
+                            metadata,
+                            catalog_members,
+                            promoted_cache,
+                        );
                     }
                     Some(Err(error)) => {
                         last_failure_cause = Some(format!(

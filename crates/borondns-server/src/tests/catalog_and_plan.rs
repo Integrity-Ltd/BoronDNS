@@ -2820,6 +2820,159 @@ allow_non_rfc5936_cold_start = true
     assert_eq!(readded.serial, None);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn catalog_member_failed_cleanup_cannot_restore_previous_lifecycle_after_restart() {
+    catalog_member_failed_cleanup_restart_case("new").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn catalog_member_same_node_readd_cannot_restore_previous_lifecycle_after_restart() {
+    catalog_member_failed_cleanup_restart_case("old").await;
+}
+
+#[cfg(unix)]
+async fn catalog_member_failed_cleanup_restart_case(readded_node: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let config = ServerConfig::from_toml_str(
+        r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        listen_udp = ["127.0.0.1:5300"]
+        listen_tcp = []
+        allow_non_rfc9210_single_transport = true
+        [[tsig_keys]]
+        name = "catalog-key."
+        algorithm = "hmac-sha256"
+        secret = "dG9wc2VjcmV0"
+        [[catalog_zones]]
+        name = "catalog.example."
+        catalog_primaries = ["192.0.2.53:53"]
+        member_primaries = ["10.0.0.53:53"]
+        catalog_tsig_key = "catalog-key."
+        member_tsig_key = "catalog-key."
+        "#,
+    )
+    .unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "borondns-catalog-lifecycle-{}-{}",
+        std::process::id(),
+        TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+    let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial = catalog_snapshot_with_named_member(catalog.clone(), 7, "old", member.clone());
+    let removed = catalog_snapshot_with_members(catalog.clone(), 8, &[]);
+    let readded = catalog_snapshot_with_named_member(catalog.clone(), 9, readded_node, member.clone());
+    let transfer_plan = TransferPlan::from_config(&config).unwrap();
+    let manager = CatalogManager::from_config(&config);
+    let zones = ZoneStore::new();
+    let refresh = ZoneRefreshRegistry::without_jitter(Duration::ZERO, Duration::ZERO, Duration::ZERO);
+    let notify = NotifyAuthority::from_config_for_test(&config);
+    let metrics = RuntimeMetrics::new();
+    let (tx, _rx) = mpsc::channel(8);
+    manager
+        .apply_parsed_snapshot(
+            manager.parse_candidate_snapshot(&initial).unwrap().unwrap(),
+            &zone_metadata_for(&initial), &zones, &transfer_plan, &refresh, &notify,
+            &tx.downgrade(), &metrics, Some(&persistence),
+        )
+        .await;
+    let active = active_member_snapshot(member.clone(), 42);
+    let bound = persistence.with_binding(transfer_plan.get(&member).unwrap().cache_binding);
+    bound.persist(&active).unwrap();
+    zones.insert_snapshot(active);
+    assert!(bound.restore(&member, 1).unwrap().is_some());
+
+    // A normal restart of this exact member lifecycle must retain its cache.
+    let control_manager = CatalogManager::from_config(&config);
+    let control_zones = ZoneStore::new();
+    let control_plan = TransferPlan::from_config(&config).unwrap();
+    let restarted_persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+    control_manager.apply_parsed_snapshot(
+        control_manager.parse_candidate_snapshot(&initial).unwrap().unwrap(),
+        &zone_metadata_for(&initial), &control_zones, &control_plan, &refresh, &notify,
+        &tx.downgrade(), &metrics, Some(&restarted_persistence),
+    ).await;
+    assert_eq!(control_zones.exact_zone_control_metadata(&member).unwrap().serial, Some(42));
+
+    // Failure to durably revoke is a rejected preparation, not permission to
+    // proceed with a catalog transition whose old cache remains eligible.
+    let parsed_removed = manager.parse_candidate_snapshot(&removed).unwrap().unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let rejected = manager.prepare_catalog_cache_lifecycles(
+        &catalog, Some(&parsed_removed), &transfer_plan, Some(&persistence),
+    ).await.is_err();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(rejected, "fixture must run unprivileged");
+    assert_eq!(zones.exact_zone_control_metadata(&member).unwrap().serial, Some(42));
+    let old_in_flight = bound.stage(&active_member_snapshot(member.clone(), 43)).unwrap();
+    manager.prepare_catalog_cache_lifecycles(
+        &catalog, Some(&parsed_removed), &transfer_plan, Some(&persistence),
+    ).await.unwrap();
+
+    // Simulate an already-running member transfer completing after revocation.
+    // Its staged handle must remain attached to the old namespace.
+    old_in_flight.promote().unwrap().finish().unwrap();
+    assert_eq!(bound.restore(&member, 1).unwrap().unwrap().snapshot.serial(), Some(43));
+    let interrupted = CatalogManager::from_config(&config);
+    let interrupted_zones = ZoneStore::new();
+    interrupted.apply_parsed_snapshot(
+        interrupted.parse_candidate_snapshot(&initial).unwrap().unwrap(),
+        &zone_metadata_for(&initial), &interrupted_zones, &TransferPlan::from_config(&config).unwrap(),
+        &refresh, &notify, &tx.downgrade(), &metrics,
+        Some(&ZonePersistence::new(root.clone(), 1024 * 1024)),
+    ).await;
+    assert_eq!(interrupted_zones.exact_zone_control_metadata(&member).unwrap().state, ZoneState::Loading,
+        "interruption before catalog checkpoint may cold-load, but must not revive the revoked cache");
+
+    // Simulate a transient directory-permission failure during catalog removal.
+    // The subsequent process can read the old regular cache again.
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let removal_failed = bound.remove(&member).is_err();
+    manager
+        .apply_parsed_snapshot(
+            manager.parse_candidate_snapshot(&removed).unwrap().unwrap(),
+            &zone_metadata_for(&removed), &zones, &transfer_plan, &refresh, &notify,
+            &tx.downgrade(), &metrics, Some(&persistence),
+        )
+        .await;
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(removal_failed, "fixture must leave a real cache behind; run unprivileged");
+    assert!(!zones.contains_exact_zone_for_control(&member));
+
+    let restarted = CatalogManager::from_config(&config);
+    let restarted_zones = ZoneStore::new();
+    let restarted_persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+    let transfer_plan = TransferPlan::from_config(&config).unwrap();
+    restarted
+        .apply_parsed_snapshot(
+            restarted.parse_candidate_snapshot(&readded).unwrap().unwrap(),
+            &zone_metadata_for(&readded), &restarted_zones, &transfer_plan, &refresh, &notify,
+            &tx.downgrade(), &metrics, Some(&restarted_persistence),
+        )
+        .await;
+    let restored_state = restarted_zones.exact_zone_control_metadata(&member).unwrap().state;
+    assert_eq!(bound.restore(&member, 1).unwrap().unwrap().snapshot.serial(), Some(43),
+        "cleanup failure leaves old data recoverable, but not eligible for restore");
+    let fresh = restarted_persistence.with_binding(transfer_plan.get(&member).unwrap().cache_binding);
+    fresh.persist(&active_member_snapshot(member.clone(), 44)).unwrap();
+    let after_transfer = CatalogManager::from_config(&config);
+    let after_transfer_zones = ZoneStore::new();
+    after_transfer.apply_parsed_snapshot(
+        after_transfer.parse_candidate_snapshot(&readded).unwrap().unwrap(),
+        &zone_metadata_for(&readded), &after_transfer_zones, &TransferPlan::from_config(&config).unwrap(),
+        &refresh, &notify, &tx.downgrade(), &metrics,
+        Some(&ZonePersistence::new(root.clone(), 1024 * 1024)),
+    ).await;
+    assert_eq!(after_transfer_zones.exact_zone_control_metadata(&member).unwrap().serial, Some(44));
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(restored_state, ZoneState::Loading);
+}
+
 #[tokio::test]
 async fn rejected_catalog_member_transfer_override_does_not_preserve_other_catalog_ownership() {
     let config = ServerConfig::from_toml_str(

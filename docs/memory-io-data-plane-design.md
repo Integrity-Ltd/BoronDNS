@@ -57,10 +57,11 @@ The implementation lives in
 final replacement with `publish_lock`; readers do not take that lock. A
 directory update clones affected map shards rather than every zone entry.
 
-Transfer preparation compiles the replacement outside the publication lock.
+Transfer and restoration preparation compile replacements outside the publication lock.
 The final commit checks that it still replaces the entry seen during
 preparation. An obsolete candidate is discarded before its durable commit
-callback runs. Catalog reconciliation can publish a coordinated directory
+callback runs. Direct restoration re-prepares if its prior entry changes while
+compiling, preserving the current lifecycle and visibility. Catalog reconciliation can publish a coordinated directory
 change through the same store.
 
 This design uses safe reference-counted ownership. There is no custom epoch
@@ -194,9 +195,30 @@ costs and include small-zone controls.
 [`zone_persistence.rs`](../crates/borondns-server/src/zone_persistence.rs) stores
 a checksummed full checkpoint plus a bounded journal of RRset changes.
 Checkpoint and journal staging write and fsync temporary files before the final
-publication lock. Promotion renames the staged file and syncs the directory
-before the new entry becomes visible. The rename and directory fsync still
-occur inside that final commit.
+publication lock. Final admission rechecks the exact entry and the transferred
+SOA: routine refreshes must advance the current serial under RFC 1982, even if
+the earlier SOA probe advertised a different serial. Bootstrap accepts serial
+zero; the explicit restoration API is separate from routine refresh admission.
+
+Promotion renames the staged file and cleans up superseded sidecars under the
+current-plan, current-secret, and zone-publication guards, then publishes the
+already-prepared memory entry. Refresh workers acknowledge the new snapshot's
+freshness before awaiting directory synchronization or overlay compaction, so a
+slow or cancelled maintenance task cannot leave the old expiry deadline attached
+to the new serial. Directory synchronization runs on a blocking worker after
+publication guards are released. A rename failure leaves memory unchanged.
+After a successful rename, cleanup or sync errors cannot mean "nothing changed":
+the new zone remains published and a `zone_cache_published_durability_warning`
+reports incomplete cleanup or uncertain crash durability. No destructive rollback
+is attempted. After a crash before directory sync, cache recovery can find an old
+or new generation, or no usable cache; checksums and journal binding reject torn
+or incompatible data. A missing or rejected cache requires a fresh transfer.
+
+DNS readers continue to use immutable state without taking publication locks.
+Directory-sync delays no longer hold the global publication guards. Rename and
+sidecar unlink calls remain inside them and can still delay other control-plane
+operations; this is not a hard publication-latency guarantee. Cleanup cannot move
+outside these guards without additional coordination with the next journal.
 
 The journal is capped at 1,024 entries and 64 MiB, or the configured cache-file
 bound if lower. Exceeding a journal bound, missing compatible lineage, or a
@@ -208,6 +230,23 @@ validity. A journal with a valid checksum and format but a different base
 checksum is stale and ignored: this covers a crash after checkpoint rename but
 before old-journal removal. A corrupt journal is rejected. Checksums detect
 corruption; protected filesystem ownership and permissions establish trust.
+
+Catalog-member caches additionally use persisted lifecycle tokens, bound to the
+catalog, member node and effective transfer policy. Revocation rotates the token
+before a catalog removal/reset can commit. Old in-flight transfers retain their
+old namespace, so a failed unlink or late write cannot restore revoked data into
+a new member lifecycle. Failed revocation rejects catalog preparation; a later
+aborted catalog update can conservatively require a cold member transfer after
+restart. A normal same-lifecycle restart retains its cache eligibility.
+
+Upgrading from caches without this binding requires one cold transfer for catalog
+members; static-zone caches keep their existing format and paths. Preserve
+`.lifecycle` files when backing up state. Revoked cache files remain recoverable,
+but automatic orphan cleanup is not implemented. Older binaries do not enforce
+these tokens and can read preserved legacy caches: downgrade only with a reviewed
+or clean member-cache state. A remove/re-add performed entirely while BoronDNS
+is offline, leaving the same final member identity, cannot be distinguished from
+an unchanged catalog snapshot.
 
 ## Packet I/O
 

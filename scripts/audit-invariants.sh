@@ -97,7 +97,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     ),
     (
         "BDS-INV-004 bounded last-good persistence only",
-        "No runtime filesystem mutation APIs found outside the dedicated last-good zone persistence module.",
+        "No runtime filesystem mutation APIs found outside the explicitly reviewed last-good persistence and catalog lifecycle modules.",
         [
             re.compile(r"\bstd::fs::write\b"),
             re.compile(r"\btokio::fs::write\b"),
@@ -112,7 +112,10 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         [
             path
             for path in runtime_sources
-            if path != Path("crates/borondns-server/src/zone_persistence.rs")
+            if path not in {
+                Path("crates/borondns-server/src/zone_persistence.rs"),
+                Path("crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs"),
+            }
         ],
     ),
     (
@@ -1485,6 +1488,34 @@ for title, success, patterns, paths in checks:
     else:
         print("status=passed")
         print(f"evidence={success}")
+
+print()
+print("check=catalog lifecycle token boundary")
+lifecycle_text = runtime_sources.get(
+    Path("crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs"), ""
+)
+lifecycle_failures = []
+for required in [
+    "self.open_bounded_regular(&path, 32, 32)",
+    "getrandom::fill(&mut token)",
+    "options.write(true).create_new(true)",
+    "options.mode(0o600)",
+    "file.write_all(&token)",
+    "file.sync_all()",
+    "fs::rename(&temp, &path)",
+    "directory.sync_all()",
+    "let identity = catalog_binding_identity(catalog, member_node, plan)",
+    "namespace: token",
+    'self.directory.join(format!("{hex}.lifecycle"))',
+]:
+    if required not in lifecycle_text:
+        lifecycle_failures.append(f"missing {required}")
+if lifecycle_failures:
+    print("status=failed")
+    failures.append("catalog lifecycle token boundary: " + ", ".join(lifecycle_failures))
+else:
+    print("status=passed")
+    print("evidence=The explicitly allowed lifecycle module uses bounded 32-byte token reads, private exclusive temporary files, synchronized atomic token replacement and digest-derived names. Runtime fault-injection and restart tests complement these structural checks.")
 
 zone_text = runtime_sources[Path("crates/borondns-core/src/zone.rs")]
 dns_text = runtime_sources[Path("crates/borondns-core/src/dns.rs")]
@@ -3809,7 +3840,7 @@ else:
     print("evidence=ZoneImage compilation rejects RDATA that cannot fit the DNS RR rdlength field before preencoding immutable wire records.")
 
 print()
-print("check=ZoneImage DNAME synthesis uses precomputed owner label count")
+print("check=ZoneImage DNAME synthesis uses precomputed owner label count and bounded continuation")
 dname_failures = []
 image_rrset_start = zone_image_text.find("struct ImageRrset")
 image_rrset_end = zone_image_text.find(
@@ -3837,10 +3868,22 @@ if "synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize])" no
     dname_failures.append("DNAME synthesis does not reuse compiled RRset fixed fields for generated CNAME records")
 if "with_replaced_wire_suffix_and_stored_wire_parts_counted" not in lookup_dname_text:
     dname_failures.append("DNAME synthesis does not consume the counted suffix-replacement helper")
-if "with_replaced_wire_suffix_wire_counted" not in lookup_dname_text:
-    dname_failures.append("DNAME synthesis does not use the wire-only replacement path for terminal out-of-zone targets")
-if "target.node_hint == ImageTargetNode::OutOfZone" not in lookup_dname_text:
-    dname_failures.append("DNAME synthesis does not split literal unrelated out-of-zone targets before building a synthesized DomainName")
+# Both entry points must retain cross-zone continuation. Treating an out-of-zone
+# suffix as terminal bypasses another hosted zone, even though it saves allocation.
+for function, guard, consumed in [
+    ("lookup_dname", "if max_cname_chain == 0", "chain_state_start(qname, exact_node, max_cname_chain - 1, any_response)"),
+    ("resolve_dname_at", "if state.remaining == 0", "remaining: state.remaining - 1"),
+]:
+    start = zone_image_text.find(f"    fn {function}")
+    end = zone_image_text.find("\n    fn ", start + 1)
+    body = zone_image_text[start:end] if start >= 0 and end >= 0 else ""
+    for required in [guard, consumed, "self.resolve_indirection_target(",
+                     "with_replaced_wire_suffix_and_stored_wire_parts_counted",
+                     "synthesized_cname_fixed_fields_from_rrset(self.rrsets[dname.0 as usize])"]:
+        if required not in body:
+            dname_failures.append(f"{function} lost bounded DNAME continuation: {required}")
+    if "target.node_hint == ImageTargetNode::OutOfZone" in body:
+        dname_failures.append(f"{function} reintroduced terminal out-of-zone shortcut")
 if "usize::from(self.rrsets[dname.0 as usize].owner_label_count)" not in lookup_dname_text:
     dname_failures.append("DNAME synthesis does not use the compiled DNAME owner label count")
 wire_replacement_start = dns_text.find("    pub(crate) fn with_replaced_wire_suffix_wire_counted(")
@@ -3868,7 +3911,7 @@ if dname_failures:
     )
 else:
     print("status=passed")
-    print("evidence=DNAME synthesis consumes the owner label count compiled into ImageRrset, so target suffix replacement does not parse stored DNAME owner wire just to find the query-prefix boundary; literal unrelated out-of-zone DNAME targets use the wire-only replacement path and avoid building a synthesized DomainName, and generated target wire is serialized directly into the inline buffer without a prefix-length sizing walk.")
+    print("evidence=Both DNAME entry points use compiled owner label counts and CNAME fixed fields, serialize generated wire into an inline buffer without a prefix-length sizing walk, and consume the shared chain budget while retaining hosted-zone continuation.")
 
 print()
 print("check=ZoneImage CNAME/DNAME loop checks use target wire")
@@ -5068,12 +5111,21 @@ if "catalog_members: Option<ParsedCatalogMembers>" not in success_enum_text:
     refresh_clone_failures.append("refresh updated outcome does not carry the bounded parsed catalog result")
 if "snapshot:" in success_enum_text or "ZoneSnapshot" in success_enum_text:
     refresh_clone_failures.append("refresh success outcome carries the full transferred snapshot past publication")
-if "Self::Current(metadata) => (metadata, false, None)" not in server_text:
+if "Self::Current(metadata) => (metadata, false, None, None)" not in server_text:
     refresh_clone_failures.append("refresh current success handling does not consume carried metadata")
-if "} => (metadata, true, catalog_members)," not in server_text:
-    refresh_clone_failures.append("refresh updated success handling does not consume carried metadata and parsed catalog members")
-if "let (metadata, updated, catalog_members) = success.into_parts();" not in server_text:
-    refresh_clone_failures.append("refresh success outcome does not consume into narrow metadata plus an updated flag and parsed catalog result")
+if "} => (metadata, true, catalog_members, promoted_cache)," not in server_text:
+    refresh_clone_failures.append("refresh updated success handling does not consume metadata, parsed catalog members and durability token")
+if "promoted_cache: Option<zone_persistence::PromotedZoneCache>" not in success_enum_text:
+    refresh_clone_failures.append("refresh updated success outcome lost its durability token")
+if not re.search(r"let \(metadata, updated, catalog_members, promoted_cache\)\s*=\s*success\.into_parts\(\);", server_text):
+    refresh_clone_failures.append("refresh success outcome does not consume narrow metadata, updated flag, parsed catalog result and durability token")
+ack_start = server_text.find("async fn acknowledge_refresh_before_maintenance<")
+ack_end = server_text.find("\nasync fn ", ack_start + 1)
+ack_body = server_text[ack_start:ack_end] if ack_start >= 0 and ack_end >= 0 else ""
+ack_index = ack_body.find("record_attempt_success_if_current_plan(")
+maintenance_index = ack_body.find("maintenance.await;")
+if ack_index < 0 or maintenance_index < ack_index or ".await" in ack_body[:ack_index]:
+    refresh_clone_failures.append("refresh maintenance acknowledgement ordering is not publication-before-await")
 if "fn into_owned(self, zones: &ZoneStore) -> Option<ZoneSnapshot>" in server_text:
     refresh_clone_failures.append("test refresh success helper still clones outcomes back into owned ZoneSnapshot")
 if "async fn refresh_zone_metadata_from_primaries(\n    zones: &ZoneStore,\n    plan: &ZoneTransferPlan,\n    primary_serial_hint: Option<u32>,\n    context: RefreshAttemptContext<'_>,\n) -> Option<ZoneSnapshot>" in server_text:
