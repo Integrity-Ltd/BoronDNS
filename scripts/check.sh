@@ -76,6 +76,7 @@ python3 scripts/audit-log-lazy-formatting.py
 scripts/audit-invariants.sh
 python3 scripts/test-invariant-audit.py
 scripts/audit-safe-rust.sh
+python3 scripts/test-unsafe-prone-dependencies.py
 bash -n scripts/audit-unused-code.sh
 bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
