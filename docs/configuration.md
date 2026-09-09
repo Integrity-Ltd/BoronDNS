@@ -266,7 +266,7 @@ expose an inbound administration API.
 | Setting | Default and operational effect |
 | --- | --- |
 | `query.any_response` | `minimal`; use `full` to return ordinary owner RRsets for ANY. |
-| `dnssec.nsec3_max_iterations` | `100`; required NSEC3 proofs above this cap return SERVFAIL. This includes wildcard answers needing such proofs, not just negative responses. Lower it where primary policy permits. |
+| `dnssec.nsec3_max_iterations` | `100`; above 100 requires the separate unsafe opt-in below. Required proofs above the configured cap return SERVFAIL, including wildcard answers needing them. Lower the cap where primary policy permits. |
 | `edns.extended_dns_errors` | `off`; `minimal` adds numeric diagnostic EDE codes for selected not-ready and NSEC3-cap failures. |
 | `limits.edns_padding_block_size` | `0`; nonzero padding is rejected for the plaintext query transports. |
 | `rrl.enabled` | `true`; retain UDP response rate limiting for public service unless an upstream mitigation has been measured. |
@@ -278,12 +278,66 @@ BoronDNS serves existing DNSSEC signatures and denial records; it does not sign
 or validate the primary's zone as a resolver would. Keep the primary's signing
 and signature-expiry monitoring in place.
 
-`limits.max_udp_payload` defaults to 1232 bytes and accepts values from 512 to
-65,535. The response also respects the client's advertised EDNS size. Increasing
-the server limit can expose responses to IP fragmentation and path-MTU loss;
-`TC=0` does not mean the IP packet was unfragmented. There is currently no
-separate high-payload warning. Keep the default unless a larger value has been
-tested on the deployment's paths.
+`limits.max_udp_payload` defaults to 1232 bytes and normally accepts 512–4096.
+The response also respects the client's advertised EDNS size; oversized answers
+are truncated for TCP retry. Keep 1232 for public-facing deployments. Values
+above 1400 produce a warning about fragmentation and path-MTU loss: the 4096
+guardrail is not a safe packet size for every path, and `TC=0` does not mean the
+IP packet was unfragmented.
+
+### Explicit safety exceptions
+
+Values above 4096 (up to 65,535) require a separate file explicitly selected with
+`--unsafe-overrides`. No such file is automatically discovered, shipped, or
+created by the installers. This is a deliberate operator opt-in, not a security
+boundary against an administrator controlling the service.
+
+The same file authorizes three other narrowly scoped exceptions. All flags
+default to false and each grants only its own permission:
+
+| Override flag | Normal configuration it permits | Risk |
+| --- | --- | --- |
+| `allow_large_udp_payload` | `limits.max_udp_payload > 4096` | Amplification and fragmented or undeliverable responses. |
+| `allow_high_nsec3_iterations` | `dnssec.nsec3_max_iterations > 100` | Expensive query-time hashing and CPU exhaustion. The default 100 is a compatibility policy, not a guarantee of safe cost; publishers should use zero iterations. |
+| `allow_core_dumps` | `process.disable_core_dumps = false` | Dumps can disclose TSIG keys and other sensitive process memory. |
+| `allow_without_no_new_privileges` | `process.no_new_privileges = false` | Skips BoronDNS's Linux no-new-privileges protection. Supervisor restrictions still apply. |
+
+For a controlled deployment that genuinely needs this exception, create a
+regular file such as `/etc/borondns-secondary/unsafe-overrides.toml` containing:
+
+```toml
+allow_large_udp_payload = true
+```
+
+Keep the file and its parent directories under trusted administrator control;
+use root ownership and mode 0644 or 0600 as appropriate for the service user.
+The file is limited to 4096 bytes. On Unix, final-component symlinks and group-
+or world-writable files are rejected. Missing files, non-regular files, malformed
+TOML, and unknown keys fail configuration loading. Permissions never change
+normal configuration values themselves: an opt-in alone neither increases a
+limit nor disables a protection. Environment overrides receive the same checks.
+
+```sh
+borondns --unsafe-overrides /etc/borondns-secondary/unsafe-overrides.toml --validate-config /etc/borondns-secondary/config.toml
+borondns serve --config /etc/borondns-secondary/config.toml --unsafe-overrides /etc/borondns-secondary/unsafe-overrides.toml
+```
+
+Pass the same option to every config-loading command, including `check-config`,
+`readiness-endpoints`, and `--dump-config`. For the packaged systemd service,
+an operator-managed drop-in must update **both** `ExecStartPre` and `ExecStart`
+with this argument; changing only the main process leaves pre-start validation
+rejecting the exception. The shipped service remains unchanged.
+
+Every loaded override file produces `unsafe_overrides_file_loaded`, with its
+path, even if empty or set to false. Each enabled permission additionally produces
+its own `unsafe_*` warning describing the risk and current normal setting.
+Startup emits these warnings to stderr even when the
+normal log filter suppresses warnings. Validation and dump modes warn too.
+The opt-in is startup-only and is neither accepted in the normal TOML nor
+exported by `--dump-config`; a dumped configuration using an exception still needs
+the separately selected file when reused. Before upgrading, configurations with
+UDP limits above 4096, NSEC3 caps above 100, or either hardening setting false
+must restore the normal policy or explicitly authorize each exception.
 
 `limits.max_tcp_connections` defaults to 1,024 globally.
 `max_tcp_connections_per_source` is unset by default, so one source can consume
@@ -349,9 +403,14 @@ bounded by `logging.max_entry_length_bytes` (default 16,384); oversized entries
 become a parseable truncation record.
 
 Validation warnings identify valid but questionable settings, including public
-management binds, unsigned transfers, SHA-1 TSIG, broad RRL allowlists, disabled
+management binds, unsigned transfers, SHA-1 TSIG, all-address RRL allowlists, disabled
 Cookies, unusually large timeouts, and expensive NSEC3 iteration caps. Review
 the warning's parameter and explanation rather than treating successful
 validation as a production security assessment. `--validate-config` and
 `--dump-config` write warnings to stderr; startup logs them and counts them in
 `borondns_secondary_configuration_warnings_total`.
+
+The global RRL allowlist warning uses the parsed prefix length: `192.0.2.1/0`
+and expanded IPv6 `/0` spellings also exempt the entire corresponding address
+family. Ordinary allowlists and `rrl.enabled` remain normal configuration;
+this warning correction does not introduce an RRL unsafe opt-in.

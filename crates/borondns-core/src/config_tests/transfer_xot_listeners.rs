@@ -83,7 +83,7 @@ allow_non_rfc5936_cold_start = true
 
     #[test]
     fn warns_on_large_nsec3_iteration_cap() {
-        let config = ServerConfig::from_toml_str(
+        let mut config = ServerConfig::parse_toml_str(
             r#"
                 [server]
 allow_non_rfc5936_cold_start = true
@@ -98,6 +98,11 @@ allow_non_rfc5936_cold_start = true
             "#,
         )
         .expect("valid config");
+
+        let overrides = write_secret_file("allow_high_nsec3_iterations = true", 0o600);
+        config.load_unsafe_overrides(&overrides).unwrap();
+        config.validate().unwrap();
+        std::fs::remove_file(overrides).unwrap();
 
         assert!(
             config

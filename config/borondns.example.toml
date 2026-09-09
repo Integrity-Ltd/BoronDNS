@@ -27,9 +27,11 @@ nsid = "borondns-example"
 # run_as_user = "borondns"
 # Disable process core dumps during startup so in-memory TSIG/XoT material and
 # transferred zone data are not written to crash artifacts. Default: true.
+# Setting false requires allow_core_dumps in a separate --unsafe-overrides file.
 disable_core_dumps = true
 # On Linux, set PR_SET_NO_NEW_PRIVS after socket binding and any configured
 # privilege drop, before network workers process input. Default: true.
+# Setting false requires allow_without_no_new_privileges in that separate file.
 no_new_privileges = true
 
 [interfaces]
@@ -119,7 +121,8 @@ hostname = ""
 
 [dnssec]
 # Maximum NSEC3 iterations accepted when composing negative DNSSEC proofs.
-# Default: 100, the legacy soft ceiling from RFC 9276 / BCP 236.
+# Default: 100 for legacy compatibility; publishers should use zero iterations.
+# Above 100 requires allow_high_nsec3_iterations in --unsafe-overrides.
 nsec3_max_iterations = 100
 
 [cookie]
@@ -176,6 +179,8 @@ require_tsig = false
 # (31536000 seconds) across limits, RRL, health/observability, cookie rotation,
 # and control-plane polling/timeouts so every monotonic deadline is representable.
 # EDNS UDP payload ceiling. Default: 1232.
+# Normal range 512–4096; keep 1232 for public DNS. Larger values require a
+# separately selected --unsafe-overrides file; see docs/configuration.md.
 max_udp_payload = 1232
 # UDP datagrams to drain per standard socket readiness wakeup, or per Linux
 # recvmmsg/sendmmsg batch when udp_runtime = "dedicated". Valid range: 1..=1024.

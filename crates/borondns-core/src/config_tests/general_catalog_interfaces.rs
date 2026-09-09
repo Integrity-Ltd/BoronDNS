@@ -869,7 +869,7 @@ allow_non_rfc5936_cold_start = true
 
 #[test]
 fn parses_process_run_as_user() {
-    let config = ServerConfig::from_toml_str(
+    let mut config = ServerConfig::parse_toml_str(
         r#"
                 [server]
 allow_non_rfc5936_cold_start = true
@@ -886,6 +886,11 @@ allow_non_rfc5936_cold_start = true
             "#,
     )
     .expect("valid process config");
+
+    let overrides = write_secret_file("allow_core_dumps = true\nallow_without_no_new_privileges = true", 0o600);
+    config.load_unsafe_overrides(&overrides).unwrap();
+    config.validate().unwrap();
+    std::fs::remove_file(overrides).unwrap();
 
     assert_eq!(config.process.run_as_user.as_deref(), Some("borondns"));
     assert!(!config.process.disable_core_dumps);

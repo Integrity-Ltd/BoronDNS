@@ -1043,3 +1043,24 @@ allow_non_rfc5936_cold_start = true
                 .contains("udp_socket_max_pacing_rate_bytes_per_second")
         );
     }
+    #[test]
+    fn large_udp_requires_separate_unsafe_override() {
+        for limit in [512, 1232, 1400, 4096, 4097, 8192, 65535] {
+            let text = format!(r#"
+                [server]
+                allow_non_rfc5936_cold_start = true
+                [limits]
+                max_udp_payload = {limit}
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#);
+            let result = ServerConfig::from_toml_str(&text);
+            if limit <= 4096 {
+                assert!(result.is_ok(), "{limit}: {result:?}");
+            } else {
+                let error = result.expect_err("large UDP must require separate opt-in");
+                assert!(error.to_string().contains("--unsafe-overrides"));
+            }
+        }
+    }

@@ -1983,6 +1983,25 @@ The area code **EDNS** is allocated.
 
 **BDS-FR-EDNS-006.** The server MUST enforce a configurable maximum UDP response size, with a default of 1232 octets. The applied UDP payload size ceiling for any given response MUST be the lesser of the requestor's advertised payload size (after BDS-FR-EDNS-005 normalisation) and the server's configured maximum. Responses that would exceed this ceiling MUST trigger truncation as specified in §4.12.
 
+As an operator-misconfiguration guardrail, configuration values above 4096 MUST
+be rejected unless `--unsafe-overrides FILE` explicitly selects a separate TOML
+file with `allow_large_udp_payload = true`. The override permits values through
+65535 without changing the configured size, minimum 512, or wire truncation
+rules. This guardrail is BoronDNS policy, not an RFC-imposed 4096-byte maximum.
+Values above 1400 MUST emit the `large_udp_payload` configuration warning.
+
+No override file is implicitly loaded or installed. A selected file MUST be
+regular, at most 4096 bytes, and valid TOML with no unknown keys. On Unix the
+opened file MUST NOT be group- or world-writable or a final-component symlink.
+Loading errors MUST fail startup and configuration-check modes. Loading any
+override file, including an empty or disabled one, MUST emit the prominent
+`unsafe_overrides_file_loaded` warning with its path. An enabled flag MUST also
+emit `unsafe_large_udp_payload_allowed` describing amplification and
+fragmentation risks. These startup warnings MUST remain visible on stderr even
+when ordinary log filtering suppresses warning events. The permission is not
+accepted from or exported into the main TOML configuration; all config-loading
+CLI modes use the same explicit file selection. Overrides are startup-only.
+
 *Source.* RFC 6891 §6.2.5; DNS Flag Day 2020 consensus (1232 octets is the widely-adopted ceiling avoiding IP fragmentation on the public Internet).
 
 *Verification.* Tests at the boundary of the ceiling; tests confirming TC bit is set per §4.12.
@@ -3833,6 +3852,17 @@ Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Man
 
 **BDS-IF-CONF-005.** The server MUST validate the entire configuration at startup before binding any listening sockets. Validation MUST include schema conformance, TSIG algorithm support per §4.9, XoT trust-anchor parseability per §4.10, network-address parseability, and value-range checks for numeric parameters (port numbers, timeout values, rate limits). Any validation failure MUST cause the server to log a clear error message identifying the specific configuration defect and exit with non-zero status; the server MUST NOT begin partial operation with partially valid configuration.
 
+Setting `process.disable_core_dumps = false` MUST require `allow_core_dumps = true`
+in an explicitly selected `--unsafe-overrides` file. Setting
+`process.no_new_privileges = false` MUST independently require
+`allow_without_no_new_privileges = true` there. Both normal settings default to
+true. These flags authorize opting out of BoronDNS hardening but MUST NOT change
+the normal settings or relax supervisor restrictions. File loading and warning
+visibility follow the separate-file contract in BDS-FR-EDNS-006. Each enabled
+permission MUST emit its own `unsafe_*` warning describing the risk and current
+setting, even if that permission is not currently exercised. The permissions
+MUST NOT be accepted from or exported into the main TOML configuration.
+
 *Source.* Fail-fast configuration discipline; BDS-INV-005.
 
 *Verification.* Tests with deliberately invalid configurations across each validation category.
@@ -3853,7 +3883,7 @@ Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Man
 
 - TSIG fudge value larger than 60 seconds (RFC 8945 §10.4 recommends short fudges; per BDS-NFR-REL-007 operationally typical is 5–30 seconds);
 - SOA REFRESH or RETRY values approaching the maximum effective ceiling of BDS-FR-ZSM-011 (suggesting the operator may have intended a smaller value);
-- RRL allowlist (BDS-FR-RRL-006) containing `0.0.0.0/0` or `::/0` (effectively disabling RRL);
+- RRL allowlist (BDS-FR-RRL-006) containing any valid parsed zero-length prefix, including noncanonical spellings such as `192.0.2.1/0` or expanded IPv6 `/0` (disabling RRL for the corresponding address family);
 - DNS Cookies disabled in configuration (operationally significant security regression);
 - XoT trust anchors expiring within 30 days (certificate-rotation reminder);
 - TSIG keys configured with HMAC-SHA1 (RFC 8945 §6 marks SHA-1 as legacy; SHA-256 is preferred);
@@ -3967,6 +3997,16 @@ The interaction with TSIG and XoT key material is by reference. Startup keys can
 *Verification.* Tests with TOML configurations that validate cleanly and environment-variable overrides that introduce out-of-envelope values; verify startup failure with the expected diagnostic. *Added in v0.9.*
 
 **BDS-IF-CONF-015.** The server MUST accept a configurable maximum NSEC3 iteration count (per BDS-FR-DNSSEC-014) under the `[dnssec]` configuration subtree or equivalent. The parameter name MUST be `nsec3_max_iterations`, an unsigned integer in the inclusive range 0–65535. The default value MUST be 100, an BoronDNS compatibility default informed by RFC 9276 Appendix A deployment measurements for legacy NSEC3 zones. Where the configured value exceeds 100, the configuration warning `nsec3_iterations_large` MUST be emitted at startup per BDS-IF-CONF-008, recording the configured value, the project compatibility default, and the RFC 9276 §3.1 recommendation of zero iterations for NSEC3 zone publishers.
+
+Values above 100 MUST additionally require `allow_high_nsec3_iterations = true`
+in an explicitly selected `--unsafe-overrides` file. This applies to the
+effective configuration after environment overrides. File validation and
+startup-warning visibility follow BDS-FR-EDNS-006. Enabling this permission
+MUST emit `unsafe_high_nsec3_iterations_allowed` describing query-time hashing
+cost and CPU-exhaustion risk, even if the configured cap is still at most 100.
+The permission does not raise the cap itself and is not exported in a main
+configuration dump. The 100 threshold is a BoronDNS compatibility policy, not
+a claim that it eliminates computational denial-of-service risk.
 
 *Source.* BDS-FR-DNSSEC-014; RFC 9276 §2.3, §3.1, Appendix A.
 

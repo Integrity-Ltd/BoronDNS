@@ -23,6 +23,238 @@ const EX_IOERR: i32 = 74;
 const EX_CONFIG: i32 = 78;
 
 #[test]
+fn unsafe_overrides_cli_rejects_non_loading_modes_and_keeps_subcommand_help() {
+    for flag in ["--version", "--example-config"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
+            .args([flag, "--unsafe-overrides", "/not-read.toml"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(EX_USAGE));
+    }
+    for mode in ["serve", "check-config", "readiness-endpoints"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
+            .args([mode, "--help"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--unsafe-overrides"));
+    }
+}
+
+#[test]
+fn unsafe_overrides_apply_to_every_config_mode_and_warn() {
+    let override_path =
+        write_secret_file("unsafe-overrides", "allow_large_udp_payload = true", 0o600);
+    let config = write_config(
+        "large-udp",
+        r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        listen_udp = ["127.0.0.1:5300"]
+        listen_tcp = ["127.0.0.1:5300"]
+        [limits]
+        max_udp_payload = 8192
+        [[zones]]
+        name = "example.test."
+        primaries = ["127.0.0.1:9"]
+    "#,
+    );
+    for mode in [
+        "--validate-config",
+        "--dump-config",
+        "check-config",
+        "readiness-endpoints",
+    ] {
+        let arguments = if mode.starts_with("--") {
+            vec![mode]
+        } else {
+            vec![mode, "--config"]
+        };
+        let rejected = Command::new(env!("CARGO_BIN_EXE_borondns"))
+            .args(&arguments)
+            .arg(&config)
+            .output()
+            .unwrap();
+        assert_eq!(rejected.status.code(), Some(EX_CONFIG_INVALID));
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("--unsafe-overrides"));
+        let accepted = Command::new(env!("CARGO_BIN_EXE_borondns"))
+            .args(&arguments)
+            .arg(&config)
+            .arg("--unsafe-overrides")
+            .arg(&override_path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&accepted.stderr);
+        assert!(accepted.status.success(), "{mode}: {stderr}");
+        assert!(stderr.contains("UNSAFE OVERRIDES FILE LOADED"));
+        assert!(stderr.contains("UNSAFE LARGE UDP RESPONSES ALLOWED"));
+        assert!(stderr.contains(override_path.to_str().unwrap()));
+        assert!(!String::from_utf8_lossy(&accepted.stdout).contains("allow_large_udp_payload"));
+    }
+    fs::remove_file(config).unwrap();
+    fs::remove_file(override_path).unwrap();
+}
+
+#[test]
+fn unsafe_overrides_file_warns_at_startup_even_when_empty_and_logging_off() {
+    let occupied = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let config = write_config(
+        "unsafe-startup",
+        &format!(
+            r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        listen_udp = ["{}"]
+        listen_tcp = ["127.0.0.1:0"]
+        log_level = "error"
+        [limits]
+        max_tcp_connections = 128
+        [[zones]]
+        name = "example.test."
+        primaries = ["127.0.0.1:9"]
+    "#,
+            occupied.local_addr().unwrap()
+        ),
+    );
+    for text in [
+        "",
+        "allow_large_udp_payload = false",
+        "allow_large_udp_payload = true",
+        "allow_high_nsec3_iterations = true",
+        "allow_core_dumps = true",
+        "allow_without_no_new_privileges = true",
+    ] {
+        let overrides = write_secret_file("unsafe-startup", text, 0o600);
+        let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
+            .args(["serve", "--config"])
+            .arg(&config)
+            .arg("--unsafe-overrides")
+            .arg(&overrides)
+            .env("RUST_LOG", "off")
+            .env("BORONDNS_LOG_LEVEL", "off")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(EX_CANTCREAT),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("UNSAFE OVERRIDES FILE LOADED"), "{stderr}");
+        assert!(stderr.contains(overrides.to_str().unwrap()));
+        assert_eq!(
+            stderr.contains("UNSAFE LARGE UDP RESPONSES ALLOWED"),
+            text == "allow_large_udp_payload = true"
+        );
+        for (flag, code) in [
+            (
+                "allow_high_nsec3_iterations",
+                "unsafe_high_nsec3_iterations_allowed",
+            ),
+            ("allow_core_dumps", "unsafe_core_dumps_allowed"),
+            (
+                "allow_without_no_new_privileges",
+                "unsafe_no_new_privileges_opt_out_allowed",
+            ),
+        ] {
+            assert_eq!(stderr.contains(code), text.starts_with(flag));
+        }
+        fs::remove_file(overrides).unwrap();
+    }
+    fs::remove_file(config).unwrap();
+}
+
+#[test]
+fn unsafe_overrides_missing_file_fails_even_with_default_payload() {
+    let config = write_config(
+        "unsafe-missing",
+        r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        [[zones]]
+        name = "example.test."
+        primaries = ["127.0.0.1:9"]
+    "#,
+    );
+    let missing = unique_temp_path("missing-unsafe", "toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_borondns"))
+        .arg("--unsafe-overrides")
+        .arg(missing)
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("loading unsafe overrides"));
+    fs::remove_file(config).unwrap();
+}
+
+#[test]
+fn unsafe_policy_cli_checks_effective_config_in_all_modes() {
+    for (settings, flag, from_env) in [
+        ("", "allow_high_nsec3_iterations", true),
+        (
+            "[process]\ndisable_core_dumps = false",
+            "allow_core_dumps",
+            false,
+        ),
+        (
+            "[process]\nno_new_privileges = false",
+            "allow_without_no_new_privileges",
+            false,
+        ),
+    ] {
+        let config = write_config(
+            "unsafe-policy",
+            &format!(
+                r#"
+            [server]
+            allow_non_rfc5936_cold_start = true
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            {settings}
+        "#
+            ),
+        );
+        let overrides = write_secret_file("unsafe-policy", &format!("{flag} = true"), 0o600);
+        for mode in [
+            "--validate-config",
+            "--dump-config",
+            "check-config",
+            "readiness-endpoints",
+        ] {
+            for allow in [false, true] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_borondns"));
+                command.arg(mode);
+                if !mode.starts_with("--") {
+                    command.arg("--config");
+                }
+                command.arg(&config);
+                if from_env {
+                    command.env("BORONDNS_DNSSEC_NSEC3_MAX_ITERATIONS", "101");
+                }
+                if allow {
+                    command.arg("--unsafe-overrides").arg(&overrides);
+                }
+                let output = command.output().unwrap();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(output.status.success(), allow, "{mode} {flag}: {stderr}");
+                if allow {
+                    assert!(stderr.contains("UNSAFE OVERRIDES FILE LOADED"));
+                } else {
+                    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+                    assert!(stderr.contains(flag));
+                }
+            }
+        }
+        fs::remove_file(config).unwrap();
+        fs::remove_file(overrides).unwrap();
+    }
+}
+
+#[test]
 fn validate_config_flag_succeeds_with_valid_config() {
     let config = write_config(
         "validate",

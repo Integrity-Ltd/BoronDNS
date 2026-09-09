@@ -57,7 +57,15 @@ const LOG_TRUNCATION_MARKER: &str = "...<truncated>";
     after_help = HELP_FOOTER
 )]
 struct Cli {
-    #[arg(short = 'V', long, action = ArgAction::SetTrue, help = "Print version information and exit")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "FILE",
+        help = "Explicit startup safety exceptions file (WARNING: unsafe overrides)"
+    )]
+    unsafe_overrides: Option<PathBuf>,
+
+    #[arg(short = 'V', long, action = ArgAction::SetTrue, conflicts_with = "unsafe_overrides", help = "Print version information and exit")]
     version: bool,
 
     #[arg(
@@ -83,7 +91,7 @@ struct Cli {
     )]
     dump_config: Option<Option<PathBuf>>,
 
-    #[arg(long, action = ArgAction::SetTrue, help = "Print an example configuration and exit")]
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "unsafe_overrides", help = "Print an example configuration and exit")]
     example_config: bool,
 
     #[command(subcommand)]
@@ -150,13 +158,15 @@ async fn async_main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    match selected_mode(cli)? {
+    let unsafe_overrides = cli.unsafe_overrides.clone();
+    let mode = selected_mode(cli)?;
+    match mode {
         Mode::Version => {
             write_stdout_text(&format!("{}\n", version_text()))
                 .context("writing version output")?;
         }
         Mode::CheckConfig(config) | Mode::ValidateConfig(config) => {
-            let loaded = load_config(&config)?;
+            let loaded = load_config(&config, unsafe_overrides.as_deref())?;
             emit_config_warnings_to_stderr(&loaded.warnings);
             init_logging(&loaded.config)?;
             write_stdout_text(&format!(
@@ -170,12 +180,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             write_stdout_text("\n").context("writing validation output")?;
         }
         Mode::DumpConfig(config) => {
-            let loaded = load_config(&config)?;
+            let loaded = load_config(&config, unsafe_overrides.as_deref())?;
             emit_config_warnings_to_stderr(&loaded.warnings);
             write_stdout_text(&loaded.config.to_redacted_toml()?).context("writing config dump")?;
         }
         Mode::ReadinessEndpoints(config) => {
-            let loaded = load_config(&config)?;
+            let loaded = load_config(&config, unsafe_overrides.as_deref())?;
             emit_config_warnings_to_stderr(&loaded.warnings);
             write_stdout_text(&readiness_endpoints_tsv(&loaded.config)?)
                 .context("writing readiness endpoint output")?;
@@ -184,7 +194,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             write_stdout_text(EXAMPLE_CONFIG).context("writing example config")?;
         }
         Mode::Serve(config) => {
-            let loaded = load_config(&config)?;
+            let loaded = load_config(&config, unsafe_overrides.as_deref())?;
+            // Explicit safety exceptions must remain visible even when normal
+            // logging is configured to suppress WARN events.
+            for warning in loaded
+                .warnings
+                .iter()
+                .filter(|warning| warning.code.starts_with("unsafe_"))
+            {
+                write_stderr_line(&config_warning_line(warning));
+            }
             init_logging(&loaded.config)?;
             emit_config_warnings_to_log(&loaded.warnings);
             Runtime::new(loaded.config)?.run().await?;
@@ -285,14 +304,14 @@ struct LoadedConfig {
     warnings: Vec<ConfigWarning>,
 }
 
-fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
+fn load_config(path: &Path, unsafe_overrides: Option<&Path>) -> anyhow::Result<LoadedConfig> {
     bootstrap_log_info("process started", &bootstrap_build_fields());
     bootstrap_log_info(
         "reading configuration",
         &[("config_path", path.display().to_string())],
     );
 
-    let result = load_config_inner(path);
+    let result = load_config_inner(path, unsafe_overrides);
     match &result {
         Ok(_) => bootstrap_log_info(
             "configuration validation succeeded",
@@ -309,11 +328,16 @@ fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
     result
 }
 
-fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
+fn load_config_inner(path: &Path, unsafe_overrides: Option<&Path>) -> anyhow::Result<LoadedConfig> {
     let mut config =
         ServerConfig::parse_path(path).with_context(|| format!("loading {}", path.display()))?;
     let override_report =
         apply_environment_overrides(&mut config).context("applying environment overrides")?;
+    if let Some(path) = unsafe_overrides {
+        config
+            .load_unsafe_overrides(path)
+            .with_context(|| format!("loading unsafe overrides {}", path.display()))?;
+    }
     if let Err(error) = config.validate() {
         let mut context = "validating effective configuration".to_owned();
         if !override_report.applied.is_empty() {

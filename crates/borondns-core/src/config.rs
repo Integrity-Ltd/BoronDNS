@@ -34,6 +34,9 @@ pub const MAX_UDP_BATCH_SIZE: usize = 1024;
 pub const MAX_UDP_REUSEPORT_WORKERS: usize = 64;
 /// Maximum size of the primary TOML configuration file.
 pub const MAX_SERVER_CONFIG_BYTES: usize = 4 * 1024 * 1024;
+/// Normal UDP response ceiling; larger values require a separate explicit opt-in.
+pub const MAX_UDP_PAYLOAD_WITHOUT_OVERRIDE: u16 = 4096;
+const MAX_UNSAFE_OVERRIDES_BYTES: usize = 4096;
 /// Maximum number of TSIG keys retained in one merged secret snapshot.
 pub const MAX_TSIG_KEYS_PER_SNAPSHOT: usize = 1024;
 /// Maximum combined base64-encoded TSIG material in one merged snapshot.
@@ -171,6 +174,9 @@ impl std::error::Error for ConfigParseError {}
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+    // Never accepted from or emitted into the ordinary TOML configuration.
+    #[serde(skip)]
+    unsafe_overrides: Option<LoadedUnsafeOverrides>,
     pub server: ServerSettings,
     #[serde(default)]
     pub interfaces: InterfacesConfig,
@@ -225,7 +231,37 @@ pub struct ConfigWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct UnsafeOverrides {
+    #[serde(default)]
+    allow_large_udp_payload: bool,
+    #[serde(default)]
+    allow_high_nsec3_iterations: bool,
+    #[serde(default)]
+    allow_core_dumps: bool,
+    #[serde(default)]
+    allow_without_no_new_privileges: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadedUnsafeOverrides {
+    path: PathBuf,
+    values: UnsafeOverrides,
+}
+
 impl ServerConfig {
+    /// Load an explicitly selected startup-only opt-in. This neither changes
+    /// the normal configuration values nor bypasses unrelated checks.
+    pub fn load_unsafe_overrides(&mut self, path: &Path) -> Result<(), ConfigError> {
+        let values = read_unsafe_overrides(path)?;
+        self.unsafe_overrides = Some(LoadedUnsafeOverrides {
+            path: path.to_owned(),
+            values,
+        });
+        Ok(())
+    }
+
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let config = Self::parse_path(path)?;
         config.validate()?;
@@ -322,6 +358,34 @@ impl ServerConfig {
         self.chaos.validate()?;
         self.dnssec.validate()?;
 
+        let permissions = self.unsafe_overrides.as_ref().map(|loaded| &loaded.values);
+        for (requested, permitted, parameter, flag) in [
+            (
+                self.dnssec.nsec3_max_iterations > default_nsec3_max_iterations(),
+                permissions.is_some_and(|p| p.allow_high_nsec3_iterations),
+                "dnssec.nsec3_max_iterations above 100",
+                "allow_high_nsec3_iterations",
+            ),
+            (
+                !self.process.disable_core_dumps,
+                permissions.is_some_and(|p| p.allow_core_dumps),
+                "process.disable_core_dumps = false",
+                "allow_core_dumps",
+            ),
+            (
+                !self.process.no_new_privileges,
+                permissions.is_some_and(|p| p.allow_without_no_new_privileges),
+                "process.no_new_privileges = false",
+                "allow_without_no_new_privileges",
+            ),
+        ] {
+            if requested && !permitted {
+                return Err(ConfigError::Invalid(format!(
+                    "{parameter} requires --unsafe-overrides selecting a separate file with {flag} = true"
+                )));
+            }
+        }
+
         if self.zones.is_empty() && self.catalog_zones.is_empty() {
             return Err(ConfigError::Invalid(
                 "at least one [[zones]] or [[catalog_zones]] entry is required; BoronDNS is a secondary-only authoritative server, so configure a primary DNS server to transfer from before starting service".to_owned(),
@@ -332,6 +396,16 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "limits.max_udp_payload must be at least 512".to_owned(),
             ));
+        }
+        if self.limits.max_udp_payload > MAX_UDP_PAYLOAD_WITHOUT_OVERRIDE
+            && !self
+                .unsafe_overrides
+                .as_ref()
+                .is_some_and(|loaded| loaded.values.allow_large_udp_payload)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "limits.max_udp_payload must not exceed {MAX_UDP_PAYLOAD_WITHOUT_OVERRIDE} unless --unsafe-overrides selects a separate file with allow_large_udp_payload = true"
+            )));
         }
         if self.limits.udp_batch_size == 0 {
             return Err(ConfigError::Invalid(
@@ -719,6 +793,65 @@ impl ServerConfig {
     pub fn configuration_warnings(&self) -> Vec<ConfigWarning> {
         let mut warnings = Vec::new();
 
+        if let Some(loaded) = &self.unsafe_overrides {
+            warnings.push(ConfigWarning {
+                code: "unsafe_overrides_file_loaded",
+                parameter: "--unsafe-overrides".to_owned(),
+                message: format!("UNSAFE OVERRIDES FILE LOADED: {:?}. Review this file and the service invocation before public deployment. allow_large_udp_payload={}, allow_high_nsec3_iterations={}, allow_core_dumps={}, allow_without_no_new_privileges={}", loaded.path, loaded.values.allow_large_udp_payload, loaded.values.allow_high_nsec3_iterations, loaded.values.allow_core_dumps, loaded.values.allow_without_no_new_privileges),
+            });
+            if loaded.values.allow_large_udp_payload {
+                warnings.push(ConfigWarning {
+                    code: "unsafe_large_udp_payload_allowed",
+                    parameter: "limits.max_udp_payload".to_owned(),
+                    message: format!("UNSAFE LARGE UDP RESPONSES ALLOWED: configured limit {} bytes. Larger responses can increase reflection/amplification and IP fragmentation or delivery failure risks; retain 1232 for public-facing deployments unless explicitly justified", self.limits.max_udp_payload),
+                });
+            }
+            for (allowed, code, parameter, message) in [
+                (
+                    loaded.values.allow_high_nsec3_iterations,
+                    "unsafe_high_nsec3_iterations_allowed",
+                    "dnssec.nsec3_max_iterations",
+                    format!(
+                        "UNSAFE HIGH NSEC3 ITERATIONS ALLOWED: configured cap {}. High iteration counts increase query-time hashing cost and CPU-exhaustion risk; publishers should use zero iterations",
+                        self.dnssec.nsec3_max_iterations
+                    ),
+                ),
+                (
+                    loaded.values.allow_core_dumps,
+                    "unsafe_core_dumps_allowed",
+                    "process.disable_core_dumps",
+                    format!(
+                        "UNSAFE CORE DUMP OPT-OUT ALLOWED: disable_core_dumps={}. Disabling core-dump hardening can expose TSIG keys and other sensitive process memory in dumps",
+                        self.process.disable_core_dumps
+                    ),
+                ),
+                (
+                    loaded.values.allow_without_no_new_privileges,
+                    "unsafe_no_new_privileges_opt_out_allowed",
+                    "process.no_new_privileges",
+                    format!(
+                        "UNSAFE PRIVILEGE-HARDENING OPT-OUT ALLOWED: no_new_privileges={}. This permits skipping BoronDNS's Linux no-new-privileges hardening; supervisor protections may still apply",
+                        self.process.no_new_privileges
+                    ),
+                ),
+            ] {
+                if allowed {
+                    warnings.push(ConfigWarning {
+                        code,
+                        parameter: parameter.to_owned(),
+                        message,
+                    });
+                }
+            }
+        }
+        if self.limits.max_udp_payload > 1400 {
+            warnings.push(ConfigWarning {
+                code: "large_udp_payload",
+                parameter: "limits.max_udp_payload".to_owned(),
+                message: "UDP payload limit exceeds 1400 bytes; responses can encounter IP fragmentation and path-MTU loss. The 4096-byte configuration guardrail is not a fragmentation-free limit; prefer the 1232-byte default".to_owned(),
+            });
+        }
+
         if self
             .health_listeners()
             .iter()
@@ -755,12 +888,16 @@ impl ServerConfig {
         }
 
         for allowlist in &self.rrl.allowlist {
-            if allowlist == "0.0.0.0/0" || allowlist == "::/0" {
+            if validate_ip_prefix(allowlist).is_ok()
+                && allowlist
+                    .split_once('/')
+                    .is_some_and(|(_, len)| len.parse::<u8>() == Ok(0))
+            {
                 warnings.push(ConfigWarning {
                     code: "rrl_global_allowlist",
                     parameter: "rrl.allowlist".to_owned(),
                     message: format!(
-                        "RRL allowlist entry {allowlist} effectively disables response-rate limiting"
+                        "RRL allowlist entry {allowlist} disables response-rate limiting for its entire address family"
                     ),
                 });
             }
@@ -3604,6 +3741,47 @@ fn decoded_base64_len(encoded: &str) -> usize {
     encoded.len().saturating_add(3) / 4 * 3 - padding
 }
 
+fn read_unsafe_overrides(path: &Path) -> Result<UnsafeOverrides, ConfigError> {
+    let read_error = |source| ConfigError::Read {
+        path: path.display().to_string(),
+        source,
+    };
+    let mut file = open_readonly_no_follow(path).map_err(read_error)?;
+    let metadata = file.metadata().map_err(read_error)?;
+    if !metadata.is_file() {
+        return Err(ConfigError::Invalid(
+            "unsafe overrides must be a regular file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(ConfigError::Invalid(
+                "unsafe overrides must not be group- or world-writable".to_owned(),
+            ));
+        }
+    }
+    if metadata.len() > MAX_UNSAFE_OVERRIDES_BYTES as u64 {
+        return Err(ConfigError::Invalid(
+            "unsafe overrides exceed 4096-byte limit".to_owned(),
+        ));
+    }
+    let mut text = Zeroizing::new(String::new());
+    file.by_ref()
+        .take((MAX_UNSAFE_OVERRIDES_BYTES + 1) as u64)
+        .read_to_string(&mut text)
+        .map_err(read_error)?;
+    if text.len() > MAX_UNSAFE_OVERRIDES_BYTES {
+        return Err(ConfigError::Invalid(
+            "unsafe overrides exceed 4096-byte limit".to_owned(),
+        ));
+    }
+    toml::from_str(&text)
+        .map_err(ConfigParseError::from)
+        .map_err(ConfigError::from)
+}
+
 fn read_config_file(
     path: &Path,
     after_open: impl FnOnce(),
@@ -4096,6 +4274,7 @@ mod tests {
     include!("config_tests/transfer_xot_listeners.rs");
     include!("config_tests/policy_observability.rs");
     include!("config_tests/udp_xdp.rs");
+    include!("config_tests/unsafe_overrides.rs");
     include!("config_tests/limits_transfer.rs");
     include!("config_tests/tsig_redaction.rs");
     include!("config_tests/zsm_retry.rs");

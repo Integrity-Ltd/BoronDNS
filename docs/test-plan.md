@@ -189,6 +189,16 @@ Review open findings in [the acceptance register](release-acceptance-gap-registe
 
 ## Regression Policy
 
+The large-UDP configuration guardrail is covered by core configuration tests and
+CLI subprocess tests: 4096/4097 boundaries, explicit override selection, rejected
+inline permissions, malformed or insecure override files, and warnings even
+with an empty override or disabled normal logging. Existing wire-size and TCP
+tests continue to cover truncation independently of this startup permission.
+The same tests check independent permissions for NSEC3 caps above 100 and both
+process-hardening opt-outs, including environment-driven effective settings.
+RRL warning regressions cover noncanonical IPv4 and IPv6 `/0` spellings and
+confirm that narrower prefixes do not trigger the global-allowlist warning.
+
 This policy implements `BDS-VER-012`.
 
 - A functional regression is a failure of a requirement previously marked
