@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -151,6 +152,10 @@ def main():
             "* IN A 192.0.2.20",
             "alias-lower IN CNAME deep.missing.example.test.",
             "alias-mixed IN CNAME deep.MiSsInG.ExAmPlE.TeSt.",
+            "dname IN DNAME target.example.test.",
+            "www.target IN A 192.0.2.81",
+            "cn.target IN CNAME final.example.test.",
+            "final IN A 192.0.2.82",
         ] + [f'anchor-{i} IN TXT "x"' for i in range(32)]
         if args.ixfr:
             records.extend(
@@ -159,8 +164,6 @@ def main():
                     "*.b IN A 192.0.2.80",
                     "alias-chain IN CNAME deep.missing.a.example.test.",
                     "negative IN CNAME missing.anchor-0.example.test.",
-                    "dname IN DNAME target.example.test.",
-                    "www.target IN A 192.0.2.81",
                     "www.dname IN A 192.0.2.1",
                     "child.branch IN NS ns.example.test.",
                 ]
@@ -268,6 +271,16 @@ notify_sources = ["127.0.0.1"]
                 "alias-mixed.example.test.",
             )
         ]
+        terminal_dname_queries = [
+            (name, kind)
+            for name in (
+                "www.dname.example.test.",
+                "cn.dname.example.test.",
+                "absent.dname.example.test.",
+            )
+            for kind in ("CNAME", "ANY")
+        ]
+        queries.extend(terminal_dname_queries)
         if args.ixfr:
             queries.extend(
                 [
@@ -289,7 +302,7 @@ notify_sources = ["127.0.0.1"]
         for name, kind in queries:
             for backend, port in (("primary", primary_port), ("borondns", dns_port)):
                 label = f"{backend}-{name}-{kind}"
-                run(
+                wire = run(
                     [
                         "dig",
                         "@127.0.0.1",
@@ -303,7 +316,17 @@ notify_sources = ["127.0.0.1"]
                         "+tries=1",
                     ],
                     f"wire-{label}",
-                )
+                ).stdout
+                if (name, kind) in terminal_dname_queries:
+                    records_text = "\n".join(
+                        line for line in wire.splitlines() if not line.startswith(";")
+                    )
+                    assert "status: NOERROR" in wire, f"non-positive DNAME answer: {label}"
+                    assert len(re.findall(r"\sIN\s+CNAME\s", records_text)) == 1, label
+                    assert len(re.findall(r"\sIN\s+DNAME\s", records_text)) == 1, label
+                    assert not re.search(r"\sIN\s+(SOA|NSEC|NSEC3)\s", records_text), (
+                        f"synthesized CNAME incorrectly carries terminal denial: {label}"
+                    )
                 result = run(
                     [
                         "delv",

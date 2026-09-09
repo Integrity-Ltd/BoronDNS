@@ -162,12 +162,12 @@ fn alias_continuation_preserves_configured_any_mode() {
             let options = AnswerOptions { any_response: mode, ..AnswerOptions::default() };
             let response = store_response_with_options(&packet, &overlay, options);
             assert_semantic_response_eq(&response, &store_response_with_options(&packet, &compact, options));
-            // ANY at an exact CNAME owner returns that CNAME; only DNAME
-            // synthesis restarts lookup before applying the ANY policy.
-            if name != "alias.example.test." {
-                assert_eq!(response_answer_rdatas(&response, 1), vec![vec![192, 0, 2, 80]]);
-                assert_eq!(response_answer_rdatas(&response, 28).len(), usize::from(mode == AnyResponseMode::Full));
-            }
+            // ANY stops at either an ordinary or synthesized CNAME, in both
+            // modes. It must not return records belonging to the target.
+            assert_eq!(response_answer_rdatas(&response, 5).len(), 1);
+            assert!(response_answer_rdatas(&response, 1).is_empty());
+            assert!(response_answer_rdatas(&response, 28).is_empty());
+            assert!(response_authority_types(&response).is_empty());
         }
     }
 }

@@ -101,6 +101,8 @@ Run as an unprivileged user. On AppArmor hosts, pass `--work-parent` with a
 test-user-writable directory under `/var/cache/bind`; keep host confinement
 enabled. The test generates a signed zone, transfers it to BoronDNS and validates
 direct and alias-derived wildcard answers against an explicit test trust anchor.
+It also checks that CNAME/ANY queries beneath a DNAME stop at the synthesized
+CNAME, retaining the DNAME signature without adding a target denial proof.
 Its private evidence directory retains the zone, wire output, validator logs and
 binary hash. Default mode checks compact serving after AXFR. Add `--ixfr` to
 re-sign an updated primary and require a journal-backed dirty overlay before

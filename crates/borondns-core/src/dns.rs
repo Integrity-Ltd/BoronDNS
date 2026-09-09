@@ -4848,6 +4848,7 @@ mod tests {
     include!("dns_tests/support.rs");
     include!("dns_tests/semantic_response.rs");
     include!("dns_tests/overlay_semantics.rs");
+    include!("dns_tests/dname_terminal_precedence.rs");
     include!("dns_tests/denial_completeness.rs");
     include!("dns_tests/cross_zone_overlay_context.rs");
     include!("dns_tests/wildcard_canonicalization.rs");

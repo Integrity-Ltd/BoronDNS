@@ -858,11 +858,24 @@ This procedure produces a stable, predictable selection for a given zone state, 
 
 **BDS-FR-QRY-014.** Where the QNAME falls strictly beneath a name carrying a DNAME RRset in the served zone (and is not the DNAME owner name itself), the server MUST include the DNAME record in the answer section and MUST synthesise a CNAME record per RFC 6672 §3.2 mapping the original QNAME to a name constructed by substituting the DNAME target for the DNAME owner in the QNAME. If the resulting synthesised name exceeds the 255-octet domain-name length limit, the server MUST follow BDS-FR-QRY-025 below.
 
+When both a delegation and a DNAME cover the lookup name within that zone, the
+one nearer the zone apex governs, including for DS queries. A loaded DNAME
+occludes descendant delegation records as well as ordinary data; a delegation
+above a DNAME still prevents parent-zone synthesis below that cut. This does not
+introduce mandatory rejection of zones containing occluded data.
+
 *Source.* RFC 6672 §3.
 
-*Verification.* Lookup tests against zones containing DNAME records, including the edge cases of RFC 6672 §3.3 (DNAME at apex, DNAME above a delegation, name-length overflow on synthesis).
+*Verification.* Lookup tests against zones containing DNAME records, including the edge cases of RFC 6672 §§2.2–2.4 (DNAME at apex, DNAME above a delegation, name-length overflow on synthesis).
 
 **BDS-FR-QRY-015.** After CNAME synthesis from a DNAME, the server MUST proceed with CNAME chain resolution per BDS-FR-QRY-010 through BDS-FR-QRY-013, treating the synthesised CNAME as if it had been present in the zone authoritatively.
+
+For QTYPE CNAME or ANY, the synthesized CNAME completes the answer: do not chase
+its target or attach that target's denial of existence. The ANY rule applies to
+both configured response modes and is BoronDNS policy, not a claim that every
+authoritative implementation must choose the same ANY behavior. The DNAME and
+its available RRSIG remain in a DNSSEC response; the synthesized CNAME has no
+independent RRSIG.
 
 *Source.* RFC 6672 §3.
 

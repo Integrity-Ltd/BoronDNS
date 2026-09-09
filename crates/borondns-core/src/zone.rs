@@ -1267,7 +1267,9 @@ impl ZoneSnapshot {
                 return LookupResult::positive_records(answers);
             }
             let key = current.canonical_key();
+            let dname = self.dname_for(&current, qclass);
             if let Some(cut) = self.delegation_for(&current, qclass)
+                && dname.is_none_or(|dname| cut.owner.label_count() <= dname.owner.label_count())
                 && !(qtype == RecordType::Ds as u16 && key == cut.owner.canonical_key())
             {
                 let authorities = cut.records();
@@ -1290,9 +1292,9 @@ impl ZoneSnapshot {
                 );
             }
 
-            // A covering DNAME occludes exact descendant records, but never
-            // crosses the delegation boundary checked above.
-            if let Some(dname) = self.dname_for(&current, qclass) {
+            // The first boundary from the apex governs. A DNAME occludes
+            // descendant NS records too, but cannot cross an earlier cut.
+            if let Some(dname) = dname {
                 if remaining == 0 {
                     return LookupResult::servfail_records_with_termination(
                         answers,
@@ -1327,6 +1329,11 @@ impl ZoneSnapshot {
                         rdata: target.to_wire(),
                     }],
                 );
+                if qtype == RecordType::Cname as u16 || qtype == 255 {
+                    // Synthesis has answered this question. Do not attach a
+                    // different name's data or negative answer (QRY-010/015).
+                    return LookupResult::positive_records(answers);
+                }
                 remaining -= 1;
                 current = target;
                 continue;

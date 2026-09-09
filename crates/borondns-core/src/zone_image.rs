@@ -1095,8 +1095,14 @@ impl ZoneImage {
     ) -> ZoneImageLookupPlan {
         let (exact_node, closest_or_exact_node) =
             self.query_node_handles(qname, qname_ascii_lowercase);
+        let dname = if self.low_rrtype_may_exist(RecordType::Dname as u16) {
+            closest_or_exact_node.and_then(|node| self.dname_for_node(exact_node, node, qclass))
+        } else {
+            None
+        };
         if let Some(node_index) = closest_or_exact_node
             && let Some(delegation) = self.delegation_for_node(node_index, qclass)
+            && self.delegation_precedes_dname(delegation, dname)
             && !self.query_is_ds_at_delegation_owner(exact_node, node_index, qtype, delegation)
         {
             let metrics = self.rrset_plan_metrics(delegation);
@@ -1105,10 +1111,7 @@ impl ZoneImage {
             return plan;
         }
 
-        if self.low_rrtype_may_exist(RecordType::Dname as u16)
-            && let Some(node_index) = closest_or_exact_node
-            && let Some(dname) = self.dname_for_node(exact_node, node_index, qclass)
-        {
+        if let Some(dname) = dname {
             return self.lookup_dname(
                 qname,
                 qtype,
@@ -2656,6 +2659,19 @@ impl ZoneImage {
         }
     }
 
+    fn delegation_precedes_dname(
+        &self,
+        delegation: ZoneImageRrsetId,
+        dname: Option<ZoneImageRrsetId>,
+    ) -> bool {
+        // Both covers are ancestors of the lookup name. Compare compiled
+        // depths, without parsing owner wire: only the shallower one applies.
+        dname.is_none_or(|dname| {
+            self.rrsets[delegation.0 as usize].owner_label_count
+                <= self.rrsets[dname.0 as usize].owner_label_count
+        })
+    }
+
     fn covering_delegation_blocks_direct_answer(
         &self,
         node_index: u32,
@@ -2780,6 +2796,9 @@ impl ZoneImage {
             PackedRdataEncoding::single_name(),
             synthesized_target_wire,
         );
+        if qtype == RecordType::Cname as u16 || qtype == 255 {
+            return plan;
+        }
         self.resolve_indirection_target(
             &synthesized_target,
             IndirectionTargetWire::DynamicAnswer(synthesized_index),
@@ -2839,6 +2858,9 @@ impl ZoneImage {
             PackedRdataEncoding::single_name(),
             synthesized_target_wire,
         );
+        if qtype == RecordType::Cname as u16 || qtype == 255 {
+            return plan;
+        }
         self.resolve_indirection_target(
             &synthesized_target,
             IndirectionTargetWire::DynamicAnswer(synthesized_index),
@@ -3118,8 +3140,15 @@ impl ZoneImage {
         }
 
         let (exact_target_node, closest_target_node) = self.query_node_handles(target, false);
+        let dname = if self.low_rrtype_may_exist(RecordType::Dname as u16) {
+            closest_target_node
+                .and_then(|node| self.dname_for_node(exact_target_node, node, qclass))
+        } else {
+            None
+        };
         if let Some(closest_target_node) = closest_target_node
             && let Some(delegation) = self.delegation_for_node(closest_target_node, qclass)
+            && self.delegation_precedes_dname(delegation, dname)
             && !self.query_is_ds_at_delegation_owner(
                 exact_target_node,
                 closest_target_node,
@@ -3133,10 +3162,7 @@ impl ZoneImage {
             return plan.with_indirection_continuation(target, state.remaining);
         }
 
-        if self.low_rrtype_may_exist(RecordType::Dname as u16)
-            && let Some(closest_target_node) = closest_target_node
-            && let Some(dname) = self.dname_for_node(exact_target_node, closest_target_node, qclass)
-        {
+        if let Some(dname) = dname {
             return self.resolve_dname_at(target, qtype, qclass, plan, state, dname);
         }
         if exact_target_node.is_none()
