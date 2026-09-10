@@ -1,4 +1,15 @@
 #[test]
+fn operator_socket_is_opt_in_and_requires_absolute_unix_path() {
+    let base = "[server]\nallow_non_rfc5936_cold_start = true\n\n[[zones]]\nname = 'example.test.'\nprimaries = ['127.0.0.1:9']\n";
+    let config = ServerConfig::from_toml_str(base).unwrap();
+    assert!(config.server.operator_socket.is_none());
+    for (path, valid) in [("/run/borondns-admin/operator.sock", cfg!(unix)), ("relative.sock", false), ("/run/../tmp/operator.sock", false), ("/", false), ("", false)] {
+        let text = base.replace("[server]", &format!("[server]\noperator_socket = '{path}'"));
+        assert_eq!(ServerConfig::from_toml_str(&text).is_ok(), valid, "{path}");
+    }
+}
+
+#[test]
 fn parses_minimal_valid_config() {
     let config = ServerConfig::from_toml_str(
         r#"
@@ -28,6 +39,7 @@ allow_non_rfc5936_cold_start = true
     assert!(config.process.disable_core_dumps);
     assert!(config.process.no_new_privileges);
     assert_eq!(config.logging.max_entry_length_bytes, 16_384);
+    assert!(config.logging.plain_timestamps);
     assert!(config.interfaces.dns.is_none());
     assert!(config.interfaces.mgmt.is_empty());
     assert!(config.interfaces.transfer.is_empty());

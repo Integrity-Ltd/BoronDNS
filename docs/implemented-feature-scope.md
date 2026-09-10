@@ -17,7 +17,9 @@ protocol support follows under Protocol Features.
 ### Secondary-authoritative service
 
 Implemented as an authoritative-only answer path with invariant checks for forbidden
-resolver, forwarding, UPDATE, admin, and primary-serving surfaces.
+resolver, forwarding, DNS UPDATE, record-editing, and primary-serving surfaces.
+The opt-in [local zone commands](operator-commands.md) inspect installed zones and
+schedule transfers; they cannot inject records or change runtime configuration.
 
 <details>
 <summary>Source and tests</summary>

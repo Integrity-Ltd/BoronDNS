@@ -133,6 +133,7 @@ modules carry their principal functional requirement references
 | `crates/borondns-server/src/tcp.rs` | TCP listener, connection limits, and DNS-over-TCP framing. |
 | `crates/borondns-server/src/health_metrics.rs` | health endpoints, metrics rendering, and runtime counters. |
 | `crates/borondns-server/src/observability.rs` | in-process JSON observability/management API with bearer-token auth. |
+| `crates/borondns-server/src/operator.rs` | opt-in same-UID/root Unix zone inspection, bounded snapshot streaming, and transfer admission. |
 | `crates/borondns-server/src/rate_limit.rs` | RRL, notify log limiting, and packet response categorisation helpers. |
 | `crates/borondns-server/src/transfer.rs` | SOA polling, AXFR/IXFR transfer sessions, and XoT transport. |
 | `crates/borondns-server/src/transfer_plan.rs` | transfer target planning and primary rotation. |
@@ -153,6 +154,7 @@ modules carry their principal functional requirement references
 | `crates/borondns-server/src/resource_limits.rs` | audited POSIX file-descriptor limit FFI boundary. |
 | `crates/borondns-server/build.rs` | build metadata embedding for version and metrics labels. |
 | `crates/borondns-cli/src/main.rs` | command-line entrypoints. |
+| `crates/borondns-cli/src/operator.rs` | local zone command client with bounded response parsing and dump completeness checks. |
 | `crates/boron-gun/src/main.rs` | BoronGun load-generator CLI and portable UDP backend. |
 | `crates/boron-gun/src/xdp_backend.rs` | BoronGun lab-only AF_XDP backend. |
 | `crates/boron-gun-ebpf/src/lib.rs` | BoronGun lab-only XDP drop program. |

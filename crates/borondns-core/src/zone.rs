@@ -710,6 +710,19 @@ impl ZoneSnapshot {
         &self,
         mut visit: impl FnMut(&DomainName, u16, u16, u32, &[u8]),
     ) {
+        let _: Result<(), std::convert::Infallible> =
+            self.try_visit_persistence_records(|owner, rr_type, class, ttl, rdata| {
+                visit(owner, rr_type, class, ttl, rdata);
+                Ok(())
+            });
+    }
+
+    /// Visit one consistent snapshot without collecting its records. A failed
+    /// writer can stop traversal immediately, including within a large RRset.
+    pub fn try_visit_persistence_records<E>(
+        &self,
+        mut visit: impl FnMut(&DomainName, u16, u16, u32, &[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
         for (key, rrset) in self.rrsets.iter() {
             for rdata in &rrset.rdatas {
                 visit(
@@ -724,9 +737,10 @@ impl ZoneSnapshot {
                         rdata,
                     ),
                     rdata,
-                );
+                )?;
             }
         }
+        Ok(())
     }
 
     /// Return the exact RRset replacements needed to reconstruct this snapshot
@@ -3428,9 +3442,17 @@ pub struct PreparedZonePublication {
     key: String,
     expected: Option<Arc<ZoneStoreEntry>>,
     entry: Arc<ZoneStoreEntry>,
+    allow_same_serial_retransfer: bool,
 }
 
 impl PreparedZonePublication {
+    /// Explicit operator AXFR may replace an equal serial, but never a stale,
+    /// ambiguous, or invalid SOA. Identity and durable-commit checks still apply.
+    pub fn allow_same_serial_for_operator_retransfer(mut self) -> Self {
+        self.allow_same_serial_retransfer = true;
+        self
+    }
+
     /// Validate the actual candidate SOA against the exact entry used to prepare
     /// this routine transfer. The publication boundary repeats this check after
     /// confirming entry identity; callers can reject before staging cache I/O.
@@ -3451,7 +3473,7 @@ impl PreparedZonePublication {
             .and_then(|entry| entry.serial)
             .is_none_or(|current| {
                 let distance = candidate_serial.wrapping_sub(current);
-                distance != 0 && distance < (1_u32 << 31)
+                (distance != 0 || self.allow_same_serial_retransfer) && distance < (1_u32 << 31)
             })
     }
 }
@@ -3780,6 +3802,7 @@ impl ZoneStore {
             key,
             expected,
             entry,
+            allow_same_serial_retransfer: false,
         })
     }
 
@@ -6742,6 +6765,50 @@ mod tests {
             !committed,
             "metadata cannot override the candidate's actual SOA serial"
         );
+    }
+
+    #[test]
+    fn operator_retransfer_publication_only_relaxes_equal_serial() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = |metadata_serial, wire_serial: u32| {
+            let mut soa = soa_rdata();
+            let (_, first) = DomainName::parse(&soa, 0).unwrap();
+            let (_, second) = DomainName::parse(&soa, first).unwrap();
+            soa[first + second..first + second + 4].copy_from_slice(&wire_serial.to_be_bytes());
+            ZoneSnapshot::active(
+                origin.clone(),
+                Some(metadata_serial),
+                vec![Rrset::new(origin.clone(), 6, 1, 300, vec![soa])],
+            )
+        };
+        for (serial, wire, replace, allowed) in [
+            (100, 100, false, true),
+            (101, 101, false, true),
+            (99, 99, false, false),
+            (0x8000_0064, 0x8000_0064, false, false),
+            (100, 99, false, false),
+            (100, 100, true, false),
+        ] {
+            let store = ZoneStore::new();
+            store.insert_snapshot(snapshot(100, 100));
+            let prepared = store
+                .prepare_snapshot_arc_for_transfer(Arc::new(snapshot(serial, wire)))
+                .unwrap()
+                .allow_same_serial_for_operator_retransfer();
+            if replace {
+                store.insert_snapshot(snapshot(101, 101));
+            }
+            let mut committed = false;
+            let result = store.publish_prepared_snapshot_for_transfer(prepared, || {
+                committed = true;
+                Ok::<_, ()>(())
+            });
+            assert_eq!(
+                committed, allowed,
+                "serial={serial}, wire={wire}, replaced={replace}"
+            );
+            assert_eq!(result.is_some(), allowed);
+        }
     }
 
     #[test]

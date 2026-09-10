@@ -278,6 +278,10 @@ or the probe endpoints.
 
 ## Restart, upgrade, and recover
 
+For live zone inspection, dumps, ordinary refresh, or forced full AXFR, use the
+opt-in [local zone commands](operator-commands.md). They do not reload the main
+configuration or enable transfer serving.
+
 `SIGTERM` and `SIGINT` start graceful shutdown. New work drains within
 `limits.graceful_shutdown_secs` (default 30 seconds); allow more time in the
 supervisor's stop timeout. `SIGHUP` is ignored. Listener, policy, static-zone,

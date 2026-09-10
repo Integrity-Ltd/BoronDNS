@@ -1230,6 +1230,9 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ServerSettings {
+    /// Opt-in local administration socket; Unix only. No network listener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_socket: Option<PathBuf>,
     #[serde(default = "default_dns_listeners")]
     pub listen_udp: Vec<SocketAddr>,
     #[serde(default = "default_dns_listeners")]
@@ -1251,6 +1254,21 @@ pub struct ServerSettings {
 
 impl ServerSettings {
     fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(path) = &self.operator_socket {
+            if !cfg!(unix) || !path.is_absolute() || path.file_name().is_none() {
+                return Err(ConfigError::Invalid(
+                    "server.operator_socket requires an absolute Unix socket path".to_owned(),
+                ));
+            }
+            if path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(ConfigError::Invalid(
+                    "server.operator_socket must not contain parent traversal".to_owned(),
+                ));
+            }
+        }
         validate_txt_character_string("server.nsid", &self.nsid)?;
         if self
             .zone_cache_directory
@@ -1277,6 +1295,9 @@ impl ServerSettings {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
+    /// Include the application timestamp in plain runtime logs only.
+    #[serde(default = "default_true")]
+    pub plain_timestamps: bool,
     #[serde(default = "default_logging_max_entry_length_bytes")]
     pub max_entry_length_bytes: usize,
 }
@@ -1284,6 +1305,7 @@ pub struct LoggingConfig {
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
+            plain_timestamps: true,
             max_entry_length_bytes: default_logging_max_entry_length_bytes(),
         }
     }

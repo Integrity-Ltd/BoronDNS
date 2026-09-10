@@ -1435,6 +1435,106 @@ primaries = ["192.0.2.53:53"]
 }
 
 #[test]
+fn serve_log_timestamp_policy_and_plain_color_free_output() {
+    for (format, timestamps, env_override) in [
+        ("plain", true, None),
+        ("plain", false, None),
+        ("plain", true, Some("false")),
+        ("json", false, None),
+        ("logfmt", false, None),
+    ] {
+        // A held listener makes startup exit deterministically after logging its
+        // configuration warnings, without a running service or transfer dependency.
+        let occupied = TcpListener::bind("127.0.0.1:0").expect("hold health port");
+        let occupied_addr = occupied.local_addr().expect("health address");
+        let config = write_config(
+            "plain-piped-logs",
+            &format!(
+                r#"
+[server]
+allow_non_rfc5936_cold_start = true
+listen_udp = ["127.0.0.1:0"]
+listen_tcp = ["127.0.0.1:0"]
+health = "{occupied_addr}"
+log_format = "{format}"
+
+[logging]
+plain_timestamps = {timestamps}
+
+[limits]
+max_tcp_connections = 128
+
+[cookie]
+policy = "disabled"
+
+[[zones]]
+name = "example.test."
+primaries = ["127.0.0.1:9"]
+"#
+            ),
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_borondns"));
+        command
+            .args(["serve", "--config"])
+            .arg(&config)
+            .env("BORONDNS_SERVER_LOG_FORMAT", format)
+            .env("BORONDNS_SERVER_LOG_LEVEL", "info")
+            .env_remove("BORONDNS_LOGGING_PLAIN_TIMESTAMPS");
+        if let Some(value) = env_override {
+            command.env("BORONDNS_LOGGING_PLAIN_TIMESTAMPS", value);
+        }
+        let output = command.output().expect("run server with piped logs");
+        let _ = fs::remove_file(config);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(EX_CANTCREAT), "{stderr}");
+        let warning = stderr
+            .lines()
+            .find(|line| line.contains("dns_cookies_disabled"))
+            .expect("runtime configuration warning");
+        match format {
+            "plain" if !timestamps || env_override == Some("false") => {
+                assert!(warning.trim_start().starts_with("WARN "), "{warning}");
+            }
+            "plain" => {
+                assert!(
+                    warning.split_whitespace().next().unwrap().ends_with('Z'),
+                    "{warning}"
+                );
+                assert!(warning.contains("WARN"), "{warning}");
+            }
+            "json" => {
+                let value: serde_json::Value = serde_json::from_str(warning).unwrap();
+                assert!(
+                    value["timestamp"]
+                        .as_str()
+                        .is_some_and(|value| value.ends_with('Z')),
+                    "{warning}"
+                );
+            }
+            "logfmt" => assert!(warning.starts_with("timestamp="), "{warning}"),
+            _ => unreachable!(),
+        }
+        let bootstrap = stderr
+            .lines()
+            .find(|line| line.contains("process started"))
+            .expect("bootstrap record");
+        let value: serde_json::Value = serde_json::from_str(bootstrap).unwrap();
+        assert!(
+            value["timestamp"]
+                .as_str()
+                .is_some_and(|value| value.ends_with('Z'))
+        );
+        for stream in [&output.stdout, &output.stderr] {
+            assert!(!stream.contains(&0x1b), "ANSI in piped logs: {stream:?}");
+            if format == "plain" {
+                assert!(!String::from_utf8_lossy(stream).contains("borondns::"));
+            }
+        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("dns_cookies_disabled"));
+    }
+}
+
+#[test]
 fn serve_health_bind_failure_exits_with_cantcreat() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("bind occupied health port");
     let occupied_addr = occupied.local_addr().expect("occupied health address");

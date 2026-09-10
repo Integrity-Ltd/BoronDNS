@@ -15,8 +15,11 @@ zone_cache_directory = "/var/lib/borondns/zones"
 # Runtime log level. Default: "info".
 log_level = "info"
 # Runtime log format. Default: "json"; "logfmt" is also SRS-structured.
-# "plain" remains a local debugging compatibility format.
+# "plain" is color-free human-readable output without Rust module prefixes.
 log_format = "json"
+# Optional Unix-only local administration; disabled when omitted. Create a
+# trusted directory writable by the runtime user first (see docs/operator-commands.md).
+# operator_socket = "/var/lib/borondns/operator/control.sock"
 # Optional NSID response payload. Default: empty, which disables NSID responses.
 nsid = "borondns-example"
 
@@ -52,6 +55,9 @@ mgmt = ["127.0.0.1:9443"]
 transfer = ["0.0.0.0:0", "[::]:0"]
 
 [logging]
+# Plain runtime timestamps: disable when the collector supplies its own.
+# JSON, logfmt, and bootstrap JSON always retain their timestamps.
+plain_timestamps = true
 # Maximum bytes in any single structured log entry. Default: 16384.
 max_entry_length_bytes = 16384
 

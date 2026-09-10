@@ -17,6 +17,7 @@ tokio.workspace = true
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde_json.workspace = true
 borondns-core = { path = "../borondns-core", version = "1.0.1" }
 borondns-server = { path = "../borondns-server", version = "1.0.1" }
 

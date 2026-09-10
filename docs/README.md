@@ -35,6 +35,8 @@ performance guarantee for the current release.
   [snapshot responsibilities](zone-snapshot-narrowing-design.md): storage tradeoffs.
 - [Future optimization work](future-optimization-tracks.md): what would justify
   further changes.
+- [Local zone commands](operator-commands.md): inspect, dump, refresh, and retransfer
+  zones through the opt-in administration socket.
 - [RR type catalogue](rr-type-catalogue.md): structured validation and opaque types.
 - [Interface compatibility](interface-compatibility-policy.md): public interfaces
   and versioning.

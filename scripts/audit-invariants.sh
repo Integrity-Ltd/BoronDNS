@@ -72,7 +72,7 @@ runtime_sources_without_unsafe_adapters = [
 checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     (
         "BDS-INV-001 secondary-only prohibited runtime surfaces",
-        "No DNS UPDATE/admin/primary-serving surface terms found in runtime Rust source; RFC 9432 catalog-zone secondary support is allowed.",
+        "No DNS UPDATE, record-editing admin, or primary-serving surface found; bounded local inspection/transfer scheduling and RFC 9432 catalog support are allowed.",
         [
             re.compile(r"\bOpcode::Update\b"),
             re.compile(r"\bDynamicUpdate\b", re.IGNORECASE),
@@ -97,7 +97,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     ),
     (
         "BDS-INV-004 bounded last-good persistence only",
-        "No runtime filesystem mutation APIs found outside the explicitly reviewed last-good persistence and catalog lifecycle modules.",
+        "No runtime filesystem mutation APIs found outside reviewed persistence/catalog modules and exact operator socket chmod/unlink calls.",
         [
             re.compile(r"\bstd::fs::write\b"),
             re.compile(r"\btokio::fs::write\b"),
@@ -1451,6 +1451,32 @@ print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")
 
+def operator_socket_mutation(path: Path, line: str) -> bool:
+    if path != Path("crates/borondns-server/src/operator.rs"):
+        return False
+    compact = re.sub(r"\s+", "", line)
+    return compact in {
+        "std::fs::set_permissions(path,std::fs::Permissions::from_mode(0o600))?;",
+        "let_=std::fs::remove_file(&self.path);",
+    }
+
+operator_text = runtime_sources.get(Path("crates/borondns-server/src/operator.rs"), "")
+for required in (
+    "validate_socket_parent(path, uid)?",
+    "UnixListener::bind(path)?",
+    "stream.peer_cred()",
+    "authorized_uid(self.uid, peer.uid())",
+    "peer == 0 || peer == server",
+    "meta.mode() & 0o022 != 0",
+    "(m.dev(), m.ino()) == self.identity",
+    "Semaphore::new(4)", "Semaphore::new(1)",
+):
+    if required not in operator_text:
+        failures.append(f"local operator socket boundary missing: {required}")
+for call in ("std::fs::set_permissions(", "std::fs::remove_file("):
+    if operator_text.count(call) != 1:
+        failures.append(f"local operator socket requires exactly one audited {call}")
+
 for title, success, patterns, paths in checks:
     matches: list[str] = []
     for path in paths:
@@ -1461,6 +1487,8 @@ for title, success, patterns, paths in checks:
         for line_number, line in enumerate(text.splitlines(), start=1):
             for pattern in patterns:
                 if pattern.search(line):
+                    if title.startswith("BDS-INV-004") and operator_socket_mutation(path, line):
+                        continue
                     if title.startswith("BDS-INV-005") and (
                         path == Path("crates/borondns-server/src/secret_store.rs")
                         or (
@@ -1476,6 +1504,8 @@ for title, success, patterns, paths in checks:
         if title.startswith("BDS-INV-004"):
             EXTERNAL_CRATE_ALIASES = cargo_dependency_aliases(path)
             for line_number, line in persistent_mutation_matches(text):
+                if operator_socket_mutation(path, line):
+                    continue
                 matches.append(f"{path}:{line_number}: {line}")
             EXTERNAL_CRATE_ALIASES = {}
     print()
@@ -1589,7 +1619,7 @@ required_fragments = [
     ),
     (
         "runtime prepares transfer snapshot off the async worker and outside the publication critical section",
-        "prepare_zone_publication(zones, snapshot.clone()).await",
+        "prepare_zone_publication_with_retransfer_policy(",
         server_text,
     ),
     (
@@ -5174,7 +5204,7 @@ if "zones.insert_snapshot(snapshot.clone())" in refresh_text:
     refresh_clone_failures.append("AXFR updated path clones full transferred snapshot before publication")
 if ".if_current_plan(plan, ||" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not guard transfer publication on current transfer-plan ownership")
-if "prepare_zone_publication(zones, snapshot.clone()).await" not in refresh_text:
+if not re.search(r"prepare_zone_publication_with_retransfer_policy\(zones,snapshot\.clone\(\),force_axfr,?\)", re.sub(r"\s+", "", refresh_text)):
     refresh_clone_failures.append("refresh updated path does not prepare the shared snapshot off the async worker before entering the publication critical section")
 if ".publish_prepared_snapshot_for_transfer(" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not consume cached metadata returned by transactional prepared publication")

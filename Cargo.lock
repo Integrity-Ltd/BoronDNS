@@ -293,6 +293,7 @@ dependencies = [
  "clap",
  "getrandom 0.3.4",
  "rcgen",
+ "serde_json",
  "time",
  "tokio",
  "tracing",

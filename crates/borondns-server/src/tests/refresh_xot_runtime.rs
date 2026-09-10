@@ -2486,6 +2486,54 @@ allow_non_rfc5936_cold_start = true
 }
 
 #[tokio::test]
+async fn operator_retransfer_forces_same_serial_axfr_and_preserves_tsig_and_last_good() {
+    for correct_secret in [true, false] {
+        let (primary, observed_query) = spawn_axfr_primary_recording_query(2).await;
+        let secret = if correct_secret { "dG9wc2VjcmV0" } else { "d3Jvbmc=" };
+        let config = ServerConfig::from_toml_str(&format!(r#"
+[server]
+allow_non_rfc5936_cold_start = true
+[tsig]
+fudge_seconds = 30
+[[tsig_keys]]
+name = "transfer-key."
+algorithm = "hmac-sha256"
+secret = "{secret}"
+[[zones]]
+name = "example.test."
+primaries = ["{primary}"]
+tsig_key = "transfer-key."
+"#)).unwrap();
+        let plans = TransferPlan::from_config(&config).unwrap();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = plans.get(&origin).unwrap();
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(2), vec![
+            Rrset::new(origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_serial(2)]),
+            Rrset::new(origin.clone(), 65280, 1, 300, vec![b"last-good marker".to_vec()]),
+        ]));
+        let old = zones.exact_snapshot_for_transfer(&origin).unwrap();
+        plan.request_axfr();
+        let metrics = RuntimeMetrics::new();
+        let cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        let outcome = refresh_zone_from_primaries_with_outcome(&zones, &plan, None, &CatalogManager::default(), RefreshAttemptContext {
+            ixfr_cooldowns: &cooldowns, metrics: &metrics, transfer_plan: plans.clone(),
+            secrets: SecretManager::from_config(&config).unwrap(),
+            ixfr_timeout: std::time::Duration::from_secs(2), axfr_timeout: std::time::Duration::from_secs(2),
+            tcp_connect_timeout: std::time::Duration::from_secs(2), reason: "operator-retransfer", zone_persistence: None,
+        }).await;
+        assert_eq!(outcome.success.is_some(), correct_secret, "{outcome:?}");
+        let query = observed_query.lock().unwrap().clone().unwrap();
+        assert_eq!(query_qtype(&query), RecordType::Axfr as u16, "must bypass SOA and IXFR for same serial");
+        assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
+        let current = zones.exact_snapshot_for_transfer(&origin).unwrap();
+        assert_eq!(current.metadata().serial, Some(2));
+        assert_eq!(Arc::ptr_eq(old.snapshot_arc_for_transfer(), current.snapshot_arc_for_transfer()), !correct_secret);
+        assert!(!plan.take_requested_axfr(), "one-shot request consumed");
+    }
+}
+
+#[tokio::test]
 async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
     let (primary, observed_query) = spawn_axfr_primary_recording_query(1).await;
     let config = ServerConfig::from_toml_str(&format!(

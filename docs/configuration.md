@@ -43,6 +43,7 @@ converted into environment variables.
 | `BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE` | `health.metrics_rate_limit_per_minute` |
 | `BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS` | `health.metrics_rate_limit_idle_seconds` |
 | `BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES` | `logging.max_entry_length_bytes` |
+| `BORONDNS_LOGGING_PLAIN_TIMESTAMPS` | `logging.plain_timestamps` |
 | `BORONDNS_TSIG_FUDGE_SECONDS` | `tsig.fudge_seconds` |
 | `BORONDNS_TRANSFER_REQUIRE_TSIG` | `transfer.require_tsig` |
 | `BORONDNS_EDNS_EXTENDED_DNS_ERRORS` | `edns.extended_dns_errors` |
@@ -396,8 +397,29 @@ and physical-NIC benchmarks before enabling this backend.
 
 ## Logs and warnings
 
-Use `json` or `logfmt` for service logs; `plain` is useful locally. Warnings
-and errors go to stderr, lower levels to stdout. Bootstrap records on stderr
+For live zone inspection and refresh, see [local zone commands](operator-commands.md).
+The optional `server.operator_socket` is a Unix socket path, disabled by default.
+It is separate from the read-only HTTP observability interface and binds after
+privilege drop in an existing trusted directory.
+
+Use `json` (the default) or `logfmt` for structured collection. Choose `plain`
+for human-readable output, including services collected by syslog-ng or rsyslog.
+By default, plain runtime entries retain the UTC timestamp, severity, message, and diagnostic
+fields, but omit Rust module prefixes and formatter-generated ANSI colors and
+styles, even in a terminal. JSON and logfmt retain their existing target fields.
+For example, a plain entry looks like:
+
+```text
+2026-09-10T02:00:00.000000Z  INFO refresh complete zone="example.test." serial=42
+```
+
+If your collector adds its own timestamp, set `plain_timestamps = false` in
+`[logging]` to omit the application's timestamp from plain runtime entries.
+The default is `true`; `BORONDNS_LOGGING_PLAIN_TIMESTAMPS=false` also overrides it.
+This setting does not remove timestamps from JSON, logfmt, or bootstrap JSON.
+Plain text is not the structured logging interface promised for JSON and logfmt.
+
+Warnings and errors go to stderr, lower levels to stdout. Bootstrap records on stderr
 are JSON even when the later runtime format differs. Structured entries are
 bounded by `logging.max_entry_length_bytes` (default 16,384); oversized entries
 become a parseable truncation record.

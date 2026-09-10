@@ -27,6 +27,7 @@ python3 -m py_compile scripts/verify-release-reproducibility.py
 python3 -m py_compile scripts/validate-release-preflight.py
 python3 -m py_compile scripts/verify-docker-archive.py
 python3 -m py_compile scripts/check-doc-hygiene.py
+python3 -m py_compile scripts/test-operator-commands.py
 python3 -m py_compile scripts/check-srs-hygiene.py
 python3 -m py_compile scripts/check-srs-review-disposition.py
 python3 -m py_compile scripts/check-zone-image-prototype-benchmark.py

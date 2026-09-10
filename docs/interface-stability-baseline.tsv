@@ -13,7 +13,11 @@ configuration	[metrics].hot_path_detail	stable	0.1.4	config/borondns.example.tom
 configuration	[zone_publication].strategy	stable	0.9.1	config/borondns.example.toml	minor-additive	Compact sharded or auto zone publication layout; auto is the default and layout never changes DNS semantics.
 configuration	[zone_publication].sharded_rrset_threshold	stable	0.9.1	config/borondns.example.toml	minor-additive	Positive RRset threshold at which auto selects structurally shared IXFR overlays; default 1000000.
 configuration	[zone_publication].overlay_compaction_dirty_owner_threshold	stable	0.9.1	config/borondns.example.toml	minor-additive	Distinct dirty-owner threshold for bounded background compact rebuild; zero disables automatic compaction and default is 100000.
-configuration	[logging].format	stable	0.1	config/borondns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
+configuration	[logging].format	stable	0.1	config/borondns.example.toml	major	Legacy inventory label for server.log_format; json and logfmt are structured; plain is color-free human-readable output without Rust module prefixes.
+configuration	[server].operator_socket	additive	unreleased	docs/operator-commands.md	minor-additive	Optional Unix administration socket; disabled by default; same runtime UID or root only.
+configuration	[logging].plain_timestamps	additive	unreleased	docs/configuration.md	minor-additive	Defaults true; false omits timestamps only from plain runtime logs; structured and bootstrap timestamps are unchanged.
+environment	BORONDNS_LOGGING_PLAIN_TIMESTAMPS	additive	unreleased	docs/configuration.md	minor-additive	Boolean override for logging.plain_timestamps.
+cli	zone show|dump|refresh|retransfer	additive	unreleased	docs/operator-commands.md	minor-additive	Local live-zone administration through explicit --socket; no main configuration loading.
 configuration	[limits].max_tcp_connections	stable	0.1	config/borondns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
 configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/borondns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.
 configuration	[limits].udp_reuseport_workers	stable	0.1.4	config/borondns.example.toml	minor-additive	Optional standard UDP SO_REUSEPORT worker count; default is one worker.

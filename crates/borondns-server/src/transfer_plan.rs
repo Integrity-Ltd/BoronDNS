@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tokio::sync::watch;
@@ -33,9 +33,18 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) transfer_sources: Vec<SocketAddr>,
     generation: u64,
     cancellation: watch::Sender<bool>,
+    requested_axfr: Arc<AtomicBool>,
 }
 
 impl ZoneTransferPlan {
+    pub(crate) fn request_axfr(&self) {
+        self.requested_axfr.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_requested_axfr(&self) -> bool {
+        self.requested_axfr.swap(false, Ordering::AcqRel)
+    }
+
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -81,6 +90,7 @@ impl ZoneTransferPlan {
             transfer_sources: self.transfer_sources.clone(),
             generation: 0,
             cancellation: fresh_cancellation(),
+            requested_axfr: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -362,6 +372,7 @@ impl TransferPlan {
 fn assign_generation(plan: &mut ZoneTransferPlan, next_generation: &AtomicU64) {
     plan.generation = next_generation.fetch_add(1, Ordering::Relaxed);
     plan.cancellation = fresh_cancellation();
+    plan.requested_axfr = Arc::new(AtomicBool::new(false));
 }
 
 fn fresh_cancellation() -> watch::Sender<bool> {
@@ -398,6 +409,7 @@ fn transfer_plan_from_zone_config(
         transfer_sources: transfer_sources.to_vec(),
         generation: 0,
         cancellation: fresh_cancellation(),
+        requested_axfr: Arc::new(AtomicBool::new(false)),
     })
 }
 

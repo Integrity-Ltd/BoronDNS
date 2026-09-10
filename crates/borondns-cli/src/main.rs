@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
+mod operator;
+
 use anyhow::{Context, anyhow};
 use borondns_core::{
     ConfigError, ConfigWarning, LogFormatConfig, ServerConfig, config::ExtendedDnsErrorsConfig,
@@ -29,6 +31,7 @@ use tracing_subscriber::{
         writer::MakeWriterExt,
     },
     registry::LookupSpan,
+    util::SubscriberInitExt,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/borondns-secondary/config.toml";
@@ -100,6 +103,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Inspect or refresh a live zone through the opt-in local operator socket.
+    Zone {
+        #[arg(long, value_name = "PATH", conflicts_with = "unsafe_overrides")]
+        socket: PathBuf,
+        #[command(subcommand)]
+        action: operator::ZoneAction,
+    },
     CheckConfig {
         #[arg(short, long, value_name = "CONFIG")]
         config: Option<PathBuf>,
@@ -161,6 +171,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let unsafe_overrides = cli.unsafe_overrides.clone();
     let mode = selected_mode(cli)?;
     match mode {
+        Mode::Zone(socket, action) => operator::run(&socket, action).await?,
         Mode::Version => {
             write_stdout_text(&format!("{}\n", version_text()))
                 .context("writing version output")?;
@@ -215,6 +226,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
+    Zone(PathBuf, operator::ZoneAction),
     Version,
     CheckConfig(PathBuf),
     ValidateConfig(PathBuf),
@@ -225,6 +237,7 @@ enum Mode {
 }
 
 fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
+    let has_unsafe_overrides = cli.unsafe_overrides.is_some();
     let mut selected = Vec::new();
     let global_config = cli.config.as_ref();
 
@@ -242,6 +255,14 @@ fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
     }
     if let Some(command) = cli.command {
         selected.push(match command {
+            Command::Zone { socket, action } => {
+                if global_config.is_some() || has_unsafe_overrides {
+                    return Err(anyhow!(
+                        "zone commands use --socket, not --config or --unsafe-overrides"
+                    ));
+                }
+                Mode::Zone(socket, action)
+            }
             Command::CheckConfig { config } => {
                 Mode::CheckConfig(config_path(global_config, config))
             }
@@ -499,6 +520,11 @@ where
                 config.logging.max_entry_length_bytes = parse_env_value(&name, &value)?;
                 record_applied_override(&mut applied, &name, &value);
             }
+            "BORONDNS_LOGGING_PLAIN_TIMESTAMPS" => {
+                let value = env_value_to_string(&name, value)?;
+                config.logging.plain_timestamps = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
+            }
             "BORONDNS_TSIG_FUDGE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
@@ -735,15 +761,35 @@ fn init_logging(config: &ServerConfig) -> anyhow::Result<()> {
         }
         LogFormatConfig::Plain => {
             let writer = level_split_log_writer(max_entry_length_bytes, log_format);
-            tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_writer(writer)
+            plain_log_subscriber(filter, writer, config.logging.plain_timestamps)
                 .try_init()
                 .map_err(|error| anyhow!("initializing logging: {error}"))?
         }
     }
 
     Ok(())
+}
+
+fn plain_log_subscriber<W>(
+    filter: EnvFilter,
+    writer: W,
+    timestamps: bool,
+) -> Box<dyn Subscriber + Send + Sync>
+where
+    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    // A deliberately color-free operator format, including when stdout and
+    // stderr have different destinations. Keep internal targets in json/logfmt.
+    let builder = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_target(false)
+        .with_env_filter(filter)
+        .with_writer(writer);
+    if timestamps {
+        Box::new(builder.finish())
+    } else {
+        Box::new(builder.without_time().finish())
+    }
 }
 
 fn level_split_log_writer(
@@ -1151,6 +1197,50 @@ mod tests {
     }
 
     #[test]
+    fn operator_zone_cli_requires_explicit_socket_and_no_config_loading() {
+        for action in ["show", "dump", "refresh", "retransfer"] {
+            let args = [
+                "borondns",
+                "zone",
+                "--socket",
+                "/run/operator.sock",
+                action,
+                "example.test.",
+            ];
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(selected_mode(cli).unwrap(), Mode::Zone(_, _)));
+            assert!(Cli::try_parse_from(["borondns", "zone", action, "example.test."]).is_err());
+            let with_config = [
+                "borondns",
+                "--config",
+                "config.toml",
+                "zone",
+                "--socket",
+                "/run/operator.sock",
+                action,
+                "example.test.",
+            ];
+            assert!(selected_mode(Cli::try_parse_from(with_config).unwrap()).is_err());
+            let with_unsafe = [
+                "borondns",
+                "--unsafe-overrides",
+                "unsafe.toml",
+                "zone",
+                "--socket",
+                "/run/operator.sock",
+                action,
+                "example.test.",
+            ];
+            assert!(
+                Cli::try_parse_from(with_unsafe)
+                    .map_err(anyhow::Error::new)
+                    .and_then(selected_mode)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn command_config_path_overrides_default() {
         let cli = Cli::try_parse_from([
             "borondns",
@@ -1166,7 +1256,9 @@ mod tests {
                 assert_eq!(config, PathBuf::from("config/borondns.example.toml"));
             }
             Command::Serve { .. } => panic!("expected explicit serve config"),
-            Command::CheckConfig { .. } | Command::ReadinessEndpoints { .. } => {
+            Command::CheckConfig { .. }
+            | Command::ReadinessEndpoints { .. }
+            | Command::Zone { .. } => {
                 panic!("expected serve command")
             }
         }
@@ -1679,6 +1771,7 @@ allow_non_rfc5936_cold_start = true
                 ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("BORONDNS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("BORONDNS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
+                ("BORONDNS_LOGGING_PLAIN_TIMESTAMPS", "false"),
                 ("BORONDNS_EDNS_EXTENDED_DNS_ERRORS", "minimal"),
                 ("BORONDNS_CHAOS_VERSION", "BoronDNS anycast"),
                 ("BORONDNS_CHAOS_HOSTNAME", "bud-dns-1"),
@@ -1712,6 +1805,7 @@ allow_non_rfc5936_cold_start = true
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.logging.max_entry_length_bytes, 8192);
+        assert!(!config.logging.plain_timestamps);
         assert_eq!(
             config.edns.extended_dns_errors,
             ExtendedDnsErrorsConfig::Minimal
@@ -1756,6 +1850,19 @@ allow_non_rfc5936_cold_start = true
             error
                 .to_string()
                 .contains("BORONDNS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
+        );
+        let error = apply_environment_overrides_from(
+            &mut config,
+            [(
+                OsString::from("BORONDNS_LOGGING_PLAIN_TIMESTAMPS"),
+                OsString::from("sometimes"),
+            )],
+        )
+        .expect_err("invalid timestamp boolean must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("BORONDNS_LOGGING_PLAIN_TIMESTAMPS")
         );
     }
 
@@ -1848,6 +1955,61 @@ allow_non_rfc5936_cold_start = true
         assert_eq!(logfmt_value("example.test."), "example.test.");
         assert_eq!(logfmt_value("bad\u{1b}\0name"), "\"bad\\u001b\\u0000name\"");
         assert_eq!(trim_debug_string("\"192.0.2.53\"".to_owned()), "192.0.2.53");
+    }
+
+    #[test]
+    fn plain_logging_does_not_emit_ansi_formatting() {
+        let output = SharedLogOutput::default();
+        let subscriber = plain_log_subscriber(EnvFilter::new("info"), output.clone(), true);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(zone = "example.test.", "refresh complete");
+            tracing::warn!(zone = "example.test.", "refresh delayed");
+            tracing::error!(zone = "example.test.", "refresh failed");
+        });
+        let text = output.text();
+        assert!(!text.contains('\u{1b}'), "ANSI in plain output: {text:?}");
+        assert_eq!(text.lines().count(), 3);
+        for level in ["INFO", "WARN", "ERROR"] {
+            assert!(text.contains(level), "missing {level}: {text}");
+        }
+    }
+
+    #[test]
+    fn plain_logging_keeps_message_and_fields_without_module_prefix() {
+        let output = SharedLogOutput::default();
+        let subscriber = plain_log_subscriber(EnvFilter::new("info"), output.clone(), true);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                target: "borondns_test::internal_module",
+                zone = "example.test.", serial = 42_u64, "refresh complete"
+            );
+        });
+        let text = output.text();
+        assert!(!text.contains("borondns_test::internal_module"), "{text}");
+        assert!(text.contains("refresh complete"), "{text}");
+        assert!(text.contains("zone=\"example.test.\""), "{text}");
+        assert!(text.contains("serial=42"), "{text}");
+        assert!(text.find("refresh complete") < text.find("zone="), "{text}");
+        assert!(
+            text.split_whitespace().next().unwrap().ends_with('Z'),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn plain_logging_can_omit_application_timestamp() {
+        let output = SharedLogOutput::default();
+        let subscriber = plain_log_subscriber(EnvFilter::new("info"), output.clone(), false);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(zone = "example.test.", "refresh delayed");
+        });
+        let text = output.text();
+        assert!(
+            text.trim_start().starts_with("WARN refresh delayed"),
+            "{text}"
+        );
+        assert!(text.contains("zone=\"example.test.\""), "{text}");
+        assert!(!text.contains('\u{1b}'));
     }
 
     #[test]

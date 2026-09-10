@@ -18,6 +18,8 @@ mod dns_cookie;
 mod errors;
 mod health_metrics;
 mod observability;
+#[cfg(unix)]
+mod operator;
 mod privilege;
 mod process_hardening;
 mod process_signals;
@@ -576,6 +578,23 @@ impl Runtime {
             .map_err(RuntimeError::ProcessHardening)?
         {
             info!("enabled process no-new-privileges hardening");
+        }
+
+        #[cfg(unix)]
+        if let Some(path) = &self.config.server.operator_socket {
+            let listener = operator::OperatorListener::bind(path).map_err(|error| {
+                RuntimeError::InvalidRuntimeConfig(format!(
+                    "binding operator socket {}: {error}",
+                    path.display()
+                ))
+            })?;
+            background_tasks.spawn(listener.serve(
+                self.zones.clone(),
+                transfer_plan.clone(),
+                refresh_registry.clone(),
+                notify_refresh_tx.clone(),
+            ));
+            info!(path = %path.display(), "local operator socket ready (runtime user and root only)");
         }
 
         background_tasks.spawn(serve_notify_log_summaries(
@@ -5724,10 +5743,23 @@ async fn prepare_zone_publication(
     zones: &ZoneStore,
     snapshot: Arc<ZoneSnapshot>,
 ) -> Result<PreparedZonePublication, String> {
+    prepare_zone_publication_with_retransfer_policy(zones, snapshot, false).await
+}
+
+async fn prepare_zone_publication_with_retransfer_policy(
+    zones: &ZoneStore,
+    snapshot: Arc<ZoneSnapshot>,
+    operator_retransfer: bool,
+) -> Result<PreparedZonePublication, String> {
     let zones = zones.clone();
     let prepared =
         run_zone_image_preparation(move || zones.prepare_snapshot_arc_for_transfer(snapshot))
             .await?;
+    let prepared = if operator_retransfer {
+        prepared.allow_same_serial_for_operator_retransfer()
+    } else {
+        prepared
+    };
     if !prepared.final_soa_is_admissible() {
         return Err("final transferred SOA is invalid or does not advance the current serial under RFC 1982".to_owned());
     }
@@ -6440,6 +6472,10 @@ async fn refresh_zone_from_primaries_with_snapshot(
     mut context: RefreshAttemptContext<'_>,
     secret_snapshot: Arc<secret_store::SecretSnapshot>,
 ) -> RefreshZoneOutcome {
+    // Bound to this plan generation and consumed only after the worker has
+    // obtained per-zone ownership and global transfer admission. Queue merging
+    // or eviction cannot weaken an accepted forced AXFR into an SOA-only poll.
+    let force_axfr = plan.take_requested_axfr();
     context.zone_persistence = context
         .zone_persistence
         .map(|persistence| persistence.with_binding(plan.cache_binding));
@@ -6488,7 +6524,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
         let primary = primary_target.addr;
         let transfer_source = plan.transfer_source_for(primary);
 
-        if let Some(current_serial) = current_serial {
+        if !force_axfr && let Some(current_serial) = current_serial {
             let qid = match transfer_query_id() {
                 Ok(qid) => qid,
                 Err(error) => {
@@ -6569,7 +6605,7 @@ async fn refresh_zone_from_primaries_with_snapshot(
             }
         }
 
-        if current_serial.is_some() {
+        if current_serial.is_some() && !force_axfr {
             if context.ixfr_cooldowns.is_disabled_for_plan(plan, primary) {
                 info!(
                     zone = %plan.origin,
@@ -6971,7 +7007,13 @@ async fn refresh_zone_from_primaries_with_snapshot(
                     warn!(zone = %plan.origin, %error, "catalog cache revocation failed before publication");
                     continue;
                 }
-                let prepared = match prepare_zone_publication(zones, snapshot.clone()).await {
+                let prepared = match prepare_zone_publication_with_retransfer_policy(
+                    zones,
+                    snapshot.clone(),
+                    force_axfr,
+                )
+                .await
+                {
                     Ok(prepared) => prepared,
                     Err(error) => {
                         last_failure_cause = Some(format!(

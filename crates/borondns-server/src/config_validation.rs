@@ -178,6 +178,12 @@ fn required_file_descriptor_limit_inner(config: &ServerConfig) -> u64 {
         .saturating_add(tcp_listeners)
         .saturating_add(health_listeners)
         .saturating_add(health_connections)
+        // Operator listener, four admitted clients and one transient accept.
+        .saturating_add(if config.server.operator_socket.is_some() {
+            6
+        } else {
+            0
+        })
         // Post-accept admission may transiently hold one unadmitted descriptor
         // per health listener before closing it.
         .saturating_add(health_listeners)
