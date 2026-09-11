@@ -1409,6 +1409,10 @@ fn merge_refresh_request(existing: &mut RefreshRequest, mut incoming: RefreshReq
 // 4. The catalog's notify/IXFR option mutexes may call into their contained
 //    tracker/registry while held. Their inner locks never acquire the option
 //    mutexes, so that direction must not be reversed.
+// 5. Same-serial confirmation takes transfer-plan -> secret-snapshot ->
+//    refresh-status -> ZoneStore publication locks. Activation and new expiry
+//    commit under the status guard, as expiration takes status -> publication.
+//    Freshness-file I/O completes before these finalization locks are taken.
 //
 // Ordinary `std::sync::Mutex` guards must never cross an `.await` point. New
 // nested acquisitions must extend this order explicitly rather than relying on
@@ -2244,6 +2248,7 @@ struct ZoneRefreshAttempt {
     created_status: bool,
     _ownership: OwnedMutexGuard<()>,
     finished: bool,
+    current_acknowledged: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -2579,6 +2584,7 @@ impl ZoneRefreshRegistry {
             created_status,
             _ownership: ownership,
             finished: false,
+            current_acknowledged: AtomicBool::new(false),
         }
     }
 
@@ -2601,6 +2607,7 @@ impl ZoneRefreshRegistry {
             created_status: false,
             _ownership: ownership,
             finished: false,
+            current_acknowledged: AtomicBool::new(false),
         })
     }
 
@@ -2624,6 +2631,7 @@ impl ZoneRefreshRegistry {
             created_status,
             _ownership: ownership,
             finished: false,
+            current_acknowledged: AtomicBool::new(false),
         })
     }
 
@@ -2735,10 +2743,26 @@ impl ZoneRefreshRegistry {
         in_progress: bool,
         expected_generation: Option<u64>,
     ) -> bool {
+        self.record_success_with_commit(
+            metadata,
+            now,
+            unix_secs,
+            in_progress,
+            expected_generation,
+            || true,
+        )
+    }
+
+    fn record_success_with_commit(
+        &self,
+        metadata: &ZoneMetadata,
+        now: Instant,
+        unix_secs: u64,
+        in_progress: bool,
+        expected_generation: Option<u64>,
+        commit: impl FnOnce() -> bool,
+    ) -> bool {
         let timers = metadata.soa_timers;
-        if let Some(timers) = timers {
-            self.warn_near_max_soa_timers(&metadata.origin, timers);
-        }
         let refresh_interval = timers.map(|timers| self.effective_interval(timers.refresh));
         let refresh_deadline = refresh_interval
             .map(|interval| runtime_deadline_with_effective_duration(now, interval));
@@ -2759,9 +2783,17 @@ impl ZoneRefreshRegistry {
         {
             return false;
         }
+        // Expiry holds this same mutex before publishing EXPIRED. Commit the
+        // matching ACTIVE state and fresh deadlines as one transaction.
+        if !commit() {
+            return false;
+        }
         let generation = statuses
             .get(&key)
             .map_or_else(|| self.fresh_generation(), |status| status.generation);
+        let timers_changed = statuses
+            .get(&key)
+            .is_none_or(|status| status.soa_timers != timers);
         statuses.insert(
             key,
             ZoneRefreshStatus {
@@ -2783,6 +2815,11 @@ impl ZoneRefreshRegistry {
                 expired: false,
             },
         );
+        drop(statuses);
+        if timers_changed && let Some(timers) = timers {
+            self.warn_near_max_soa_timers(&metadata.origin, timers);
+            self.warn_soa_timer_policy(&metadata.origin, timers);
+        }
         true
     }
 
@@ -3084,14 +3121,28 @@ impl ZoneRefreshRegistry {
                 }) && zones.expire_zone_if_snapshot(&current_snapshot)
                 {
                     status.expired = true;
-                    true
+                    Some(status.clone())
                 } else {
-                    false
+                    None
                 }
             } else {
-                false
+                None
             };
-            if did_expire {
+            if let Some(status) = did_expire {
+                warn!(
+                    category = "transfer",
+                    event = "zone_expired",
+                    zone = %origin,
+                    soa_expire_secs = status.soa_timers.map(|timers| timers.expire),
+                    last_success_unix_seconds = status.last_success_unix_secs,
+                    since_last_attempt_completion_secs = status.last_refresh_completion_at.map(|last| now.saturating_duration_since(last).as_secs()),
+                    next_refresh_unix_seconds = status.next_refresh_unix_secs,
+                    retry_in_secs = status.next_refresh.map(|next| next.saturating_duration_since(now).as_secs()),
+                    in_progress = status.in_progress,
+                    failures_since_success = status.failures_since_success,
+                    last_failure = status.last_failure_cause.as_deref().unwrap_or("none"),
+                    "zone expired; authoritative answers disabled until a successful freshness check; refresh attempts continue"
+                );
                 expired.push(origin.clone());
             }
         }
@@ -3166,6 +3217,50 @@ impl ZoneRefreshRegistry {
             .max(self.min_interval)
             .min(self.max_interval);
         self.jitter.apply(interval)
+    }
+
+    fn warn_soa_timer_policy(&self, origin: &DomainName, timers: SoaTimers) {
+        let refresh = Duration::from_secs(timers.refresh.into())
+            .max(self.min_interval)
+            .min(self.max_interval);
+        let retry = Duration::from_secs(timers.retry.into())
+            .max(self.min_interval)
+            .min(self.max_interval);
+        if refresh.as_secs() != u64::from(timers.refresh)
+            || retry.as_secs() != u64::from(timers.retry)
+        {
+            warn!(
+                category = "configuration_warning", code = "soa_timers_clamped", zone = %origin,
+                soa_refresh_secs = timers.refresh, soa_retry_secs = timers.retry, soa_expire_secs = timers.expire,
+                effective_refresh_secs = refresh.as_secs(), effective_retry_secs = retry.as_secs(),
+                min_interval_secs = self.min_interval.as_secs(), max_interval_secs = self.max_interval.as_secs(),
+                "SOA refresh/retry intervals clamped for scheduling before jitter; served SOA and expiry are unchanged"
+            );
+        }
+        // Match jitter_interval's maximum without consuming a scheduling sample.
+        let upper = |interval: Duration| {
+            let ms = interval.as_millis();
+            let jitter_ms = if self.jitter.enabled && ms != 0 {
+                (ms / 10).max(1)
+            } else {
+                0
+            };
+            ms.saturating_add(jitter_ms)
+                .saturating_add(ZSM_SCHEDULER_TICK.as_millis())
+        };
+        let refresh_upper_ms = upper(refresh);
+        let retry_upper_ms = upper(retry);
+        if u128::from(timers.expire) * 1000 <= refresh_upper_ms.max(retry_upper_ms) {
+            warn!(
+                category = "configuration_warning", code = "soa_expiry_before_refresh_or_retry", zone = %origin,
+                soa_refresh_secs = timers.refresh, soa_retry_secs = timers.retry, soa_expire_secs = timers.expire,
+                effective_refresh_secs = refresh.as_secs(), effective_retry_secs = retry.as_secs(),
+                refresh_upper_ms = u64::try_from(refresh_upper_ms).unwrap_or(u64::MAX),
+                retry_upper_ms = u64::try_from(retry_upper_ms).unwrap_or(u64::MAX),
+                scheduler_tick_ms = ZSM_SCHEDULER_TICK.as_millis() as u64,
+                "SOA expiry may precede the next refresh or retry; expiry is not extended; correct the primary's SOA timers or review local polling limits"
+            );
+        }
     }
 
     fn warn_near_max_soa_timers(&self, origin: &DomainName, timers: SoaTimers) {
@@ -5387,6 +5482,7 @@ async fn serve_refresh_requests(
                         request.preferred_primary_ip,
                         &catalog_runtime.manager,
                         RefreshAttemptContext {
+                            current_attempt: Some(&attempt),
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
                             transfer_plan: catalog_runtime.transfer_plan.clone(),
@@ -5633,6 +5729,8 @@ struct InitialLoadSettings {
 
 #[derive(Clone)]
 struct RefreshAttemptContext<'a> {
+    // Production workers supply their owned attempt; low-level tests may omit it.
+    current_attempt: Option<&'a ZoneRefreshAttempt>,
     ixfr_cooldowns: &'a IxfrCooldownRegistry,
     metrics: &'a RuntimeMetrics,
     transfer_plan: TransferPlan,
@@ -5658,8 +5756,13 @@ async fn acknowledge_refresh_before_maintenance<F: Future<Output = ()>>(
     metadata: &ZoneMetadata,
     maintenance: F,
 ) -> bool {
-    let acknowledged =
-        record_attempt_success_if_current_plan(attempt, transfer_plan, plan, metadata);
+    let acknowledged = if attempt.current_acknowledged.load(Ordering::Relaxed) {
+        // Same-serial confirmation already committed serving state + deadlines.
+        // Do not renew again: the zone may legitimately expire before we get here.
+        transfer_plan.is_current_plan(plan)
+    } else {
+        record_attempt_success_if_current_plan(attempt, transfer_plan, plan, metadata)
+    };
     // No await may separate publication acknowledgement from fresh expiry.
     // Once acknowledged, cancellation of slow maintenance cannot leave old
     // freshness attached to a newly served snapshot or disable future expiry.
@@ -5788,6 +5891,68 @@ enum CurrentZoneConfirmationError {
     PersistenceFailed(String),
 }
 
+async fn confirm_current_after_freshness<F: Future<Output = Result<(), String>>>(
+    zones: &ZoneStore,
+    context: &RefreshAttemptContext<'_>,
+    plan: &ZoneTransferPlan,
+    secret_snapshot: &Arc<secret_store::SecretSnapshot>,
+    current: &TransferZoneSnapshot,
+    freshness: F,
+) -> Result<ZoneMetadata, CurrentZoneConfirmationError> {
+    match if_current_plan_and_secret(
+        &context.transfer_plan,
+        &context.secrets,
+        plan,
+        secret_snapshot,
+        || zones.is_current_snapshot_for_transfer(current),
+    ) {
+        None => return Err(CurrentZoneConfirmationError::Obsolete),
+        Some(false) => return Err(CurrentZoneConfirmationError::Missing),
+        Some(true) => {}
+    }
+    // Disk work never holds lifecycle locks and cannot prematurely reactivate
+    // an expired zone. Recheck all identities before committing runtime state.
+    freshness
+        .await
+        .map_err(CurrentZoneConfirmationError::PersistenceFailed)?;
+    if_current_plan_and_secret(
+        &context.transfer_plan,
+        &context.secrets,
+        plan,
+        secret_snapshot,
+        || {
+            let activate = || match zones.activate_zone_if_snapshot(current) {
+                Ok(Some(metadata)) => Ok(metadata),
+                Ok(None) => Err(CurrentZoneConfirmationError::Missing),
+                Err(error) => Err(CurrentZoneConfirmationError::PublicationFailed(
+                    error.to_string(),
+                )),
+            };
+            if let Some(attempt) = context.current_attempt {
+                let mut confirmation = Err(CurrentZoneConfirmationError::Obsolete);
+                let committed = attempt.registry.record_success_with_commit(
+                    current.metadata(),
+                    Instant::now(),
+                    unix_timestamp_seconds(),
+                    true,
+                    Some(attempt.generation),
+                    || {
+                        confirmation = activate();
+                        confirmation.is_ok()
+                    },
+                );
+                if committed {
+                    attempt.current_acknowledged.store(true, Ordering::Relaxed);
+                }
+                confirmation
+            } else {
+                activate()
+            }
+        },
+    )
+    .unwrap_or(Err(CurrentZoneConfirmationError::Obsolete))
+}
+
 fn record_ixfr_current_confirmation(
     metrics: &RuntimeMetrics,
     confirmation: Result<ZoneMetadata, CurrentZoneConfirmationError>,
@@ -5833,6 +5998,7 @@ fn if_current_plan_and_secret<R>(
         .flatten()
 }
 
+#[cfg(test)]
 fn confirm_current_zone_with_secret(
     zones: &ZoneStore,
     transfer_plan: &TransferPlan,
@@ -5851,23 +6017,6 @@ fn confirm_current_zone_with_secret(
             error.to_string(),
         )),
     }
-}
-
-fn confirm_current_zone_for_serial_with_secret(
-    zones: &ZoneStore,
-    transfer_plan: &TransferPlan,
-    secrets: &SecretManager,
-    plan: &ZoneTransferPlan,
-    snapshot: &Arc<secret_store::SecretSnapshot>,
-    expected_serial: u32,
-) -> Result<ZoneMetadata, CurrentZoneConfirmationError> {
-    let Some(current) = zones
-        .exact_snapshot_with_serial_for_transfer(&plan.origin)
-        .filter(|current| current.metadata().serial == Some(expected_serial))
-    else {
-        return Err(CurrentZoneConfirmationError::Missing);
-    };
-    confirm_current_zone_with_secret(zones, transfer_plan, secrets, plan, snapshot, &current)
 }
 
 #[derive(Debug)]
@@ -6006,6 +6155,7 @@ async fn run_initial_zone_loads(
                         None,
                         &catalog_runtime.manager,
                         RefreshAttemptContext {
+                            current_attempt: Some(&attempt),
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
                             transfer_plan: catalog_runtime.transfer_plan.clone(),
@@ -6122,9 +6272,7 @@ async fn serve_scheduled_refreshes(
     loop {
         interval.tick().await;
         let now = Instant::now();
-        for zone in refresh_registry.expire_due_zones(&zones, now) {
-            warn!(zone = %zone, "zone expired");
-        }
+        refresh_registry.expire_due_zones(&zones, now);
         for warning in refresh_registry.loading_warnings_due(&zones, now) {
             log_loading_warning(warning);
         }
@@ -6807,23 +6955,18 @@ async fn refresh_zone_from_primaries_with_snapshot(
                                     }
                                 }
                                 IxfrResponse::Current => {
-                                    let confirmation = match confirm_current_zone_with_secret(
+                                    let confirmation = confirm_current_after_freshness(
                                         zones,
-                                        &context.transfer_plan,
-                                        &context.secrets,
+                                        &context,
                                         plan,
                                         &secret_snapshot,
                                         &current,
-                                    ) {
-                                        Ok(metadata) => renew_last_good_freshness(
+                                        renew_last_good_freshness(
                                             &context.zone_persistence,
-                                            &metadata,
-                                        )
-                                        .await
-                                        .map(|()| metadata)
-                                        .map_err(CurrentZoneConfirmationError::PersistenceFailed),
-                                        Err(error) => Err(error),
-                                    };
+                                            current.metadata(),
+                                        ),
+                                    )
+                                    .await;
                                     let confirmation = record_ixfr_current_confirmation(
                                         context.metrics,
                                         confirmation,
@@ -7128,19 +7271,22 @@ async fn refresh_zone_from_primaries_with_snapshot(
     if equal_primary_confirmed && !newer_primary_observed {
         let current_serial =
             current_serial.expect("equal SOA confirmation requires current serial");
-        let confirmation = match confirm_current_zone_for_serial_with_secret(
-            zones,
-            &context.transfer_plan,
-            &context.secrets,
-            plan,
-            &secret_snapshot,
-            current_serial,
-        ) {
-            Ok(metadata) => renew_last_good_freshness(&context.zone_persistence, &metadata)
+        let confirmation = match zones
+            .exact_snapshot_with_serial_for_transfer(&plan.origin)
+            .filter(|current| current.metadata().serial == Some(current_serial))
+        {
+            Some(current) => {
+                confirm_current_after_freshness(
+                    zones,
+                    &context,
+                    plan,
+                    &secret_snapshot,
+                    &current,
+                    renew_last_good_freshness(&context.zone_persistence, current.metadata()),
+                )
                 .await
-                .map(|()| metadata)
-                .map_err(CurrentZoneConfirmationError::PersistenceFailed),
-            Err(error) => Err(error),
+            }
+            None => Err(CurrentZoneConfirmationError::Missing),
         };
         match confirmation {
             Ok(metadata) => return RefreshZoneOutcome::current(metadata),

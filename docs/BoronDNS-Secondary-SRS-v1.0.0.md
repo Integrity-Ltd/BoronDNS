@@ -2620,7 +2620,17 @@ The state machine MUST also enforce a configurable maximum effective interval fo
 
 *Note.* The maximum is a useful upper bound because primaries occasionally publish very large REFRESH values (weeks or months) — without a cap, NOTIFY-less change propagation could lag by that interval. NOTIFY (§4.8) provides expedited refresh when the primary supports it, but a maximum effective REFRESH ensures eventual convergence even in NOTIFY-absent deployments. The configured minimum and maximum constrain only the state machine's scheduling; they do not modify the SOA record served to clients.
 
-*Verification.* Tests with SOA records containing REFRESH or RETRY below the minimum, above the maximum, and within the allowed range.
+An implementation warning MUST identify clamped REFRESH/RETRY values and their
+effective pre-jitter intervals. A separate warning MUST identify EXPIRE values
+no larger than either effective interval plus maximum jitter and scheduler tick.
+Warnings are emitted when SOA timers are first recorded or change, not on every
+unchanged successful refresh. EXPIRE is not extended; expired zones remain
+eligible for recovery. The expiration event includes last-success, scheduling,
+and failure context. Same-serial recovery commits activation and renewed runtime
+deadlines together after cache freshness work, with plan, secret, snapshot, and
+refresh-generation checks repeated at finalization.
+
+*Verification.* Tests with SOA records containing REFRESH or RETRY below the minimum, above the maximum, and within the allowed range; one-second expiry, jitter boundaries, warning deduplication, and current-confirmation/expiry ordering regressions.
 
 ### Shutdown
 

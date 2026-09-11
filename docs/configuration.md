@@ -111,6 +111,31 @@ several primaries. BoronDNS chooses a random initial primary at startup and
 uses a stable rotation for subsequent attempts. Avoid pointing a secondary at
 another secondary unless the upstream actually provides transfer service.
 
+### SOA timers and unexpected expiration
+
+SOA REFRESH/RETRY control secondary polling, not client caching. BoronDNS clamps
+them to `limits.zsm_min_interval_secs` (default 60) and
+`limits.zsm_max_interval_secs` (default 86400), then applies ±10% jitter. The
+served SOA is unchanged. SOA EXPIRE is **not extended** to match the polling floor.
+
+A zone with `REFRESH=1 RETRY=1 EXPIRE=1` can therefore load successfully and
+expire before its next scheduled check. NOTIFY or `zone refresh` may restore it
+only briefly. Correct the primary's SOA timers; deleting the cache will not fix
+this combination. Even a one-second polling floor cannot guarantee service with
+one-second expiry because scheduling and network requests take time.
+
+`soa_timers_clamped` reports the received timers and polling bounds.
+`soa_expiry_before_refresh_or_retry` warns when EXPIRE is no larger than the
+refresh or retry interval including maximum jitter and the one-second scheduler
+tick. These warnings appear when timers are first recorded or change, not on
+every unchanged refresh. A silent check is not a guarantee: network or queue
+delays can still exhaust the remaining margin.
+
+The `zone_expired` event reports the expiry limit, last-success timestamp, time
+since the last completed attempt (which may have failed), next scheduled attempt,
+in-progress status, and last failure. Expired zones continue refreshing; a valid
+unchanged-serial confirmation can reactivate the retained data without AXFR.
+
 ## TSIG and XoT
 
 For TSIG-protected transfers, reference a named key from the zone:

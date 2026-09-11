@@ -97,6 +97,10 @@ The lock order is documented beside `CatalogManager` in
   mutex used to obtain that lock is released first.
 - NOTIFY admission may take status before its signal reservation; the reverse
   order is prohibited.
+- Same-serial confirmation takes transfer-plan, secret-snapshot, refresh-status,
+  then ZoneStore publication locks. Activation and fresh deadlines commit under
+  the same status guard used by expiry. Cache freshness writing happens first,
+  outside these locks, followed by revalidation of the captured identities.
 - Ordinary `std::sync::Mutex` guards do not cross an `.await`.
 
 Transfer preparation and image compilation run outside the publication lock.

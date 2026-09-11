@@ -100,3 +100,26 @@ python3 scripts/test-operator-commands.py \
 
 It runs on loopback as an unprivileged user and cleans up its own processes and
 temporary directory. It does not build binaries or run a production-scale soak.
+
+The optional expiry regression uses a real BIND primary in a bounded container:
+
+```sh
+python3 scripts/test-bind-expiry-recovery.py \
+  --binary /path/to/borondns --bind-image YOUR_LOCAL_BIND_IMAGE \
+  --output /path/to/evidence
+```
+
+It needs Docker access and the host BIND utilities (`dig`, `rndc`,
+`named-checkconf`, `named-checkzone`, `dnssec-keygen`, `dnssec-signzone`). It does
+not pull images or build binaries. The container uses loopback listeners through
+host networking, no capabilities, two CPUs and 512 MiB; the daemon has two Tokio
+workers and a 2 GiB address-space limit. Run only on a test host.
+
+The synthetic fixture covers one-second SOA timers, signed NOTIFY, unchanged-serial
+refresh/retransfer, DNSSEC NSEC signing, cache restart, and primary outage/recovery
+with a healthier short-timer control. Logs and generated files are retained in a
+new evidence subdirectory; its own processes/containers are stopped on exit.
+The operator socket lives separately in a short-lived private `/tmp` directory,
+so shared or long evidence paths do not require weaker socket permissions.
+The full integration run is explicit, not part of `scripts/check.sh`; that gate
+checks Python syntax and the process-free socket-directory regression instead.

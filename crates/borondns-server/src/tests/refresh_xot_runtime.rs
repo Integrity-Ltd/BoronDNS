@@ -397,6 +397,94 @@ fn refresh_registry_clamps_soa_intervals_to_configured_bounds() {
 }
 
 #[test]
+fn one_second_soa_warns_without_extending_expiry_or_spamming_refreshes() {
+    let registry = ZoneRefreshRegistry::without_jitter_with_max(
+        Duration::from_secs(60), Duration::from_secs(86_400),
+        Duration::from_secs(60), Duration::from_secs(3600), Duration::from_secs(300),
+    );
+    let origin = DomainName::from_absolute_str("tiny-expiry.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(origin.clone(), Some(1), vec![Rrset::new(
+        origin.clone(), RecordType::Soa as u16, 1, 86400,
+        vec![soa_rdata_with_timers(1, 1, 1, 3600)],
+    )]);
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(snapshot.clone());
+    let now = Instant::now();
+    let captured = CapturedEvents::new();
+    let _guard = tracing::subscriber::set_default(CapturingSubscriber::new(captured.clone()));
+    registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    assert!(captured.contains_all(&[
+        "code=\"soa_timers_clamped\"", "soa_refresh_secs=1", "soa_retry_secs=1",
+        "effective_refresh_secs=60", "effective_retry_secs=60", "soa_expire_secs=1",
+    ]));
+    assert!(captured.contains_all(&[
+        "code=\"soa_expiry_before_refresh_or_retry\"", "zone=tiny-expiry.test.",
+        "SOA expiry may precede the next refresh or retry", "expiry is not extended",
+    ]));
+    let count = captured.lines.lock().unwrap().len();
+    registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    assert_eq!(captured.lines.lock().unwrap().len(), count, "unchanged timers must not repeat warnings");
+    assert!(registry.expire_due_zones(&zones, now + Duration::from_millis(999)).is_empty());
+    assert_eq!(registry.expire_due_zones(&zones, now + Duration::from_secs(1)), vec![origin.clone()]);
+    assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().state, ZoneState::Expired);
+    assert!(captured.contains_all(&["event=\"zone_expired\"", "soa_expire_secs=1",
+        "since_last_attempt_completion_secs=1", "retry_in_secs=59", "failures_since_success=0", "last_failure=\"none\""]));
+    assert!(registry.start_due_refreshes(now + Duration::from_secs(59)).is_empty());
+    assert_eq!(registry.start_due_refreshes(now + Duration::from_secs(60)), vec![origin]);
+}
+
+#[test]
+fn expiry_log_distinguishes_last_success_from_a_recent_failed_attempt() {
+    let registry = ZoneRefreshRegistry::without_jitter(Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(1));
+    let origin = DomainName::from_absolute_str("expiry-log.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(origin.clone(), Some(1), vec![Rrset::new(
+        origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_timers(2, 1, 60, 300)],
+    )]);
+    let metadata = zone_metadata_for(&snapshot);
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(snapshot);
+    let now = Instant::now();
+    registry.record_success_at_with_timestamp(&metadata, now, 1_700_000_000);
+    registry.record_failure_at_with_timestamp_and_cause(&origin, Some(metadata),
+        Some("test primary unreachable".to_owned()), now + Duration::from_secs(59), 1_700_000_059);
+    let captured = CapturedEvents::new();
+    let _guard = tracing::subscriber::set_default(CapturingSubscriber::new(captured.clone()));
+    registry.expire_due_zones(&zones, now + Duration::from_secs(60));
+    assert!(captured.contains_all(&["event=\"zone_expired\"", "last_success_unix_seconds=1700000000",
+        "since_last_attempt_completion_secs=1", "failures_since_success=1", "last_failure=\"test primary unreachable\""]));
+}
+
+#[test]
+fn soa_timer_warnings_cover_jitter_boundaries_and_timer_changes() {
+    let mut registry = ZoneRefreshRegistry::without_jitter_with_max(
+        Duration::from_secs(60), Duration::from_secs(86_400),
+        Duration::from_secs(60), Duration::from_secs(3600), Duration::from_secs(300),
+    );
+    registry.jitter = crate::Jitter::new(42);
+    let origin = DomainName::from_absolute_str("timer-boundary.test.").unwrap();
+    let make = |refresh, retry, expire| ZoneSnapshot::active(origin.clone(), Some(1), vec![Rrset::new(
+        origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_timers(refresh, retry, expire, 300)],
+    )]);
+    let captured = CapturedEvents::new();
+    let _guard = tracing::subscriber::set_default(CapturingSubscriber::new(captured.clone()));
+    let now = Instant::now();
+    // 60s + 10% jitter + 1s scheduler granularity; wire values are unchanged.
+    registry.record_success_at(&zone_metadata_for(&make(60, 60, 68)), now);
+    assert!(captured.lines.lock().unwrap().is_empty());
+    for (refresh, retry, expire) in [(60, 60, 67), (60, 100, 110), (1, 1, 1)] {
+        let count = captured.lines.lock().unwrap().len();
+        registry.record_success_at(&zone_metadata_for(&make(refresh, retry, expire)), now);
+        assert!(captured.lines.lock().unwrap().len() > count);
+    }
+    assert!(captured.contains_all(&["code=\"soa_expiry_before_refresh_or_retry\"", "refresh_upper_ms=67000", "retry_upper_ms=111000"]));
+    // A corrected zone warns again if its timers later regress.
+    registry.record_success_at(&zone_metadata_for(&make(3600, 600, 604800)), now);
+    let count = captured.lines.lock().unwrap().len();
+    registry.record_success_at(&zone_metadata_for(&make(1, 1, 1)), now);
+    assert_eq!(captured.lines.lock().unwrap().len(), count + 2);
+}
+
+#[test]
 fn refresh_registry_warns_when_soa_timers_approach_maximum_effective_interval() {
     let registry = ZoneRefreshRegistry::without_jitter_with_max(
         std::time::Duration::from_secs(60),
@@ -1822,7 +1910,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -1908,7 +1996,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         Some(2),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -1978,7 +2066,7 @@ allow_non_rfc5936_cold_start = true
         &plan,
         Some(10),
         notifying_primary.ip(),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2046,7 +2134,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan,
@@ -2067,6 +2155,145 @@ allow_non_rfc5936_cold_start = true
         .expect("stale primary receives the first SOA poll")
         .expect("stale primary reports the peer");
     assert_eq!(metadata.serial, Some(11));
+}
+
+#[tokio::test]
+async fn current_confirmation_crossing_expiry_keeps_serving_and_registry_in_sync() {
+    let config = ServerConfig::from_toml_str(r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        [[zones]]
+        name = "example.test."
+        primaries = ["127.0.0.1:5301"]
+    "#).unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).unwrap();
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&origin).unwrap();
+    let registry = ZoneRefreshRegistry::without_jitter(Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(1));
+    let zones = ZoneStore::new();
+    let snapshot = ZoneSnapshot::active(origin.clone(), Some(1), vec![Rrset::new(
+        origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_timers(2, 1, 60, 300)],
+    )]);
+    let now = Instant::now();
+    registry.record_success_at(&zone_metadata_for(&snapshot), now - Duration::from_secs(60));
+    zones.insert_snapshot(snapshot);
+    let current = zones.exact_snapshot_for_transfer(&origin).unwrap();
+    let mut attempt = registry.begin_attempt(&origin).await;
+    let secrets = SecretManager::from_config(&config).unwrap();
+    let secret_snapshot = secrets.current_snapshot().unwrap();
+    let metrics = RuntimeMetrics::new();
+    let cooldown = IxfrCooldownRegistry::new(Duration::from_secs(60));
+    let metadata = {
+        let context = RefreshAttemptContext {
+            current_attempt: Some(&attempt), ixfr_cooldowns: &cooldown, metrics: &metrics,
+            transfer_plan: transfer_plan.clone(), secrets,
+            ixfr_timeout: Duration::from_secs(1), axfr_timeout: Duration::from_secs(1),
+            tcp_connect_timeout: Duration::from_secs(1), reason: "test", zone_persistence: None,
+        };
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (resume_tx, resume_rx) = oneshot::channel();
+        let confirmation = crate::confirm_current_after_freshness(
+            &zones, &context, &plan, &secret_snapshot, &current, async {
+                entered_tx.send(()).unwrap();
+                resume_rx.await.unwrap();
+                Ok(())
+            },
+        );
+        tokio::pin!(confirmation);
+        tokio::select! {
+            _ = entered_rx => {},
+            _ = &mut confirmation => panic!("freshness write must block"),
+        }
+        assert_eq!(registry.expire_due_zones(&zones, now), vec![origin.clone()]);
+        assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().state, ZoneState::Expired);
+        resume_tx.send(()).unwrap();
+        confirmation.await.unwrap_or_else(|_| panic!("freshness confirmation should succeed"))
+    };
+    assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().state, ZoneState::Active,
+        "a successful refresh must not leave the zone expired");
+    let fresh_deadline = registry.statuses.lock().unwrap()[&origin.canonical_key()].expire_at.unwrap();
+    assert!(fresh_deadline > now);
+    // A slow outer worker must not acknowledge twice and renew genuine expiry.
+    assert_eq!(registry.expire_due_zones(&zones, fresh_deadline), vec![origin.clone()]);
+    assert!(crate::acknowledge_refresh_before_maintenance(&mut attempt, &transfer_plan, &plan, &metadata, async {}).await);
+    let statuses = registry.statuses.lock().unwrap();
+    assert!(statuses[&origin.canonical_key()].expired);
+    assert_eq!(statuses[&origin.canonical_key()].expire_at, Some(fresh_deadline));
+}
+
+#[tokio::test]
+async fn current_confirmation_rechecks_identity_and_failure_after_freshness_wait() {
+    for mutation in ["plan", "secret", "snapshot", "generation", "write_failure", "already_obsolete"] {
+        let mut config = ServerConfig::from_toml_str(r#"
+            [server]
+            allow_non_rfc5936_cold_start = true
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:5301"]
+        "#).unwrap();
+        let secret_root = unique_test_path("borondns-current-wait-secret", "dir");
+        if mutation == "secret" {
+            write_secret_store_manifest(&secret_root, "");
+            config.secret_store.path = Some(secret_root.clone());
+        }
+        let transfer_plan = TransferPlan::from_config(&config).unwrap();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&origin).unwrap();
+        let registry = ZoneRefreshRegistry::without_jitter(Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(1));
+        let zones = ZoneStore::new();
+        let make = || ZoneSnapshot::active(origin.clone(), Some(1), vec![Rrset::new(
+            origin.clone(), RecordType::Soa as u16, 1, 3600, vec![soa_rdata_with_timers(2, 1, 60, 300)],
+        )]);
+        let initial = make();
+        registry.record_success_at(&zone_metadata_for(&initial), Instant::now() - Duration::from_secs(60));
+        zones.insert_snapshot(initial);
+        registry.expire_due_zones(&zones, Instant::now());
+        let current = zones.exact_snapshot_for_transfer(&origin).unwrap();
+        let attempt = registry.begin_attempt(&origin).await;
+        let secrets = SecretManager::from_config(&config).unwrap();
+        let secret_snapshot = secrets.current_snapshot().unwrap();
+        let metrics = RuntimeMetrics::new();
+        let cooldown = IxfrCooldownRegistry::new(Duration::from_secs(60));
+        let context = RefreshAttemptContext {
+            current_attempt: Some(&attempt), ixfr_cooldowns: &cooldown, metrics: &metrics,
+            transfer_plan: transfer_plan.clone(), secrets: secrets.clone(),
+            ixfr_timeout: Duration::from_secs(1), axfr_timeout: Duration::from_secs(1),
+            tcp_connect_timeout: Duration::from_secs(1), reason: "test", zone_persistence: None,
+        };
+        let old_deadline = registry.statuses.lock().unwrap()[&origin.canonical_key()].expire_at;
+        if mutation == "already_obsolete" { transfer_plan.remove(&origin); }
+        let result = crate::confirm_current_after_freshness(&zones, &context, &plan, &secret_snapshot, &current, async {
+            match mutation {
+                "plan" => transfer_plan.remove(&origin),
+                "secret" => {
+                    write_secret_store_manifest(&secret_root, r#"
+                        [[tsig_keys]]
+                        name = "new-key."
+                        algorithm = "hmac-sha256"
+                        secret = "bmV3LXNlY3JldA=="
+                    "#);
+                    secrets.reload().unwrap();
+                },
+                "snapshot" => {
+                    zones.remove_zone(&origin);
+                    zones.insert_snapshot(make());
+                    zones.expire_zone(&origin);
+                },
+                "generation" => {
+                    registry.statuses.lock().unwrap().get_mut(&origin.canonical_key()).unwrap().generation += 1;
+                },
+                "write_failure" => return Err("injected freshness fsync failure".to_owned()),
+                "already_obsolete" => panic!("obsolete confirmation must not start a disk write"),
+                _ => unreachable!(),
+            }
+            Ok(())
+        }).await;
+        assert!(result.is_err(), "{mutation}");
+        assert!(!attempt.current_acknowledged.load(Ordering::Relaxed));
+        assert_eq!(zones.exact_zone_control_metadata(&origin).unwrap().state, ZoneState::Expired, "{mutation}");
+        assert_eq!(registry.statuses.lock().unwrap()[&origin.canonical_key()].expire_at, old_deadline, "{mutation}");
+        if mutation == "secret" { std::fs::remove_dir_all(secret_root).unwrap(); }
+    }
 }
 
 #[tokio::test]
@@ -2165,7 +2392,7 @@ async fn final_transfer_serial_is_checked_after_a_newer_soa_probe() {
             let metrics = RuntimeMetrics::new();
             let cooldown = IxfrCooldownRegistry::new(std::time::Duration::from_secs(60));
             if !use_ixfr { cooldown.record_unsupported_if_current(&transfer_plan, &plan, primary); }
-            let result = refresh_zone_metadata_from_primaries(&zones, &plan, None, RefreshAttemptContext {
+            let result = refresh_zone_metadata_from_primaries(&zones, &plan, None, RefreshAttemptContext { current_attempt: None,
                 ixfr_cooldowns: &cooldown, metrics: &metrics, transfer_plan,
                 secrets: SecretManager::from_config(&config).unwrap(),
                 ixfr_timeout: std::time::Duration::from_secs(1),
@@ -2228,7 +2455,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan,
@@ -2294,7 +2521,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         Some(2),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2363,7 +2590,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         Some(7),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2450,7 +2677,7 @@ allow_non_rfc5936_cold_start = true
         &plan,
         Some(2),
         &catalog_manager,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan,
@@ -2516,7 +2743,7 @@ tsig_key = "transfer-key."
         plan.request_axfr();
         let metrics = RuntimeMetrics::new();
         let cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
-        let outcome = refresh_zone_from_primaries_with_outcome(&zones, &plan, None, &CatalogManager::default(), RefreshAttemptContext {
+        let outcome = refresh_zone_from_primaries_with_outcome(&zones, &plan, None, &CatalogManager::default(), RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &cooldowns, metrics: &metrics, transfer_plan: plans.clone(),
             secrets: SecretManager::from_config(&config).unwrap(),
             ixfr_timeout: std::time::Duration::from_secs(2), axfr_timeout: std::time::Duration::from_secs(2),
@@ -2572,7 +2799,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2641,7 +2868,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2776,7 +3003,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2840,7 +3067,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2903,7 +3130,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -2971,7 +3198,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3035,7 +3262,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3098,7 +3325,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3164,7 +3391,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3225,7 +3452,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3881,7 +4108,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -3973,7 +4200,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         None,
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -4034,7 +4261,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         Some(2),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),
@@ -4055,7 +4282,7 @@ allow_non_rfc5936_cold_start = true
         &zones,
         &plan,
         Some(3),
-        RefreshAttemptContext {
+        RefreshAttemptContext { current_attempt: None,
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
             transfer_plan: transfer_plan.clone(),

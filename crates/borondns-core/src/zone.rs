@@ -3987,6 +3987,15 @@ impl ZoneStore {
         Ok(Some(metadata))
     }
 
+    /// Check installed snapshot identity without changing its serving state.
+    /// Callers must recheck at publication after any asynchronous work.
+    pub fn is_current_snapshot_for_transfer(&self, current: &TransferZoneSnapshot) -> bool {
+        self.zones
+            .load()
+            .get(current.metadata.origin_key.as_ref())
+            .is_some_and(|entry| Arc::ptr_eq(&entry.snapshot, &current.installed_snapshot))
+    }
+
     /// Return the exact-origin snapshot plus cached control metadata for IXFR
     /// transfer work that still genuinely needs the old builder/oracle layout.
     pub fn exact_snapshot_for_transfer(&self, origin: &DomainName) -> Option<TransferZoneSnapshot> {
