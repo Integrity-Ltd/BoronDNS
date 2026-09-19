@@ -23,7 +23,7 @@ UNSAFE-BORONDNS-SERVER-AF-XDP-001	crates/borondns-server/src/af_xdp.rs	let resul
 UNSAFE-BORONDNS-SERVER-AF-XDP-002	crates/borondns-server/src/af_xdp.rs	unsafe impl Pod for RedirectConfig {}
 UNSAFE-BORONDNS-SERVER-AF-XDP-003	crates/borondns-server/src/af_xdp.rs	unsafe impl Send for AfXdpPacketIo {}
 UNSAFE-BORONDNS-SERVER-AF-XDP-004	crates/borondns-server/src/af_xdp.rs	let initially_filled = unsafe {
-UNSAFE-BORONDNS-SERVER-AF-XDP-005	crates/borondns-server/src/af_xdp.rs	let queued = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-005	crates/borondns-server/src/af_xdp.rs	let queued = enqueue_fill_frames(self.fill_ring_size, |requested| unsafe {
 UNSAFE-BORONDNS-SERVER-AF-XDP-006	crates/borondns-server/src/af_xdp.rs	let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
 UNSAFE-BORONDNS-SERVER-AF-XDP-007	crates/borondns-server/src/af_xdp.rs	let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
 UNSAFE-BORONDNS-SERVER-AF-XDP-008	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };

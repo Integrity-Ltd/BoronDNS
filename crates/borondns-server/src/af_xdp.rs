@@ -325,6 +325,26 @@ fn mark_ring_kick_pending(pending: &mut bool, admitted: usize) {
     }
 }
 
+fn enqueue_fill_frames(
+    mut requested: usize,
+    mut enqueue: impl FnMut(usize) -> io::Result<usize>,
+) -> io::Result<usize> {
+    // xdp 0.7.3 reserves min(requested, free UMEM frames) all-or-nothing.
+    // A driver may retain a short FILL tail while waiting for a full RX
+    // allocation batch. Waiting for space for the entire ring would then
+    // deadlock even though both free slots and reusable frames exist.
+    // Retry smaller reservations, bounded to log2(requested) + 1 calls.
+    // A failed reservation transfers no ownership; stop on the first success.
+    while requested > 0 {
+        let queued = enqueue(requested)?;
+        if queued > 0 {
+            return Ok(queued);
+        }
+        requested /= 2;
+    }
+    Ok(0)
+}
+
 fn kick_af_xdp_ring(socket_fd: RawFd, kind: RingKickKind) -> io::Result<()> {
     // AF_XDP defines zero-length sendto/recvfrom calls as TX/FILL wakeups.
     // SAFETY: `socket_fd` is the live AF_XDP socket owned by the adapter; both
@@ -1102,10 +1122,9 @@ impl AfXdpPacketIo {
         // SAFETY: the fill ring and UMEM are owned by this adapter. Packets
         // returned to UMEM are not accessed again before being re-enqueued.
         // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-005
-        let queued = unsafe {
-            self.fill_ring
-                .enqueue(&mut self.umem, self.fill_ring_size, false)
-        }?;
+        let queued = enqueue_fill_frames(self.fill_ring_size, |requested| unsafe {
+            self.fill_ring.enqueue(&mut self.umem, requested, false)
+        })?;
         mark_ring_kick_pending(&mut self.fill_kick_pending, queued);
         self.service_fill_kick(admission_open).await
     }
@@ -2079,6 +2098,82 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn fill_refill_progresses_with_partial_capacity_and_available_frames() {
+        // xdp 0.7.3 FillRing::enqueue limits the request by free UMEM
+        // frames, but XskProducer::reserve is all-or-nothing. mlx5 can
+        // stop its RX queue with a nonempty FILL tail smaller than the
+        // driver's allocation batch. Requiring a wholly empty ring then
+        // prevents the producer from ever replenishing it.
+        for capacity in [1, 63, 64, 4095, 8191, 8192] {
+            for available in [1, 63, 64, 511, 8192, 16384] {
+                let mut calls = 0;
+                let mut transferred = 0;
+                let queued = enqueue_fill_frames(8192, |requested| {
+                    calls += 1;
+                    let actual = requested.min(available);
+                    if actual <= capacity {
+                        transferred += actual;
+                        Ok(actual)
+                    } else {
+                        Ok(0)
+                    }
+                })
+                .expect("refill succeeds");
+                assert!(
+                    queued > 0,
+                    "free slots={capacity}, available frames={available}"
+                );
+                assert!(queued <= capacity.min(available));
+                assert_eq!(
+                    queued, transferred,
+                    "successful ownership transfer is counted once"
+                );
+                assert!(calls <= 14, "bounded logarithmic reservation attempts");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_refill_empty_resources_are_bounded_and_errors_are_preserved() {
+        let mut calls = 0;
+        assert_eq!(
+            enqueue_fill_frames(8192, |_| {
+                calls += 1;
+                Ok(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert!(calls <= 14);
+        let mut calls = 0;
+        let error = enqueue_fill_frames(8192, |_| {
+            calls += 1;
+            Err(io::Error::from_raw_os_error(libc::EIO))
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(error.raw_os_error(), Some(libc::EIO));
+    }
+
+    #[test]
+    fn fill_refill_fast_path_and_zero_request_do_not_retry() {
+        let mut calls = 0;
+        assert_eq!(
+            enqueue_fill_frames(8192, |requested| {
+                calls += 1;
+                Ok(requested)
+            })
+            .unwrap(),
+            8192
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(
+            enqueue_fill_frames(0, |_| panic!("no reservation for zero frames")).unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn xdp_object_reader_binds_trusted_regular_file_descriptor() {

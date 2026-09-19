@@ -194,8 +194,18 @@ project-supplied object and excludes arbitrary operator-written eBPF extensions
 [optimization reference](future-optimization-tracks.md) separates implemented
 adapters from unimplemented experiments.
 
+AF_XDP FILL replenishment retries smaller reservations when a full-ring request
+cannot fit. The pinned `xdp` crate reserves space all-or-nothing, so waiting for
+the ring to become completely empty can strand an RX queue whose driver needs
+more buffers before it can consume the remaining tail. Retries are logarithmically
+bounded and stop at the first successful ownership transfer.
+
 Cryptographic operations use established crates: HMAC/SHA for TSIG,
 constant-time `subtle` comparison, SipHash for DNS Cookies, and Rustls for TLS.
+Cookie secret readers share a read lock and copy a coherent current/previous
+pair; rotation takes the write lock and rechecks its deadline before generating
+a key. RRL checks its immutable allowlist before parsing a response category or
+taking the accounting mutex. Non-exempt traffic retains the usual RRL accounting.
 Static configuration and token files use no-follow opening. Secret-store
 traversal uses descriptor-relative `rustix` operations through its registered
 boundary; loaded secret material is zeroized where owned.

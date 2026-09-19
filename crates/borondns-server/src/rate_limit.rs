@@ -108,6 +108,7 @@ pub(crate) fn log_notify_log_summary(summary: NotifyLogSummary, interval: Durati
 #[derive(Clone, Debug)]
 pub(crate) struct RrlLimiter {
     enabled: bool,
+    allowlist: Arc<[IpPrefix]>,
     inner: Arc<Mutex<RrlState>>,
     metrics: RuntimeMetrics,
 }
@@ -116,13 +117,20 @@ impl RrlLimiter {
     pub(crate) fn from_config(config: &RrlConfig, metrics: RuntimeMetrics) -> Self {
         Self {
             enabled: config.enabled,
+            allowlist: config
+                .allowlist
+                .iter()
+                .map(|prefix| IpPrefix::parse(prefix).expect("validated RRL allowlist prefix"))
+                .collect(),
             inner: Arc::new(Mutex::new(RrlState::from_config(config))),
             metrics,
         }
     }
 
     pub(crate) fn apply(&self, source: IpAddr, response: Vec<u8>) -> RrlDecision {
-        if !self.enabled {
+        // Configuration is immutable. Exempt peers need neither response
+        // categorisation nor the shared mutable accounting state.
+        if !self.enabled || self.allowlist.iter().any(|prefix| prefix.contains(source)) {
             return RrlDecision::Send(response);
         }
         let Some(category) = response_category(&response) else {
@@ -144,6 +152,39 @@ impl RrlLimiter {
     }
 }
 
+#[cfg(test)]
+mod allowlist_fast_path_tests {
+    use super::*;
+
+    #[test]
+    fn allowlisted_response_does_not_wait_for_accounting_lock() {
+        let limiter = RrlLimiter::from_config(
+            &RrlConfig {
+                allowlist: vec!["192.0.2.0/24".to_owned()],
+                ..RrlConfig::default()
+            },
+            RuntimeMetrics::new(),
+        );
+        // Root A question with one IPv4 answer.
+        let response = vec![
+            0, 1, 0x84, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4,
+            192, 0, 2, 1,
+        ];
+        assert!(response_category(&response).is_some());
+        let held = limiter.inner.lock().unwrap();
+        let worker_limiter = limiter.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = worker_limiter.apply("192.0.2.99".parse().unwrap(), response);
+            tx.send(matches!(result, RrlDecision::Send(_))).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(2));
+        drop(held);
+        worker.join().unwrap();
+        assert_eq!(result, Ok(true));
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum RrlDecision {
     Send(Vec<u8>),
@@ -152,13 +193,11 @@ pub(crate) enum RrlDecision {
 
 #[derive(Debug)]
 struct RrlState {
-    enabled: bool,
     ipv4_prefix_len: u8,
     ipv6_prefix_len: u8,
     rates: RrlRates,
     slip: u32,
     max_keys: usize,
-    allowlist: Vec<IpPrefix>,
     buckets: HashMap<RrlKey, RrlBucket>,
     recency: BTreeMap<u128, RrlKey>,
     next_order: u128,
@@ -167,7 +206,6 @@ struct RrlState {
 impl RrlState {
     fn from_config(config: &RrlConfig) -> Self {
         Self {
-            enabled: config.enabled,
             ipv4_prefix_len: config.ipv4_prefix_len,
             ipv6_prefix_len: config.ipv6_prefix_len,
             rates: RrlRates {
@@ -179,11 +217,6 @@ impl RrlState {
             },
             slip: config.slip,
             max_keys: config.max_keys,
-            allowlist: config
-                .allowlist
-                .iter()
-                .map(|prefix| IpPrefix::parse(prefix).expect("validated RRL allowlist prefix"))
-                .collect(),
             buckets: HashMap::new(),
             recency: BTreeMap::new(),
             next_order: 0,
@@ -197,10 +230,6 @@ impl RrlState {
         response: Vec<u8>,
         metrics: &RuntimeMetrics,
     ) -> RrlDecision {
-        if !self.enabled || self.allowlist.iter().any(|prefix| prefix.contains(source)) {
-            return RrlDecision::Send(response);
-        }
-
         metrics.record_rrl_subject();
         let key = RrlKey::new(source, self.prefix_len(source), category);
         let rate = self.rates.for_category(category);

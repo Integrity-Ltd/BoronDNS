@@ -1,6 +1,6 @@
 use std::{
     net::IpAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,7 +27,7 @@ pub(crate) fn dns_cookie_secret_fingerprint(secret: &[u8; 16]) -> String {
 
 #[derive(Clone)]
 pub(crate) struct DnsCookieSecretStore {
-    inner: Arc<Mutex<DnsCookieSecretState>>,
+    inner: Arc<RwLock<DnsCookieSecretState>>,
     rotation_interval: Option<Duration>,
 }
 
@@ -59,7 +59,7 @@ impl DnsCookieSecretStore {
         generated_at: Instant,
     ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(DnsCookieSecretState {
+            inner: Arc::new(RwLock::new(DnsCookieSecretState {
                 current: Zeroizing::new(current),
                 previous: previous.map(Zeroizing::new),
                 generated_at,
@@ -76,10 +76,28 @@ impl DnsCookieSecretStore {
         &self,
         generate_secret: impl FnOnce() -> Result<[u8; 16], getrandom::Error>,
     ) -> DnsCookieSecrets {
+        // Ordinary readers only copy a coherent current/previous pair. The
+        // exclusive path is needed when rotation is due, not for every query.
+        {
+            let state = self
+                .inner
+                .read()
+                .expect("DNS Cookie secret store lock poisoned");
+            if !self
+                .rotation_interval
+                .is_some_and(|interval| state.generated_at.elapsed() >= interval)
+            {
+                return DnsCookieSecrets {
+                    current: state.current.clone(),
+                    previous: state.previous.clone(),
+                };
+            }
+        }
         let mut state = self
             .inner
-            .lock()
+            .write()
             .expect("DNS Cookie secret store lock poisoned");
+        // Another reader may have rotated while we acquired the write lock.
         if self
             .rotation_interval
             .is_some_and(|interval| state.generated_at.elapsed() >= interval)
@@ -120,6 +138,59 @@ fn lower_hex(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn ordinary_secret_reads_can_overlap() {
+        let store = DnsCookieSecretStore::configured([3; 16], Some([2; 16]));
+        let held = store.inner.read().unwrap();
+        let reader = store.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let pair = reader.current_with_generator(|| panic!("configured keys do not rotate"));
+            tx.send(pair).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(2));
+        drop(held);
+        worker.join().unwrap();
+        let pair = result.expect("a concurrent reader must not need exclusive access");
+        assert_eq!(*pair.current, [3; 16]);
+        assert_eq!(pair.previous.as_deref(), Some(&[2; 16]));
+    }
+
+    #[test]
+    fn concurrent_due_readers_rotate_only_once_and_observe_a_coherent_pair() {
+        let store = DnsCookieSecretStore::new_at(
+            [1; 16],
+            None,
+            Some(Duration::from_secs(60)),
+            Instant::now() - Duration::from_secs(120),
+        );
+        let barrier = Barrier::new(16);
+        let generations = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    let secrets = store.current_with_generator(|| {
+                        generations.fetch_add(1, Ordering::Relaxed);
+                        Ok([2; 16])
+                    });
+                    assert_eq!(*secrets.current, [2; 16]);
+                    assert_eq!(secrets.previous.as_deref(), Some(&[1; 16]));
+                });
+            }
+        });
+        assert_eq!(generations.load(Ordering::Relaxed), 1);
+    }
 }
 
 fn current_unix_time_secs() -> u32 {
