@@ -398,14 +398,22 @@ retained wire bytes conservatively at 256 times their size. Size it below the
 service cgroup memory limit with headroom for serving state and queries.
 See [capacity limits](zone-image-capacity-limits.md) for the exact bounds.
 
-Standard UDP starts with one Tokio worker and batch size one. Measure QPS,
+Standard UDP defaults to one socket worker and batch size one. Measure QPS,
 loss, CPU, and latency on the actual NIC before changing
 `udp_runtime = "dedicated"`, `udp_reuseport_workers`, `udp_batch_size`,
-CPU affinity, socket buffers, or pacing. Worker counts are capped at 64 and
+CPU affinity, socket buffers, or pacing. UDP worker counts are capped at 64 and
 batches at 1,024. Dedicated Linux workers use `recvmmsg`/`sendmmsg`.
 Pacing needs an appropriate host qdisc; excessive buffers can increase delay
 and memory use. [Metrics detail](health-metrics-interface.md#metrics-detail)
 is another explicit performance/visibility tradeoff.
+
+The CLI also accepts `TOKIO_WORKER_THREADS` through Tokio. This controls the
+shared async runtime, not the number of UDP sockets or AF_XDP queues. Benchmark
+it separately: more runtime threads did not mean higher AF_XDP throughput on
+the tested heterogeneous GX10 CPUs. Check readiness, TCP DNS, and transfer
+progress under load as well as UDP throughput before choosing a value.
+The [GX10 tuning record](gx10-af-xdp-benchmark-2026-09.md) separates runtime
+workers, NIC interrupt placement and hardware rings from AF_XDP queue settings.
 
 AF_XDP requires `limits.udp_backend = "af_xdp"`, a matching interface, concrete
 local listener IPs, and a trusted eBPF redirect object. The release binary
@@ -417,8 +425,56 @@ write bits, and at most 16 MiB.
 AF_XDP allows at most 64 unique queue IDs in `0..=63`. Memory limits are per
 queue: up to 262,144 UMEM frames, 65,536 entries per ring, and a 1,024-packet
 batch, with an aggregate startup estimate capped at 32 GiB.
+`xdp.umem_frame_size` defaults to `4096`; `2048` is also supported and can
+reduce the packet-memory footprint on compatible NICs. The smaller size requires
+`limits.max_udp_payload <= 1400` (keep the usual `1232` unless justified), even
+with unsafe UDP overrides. This is a conservative frame-capacity guard, not an
+RFC limit. The smaller size was tested on the dedicated ConnectX-7 link at
+MTU 1500; it does not enable jumbo-frame or multi-buffer receive support.
+The aggregate memory estimate uses the configured frame size.
 `xdp.tx_wakeup_interval` must remain `1`. Consult the example configuration
 and physical-NIC benchmarks before enabling this backend.
+
+### AF_XDP buffer reuse on mlx5
+
+On the tested GX10/ConnectX-7 setup, zero-copy with `rx_striding_rq` enabled
+can deliver an RX frame again before userspace has returned it to FILL.
+Under load, this appeared as old response bytes in an incoming query buffer
+and rising `borondns_af_xdp_rx_parse_errors_total`. Increasing DNS parser
+tolerance or merely dropping malformed packets does not repair broken buffer
+ownership.
+
+Disabling striding RX on the **server's** dedicated interface avoided both
+the duplicate-frame assertion in a diagnostic build and parse errors in
+bounded overload tests. Stop the AF_XDP service before changing the NIC mode,
+record the original setting with `ethtool --show-priv-flags INTERFACE`, then
+apply `ethtool --set-priv-flags INTERFACE rx_striding_rq off` and restart the
+service. Restore the recorded setting when the experiment ends. Do not apply
+this blindly to shared interfaces; it changes the interface's receive mode.
+This is a tested workaround on that setup, not a general mlx5 safety guarantee.
+
+Buffer sizing also matters on this lab setup. The clean runs used 16,384
+UMEM frames per queue (both 4 KiB and explicitly selected 2 KiB frames), FILL
+size 8,192, and RX/TX/completion sizes 4,096.
+Reducing the frame pool and FILL ring produced parse errors under load even
+with striding disabled; those tuning results were rejected. That observation
+does not establish the same root cause as the diagnosed duplicate delivery.
+Revalidate buffer ownership, parse-error counters, and overload recovery after
+changing ring sizes; the striding workaround alone is not sufficient evidence.
+
+For deployments that cannot use the workaround, use the standard socket
+backend. `xdp.zero_copy = "disable"` also avoided the symptom in the same test,
+but had substantially lower throughput. `"auto"` is not a safe substitute for
+explicitly disabling zero-copy: it can still select the affected path.
+
+Upstream has separate fixes for stale buffer release on
+[striding-RQ refill retries](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=63811edf512584c946e5e96b100e9e280703bbb5)
+and [cyclic-RQ refill retries](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e01620844c5c88b6fcf819d171df8e3976a0e76f).
+The inspected `6.17.0-1014-nvidia` driver lacks the striding fix, but tracing
+observed duplicate RX delivery without refill allocation failures, so these
+patches are not yet a verified cure for this reproduction. A driver update
+must be followed by the same ownership and overload checks before removing
+the workaround.
 
 ## Logs and warnings
 

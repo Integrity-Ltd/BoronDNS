@@ -48,6 +48,11 @@ snapshot, compact `ZoneImage`, and any incremental overlay. Readers retain one
 entry while answering. Writers serialize the final replacement, so queries
 cannot observe a partially installed generation (`BDS-INV-003`).
 
+Directories with up to four entries also carry a most-specific-first list in
+that same publication. Query lookup compares suffix labels directly instead
+of constructing and hashing keys. Larger directories retain the sharded
+index; hidden entries and DS parent-zone selection retain their usual rules.
+
 Compact images hold name indexes, RRsets, pre-encoded wire, and DNSSEC proof
 metadata. The default server publication policy is `auto`: eligible IXFR
 updates to zones with at least one million RRsets share unchanged snapshot
@@ -200,12 +205,50 @@ the ring to become completely empty can strand an RX queue whose driver needs
 more buffers before it can consume the remaining tail. Retries are logarithmically
 bounded and stop at the first successful ownership transfer.
 
+On AArch64, the RX slab prefetches up to the first two 64-byte regions of each
+owned packet while collecting a batch. This is only a cache hint: parsing,
+checksums, descriptor ownership and buffer recycling are unchanged. Other
+architectures keep the ordinary receive path.
+
+AF_XDP copies validated payloads into reusable staging buffers. Small queries
+start with 128-byte storage; larger packets grow it up to the existing 4 KiB
+limit. Storage is retained for subsequent batches, while each packet's length
+controls the visible bytes. Standard UDP keeps full-size kernel receive buffers.
+
+Little-endian AArch64 builds with NEON sum UDP checksum data in bounded
+16-byte chunks, widening before accumulation. Odd bytes, short tails and other
+targets use the scalar path. Both paths are checked against a scalar oracle
+across alignments and maximum UDP lengths; wire checksum rules are unchanged.
+
 Cryptographic operations use established crates: HMAC/SHA for TSIG,
 constant-time `subtle` comparison, SipHash for DNS Cookies, and Rustls for TLS.
-Cookie secret readers share a read lock and copy a coherent current/previous
-pair; rotation takes the write lock and rechecks its deadline before generating
-a key. RRL checks its immutable allowlist before parsing a response category or
+Cookie secret readers load an immutable `ArcSwap` snapshot and copy a coherent
+current/previous pair without contending on a shared reader-count lock. Rotation
+takes a writer-only mutex, rechecks its deadline, and publishes the pair and new
+deadline together. Failed generation retains both keys and backs off; retired
+snapshots zeroize their keys when the last reader releases them. UDP takes this
+pair lazily once per synchronous receive batch, then discards it before receiving
+more traffic. The next batch checks rotation again; Cookie validation and
+timestamps remain per query. RRL checks its
+immutable allowlist before parsing a response category or
 taking the accounting mutex. Non-exempt traffic retains the usual RRL accounting.
+Global COOKIE-status metrics use cache-line-separated atomic shards, summed on
+scrape; totals include all increments without waiting for a worker-local flush.
+AF_XDP packet counters use grouped, cache-aligned atomic shards too. TX kick
+attempts are still recorded before the next await, so cancellation does not
+discard an observed syscall. Scrapes sum the shards; individual counters remain
+exact after writers stop, without promising a transactional multi-counter view.
+UDP policy and answer generation share packet-bound header, question, and EDNS
+parse results, including failures. Unsigned request preparation borrows the
+original packet; verified TSIG requests retain their owned rewritten message.
+Completed requests can recycle one set of up to eight small name-label buffers
+per thread. Each live request owns its buffers exclusively; larger names and
+failed parses free theirs normally. Zone-storage layouts are unchanged.
+Validated lenient queries without COOKIE skip Cookie timestamp construction,
+but still perform due secret rotation and retain Cookie-policy metrics.
+TSIG scanning validates names without allocating them. Only immediate errors
+or signed responses need a transport-level UDP payload ceiling; normal answers
+retain core EDNS validation.
 Static configuration and token files use no-follow opening. Secret-store
 traversal uses descriptor-relative `rustix` operations through its registered
 boundary; loaded secret material is zeroized where owned.

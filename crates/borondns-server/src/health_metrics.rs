@@ -6,7 +6,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -1582,6 +1582,7 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
 }
 
 fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    let stats = metrics.inner.af_xdp.sum();
     body.push_str(
         "# HELP borondns_af_xdp_rx_recv_calls_total AF_XDP RX ring recv calls issued by server packet workers.\n\
          # TYPE borondns_af_xdp_rx_recv_calls_total counter\n\
@@ -1630,54 +1631,21 @@ fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) 
          borondns_af_xdp_tx_poll_write_ready_total {}\n\
          borondns_af_xdp_completion_dequeues_total {}\n\
          borondns_af_xdp_completed_packets_total {}\n",
-        metrics.inner.af_xdp_rx_recv_calls.load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_rx_empty_recv_calls
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_rx_received_packets
-            .load(Ordering::Relaxed),
-        metrics.inner.af_xdp_rx_parse_errors.load(Ordering::Relaxed),
-        metrics.inner.af_xdp_tx_send_calls.load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_queued_packets
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_empty_send_calls
-            .load(Ordering::Relaxed),
-        metrics.inner.af_xdp_tx_wakeups.load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_kick_successes
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_kick_transient_failures
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_delivery_failures
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_poll_write_calls
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_tx_poll_write_ready
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_completion_dequeues
-            .load(Ordering::Relaxed),
-        metrics
-            .inner
-            .af_xdp_completed_packets
-            .load(Ordering::Relaxed),
+        stats.rx_recv_calls,
+        stats.rx_empty_recv_calls,
+        stats.rx_received_packets,
+        stats.rx_parse_errors,
+        stats.tx_send_calls,
+        stats.tx_queued_packets,
+        stats.tx_empty_send_calls,
+        stats.tx_wakeups,
+        stats.tx_kick_successes,
+        stats.tx_kick_transient_failures,
+        stats.tx_delivery_failures,
+        stats.tx_poll_write_calls,
+        stats.tx_poll_write_ready,
+        stats.completion_dequeues,
+        stats.completed_packets,
     ));
 }
 
@@ -2937,21 +2905,7 @@ struct RuntimeMetricsInner {
     udp_mmsg_send_wouldblock_retries: AtomicU64,
     udp_mmsg_send_interrupted_retries: AtomicU64,
     udp_mmsg_send_resource_backoff_retries: AtomicU64,
-    af_xdp_rx_recv_calls: AtomicU64,
-    af_xdp_rx_empty_recv_calls: AtomicU64,
-    af_xdp_rx_received_packets: AtomicU64,
-    af_xdp_rx_parse_errors: AtomicU64,
-    af_xdp_tx_send_calls: AtomicU64,
-    af_xdp_tx_queued_packets: AtomicU64,
-    af_xdp_tx_empty_send_calls: AtomicU64,
-    af_xdp_tx_wakeups: AtomicU64,
-    af_xdp_tx_kick_successes: AtomicU64,
-    af_xdp_tx_kick_transient_failures: AtomicU64,
-    af_xdp_tx_delivery_failures: AtomicU64,
-    af_xdp_tx_poll_write_calls: AtomicU64,
-    af_xdp_tx_poll_write_ready: AtomicU64,
-    af_xdp_completion_dequeues: AtomicU64,
-    af_xdp_completed_packets: AtomicU64,
+    af_xdp: ShardedAfXdpStats,
     af_xdp_worker_receive_batches: Vec<AtomicU64>,
     af_xdp_worker_received_packets: Vec<AtomicU64>,
     af_xdp_worker_send_batches: Vec<AtomicU64>,
@@ -2982,10 +2936,10 @@ struct RuntimeMetricsInner {
     pub(crate) rrl_truncated: AtomicU64,
     pub(crate) rrl_tracked_keys: AtomicU64,
     pub(crate) rrl_key_evictions: AtomicU64,
-    pub(crate) dns_cookie_no_cookie: AtomicU64,
-    pub(crate) dns_cookie_client_only: AtomicU64,
-    pub(crate) dns_cookie_valid_server: AtomicU64,
-    pub(crate) dns_cookie_invalid_server: AtomicU64,
+    pub(crate) dns_cookie_no_cookie: ShardedCounter,
+    pub(crate) dns_cookie_client_only: ShardedCounter,
+    pub(crate) dns_cookie_valid_server: ShardedCounter,
+    pub(crate) dns_cookie_invalid_server: ShardedCounter,
     pub(crate) dns_cookie_badcookie: AtomicU64,
     pub(crate) configuration_warnings: AtomicU64,
     pub(crate) nsec3_iterations_exceed_cap: AtomicU64,
@@ -3008,6 +2962,227 @@ struct RuntimeMetricsInner {
     query_pipeline_latency: Mutex<HashMap<QueryPipelineKey, QueryLatencyHistogram>>,
     response_cache_candidates: Mutex<HashMap<ResponseCacheCandidateCategory, u64>>,
     response_cache_ineligible: Mutex<HashMap<ResponseCacheIneligibleReason, u64>>,
+}
+
+#[cfg(test)]
+mod af_xdp_counter_tests {
+    use super::*;
+
+    fn sample(n: u64) -> AfXdpPacketIoStats {
+        AfXdpPacketIoStats {
+            rx_recv_calls: n,
+            rx_empty_recv_calls: n * 2,
+            rx_received_packets: n * 3,
+            rx_parse_errors: n * 4,
+            tx_send_calls: n * 5,
+            tx_queued_packets: n * 6,
+            tx_empty_send_calls: n * 7,
+            tx_wakeups: n * 8,
+            tx_kick_successes: n * 9,
+            tx_kick_transient_failures: n * 10,
+            tx_delivery_failures: n * 11,
+            tx_poll_write_calls: n * 12,
+            tx_poll_write_ready: n * 13,
+            completion_dequeues: n * 14,
+            completed_packets: n * 15,
+        }
+    }
+
+    #[test]
+    fn af_xdp_shards_preserve_every_counter_even_when_writers_collide() {
+        let counters = ShardedAfXdpStats::default();
+        assert_eq!(std::mem::size_of::<AfXdpCounterShard>(), 128);
+        assert_eq!(std::mem::align_of::<AfXdpCounterShard>(), 128);
+        assert_eq!(counters.sum(), sample(0));
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let counters = &counters;
+                scope.spawn(move || {
+                    for _ in 0..500 {
+                        counters.add(sample(1));
+                        // Deliberately collide on one shard as well as using
+                        // the normal per-thread assignment.
+                        counters.0[0].add(sample(1));
+                        counters.add(AfXdpPacketIoStats::default());
+                    }
+                });
+            }
+        });
+        assert_eq!(counters.sum(), sample(8 * 500 * 2));
+    }
+
+    #[test]
+    fn af_xdp_shard_sum_preserves_atomic_counter_wrap_semantics() {
+        let counters = ShardedAfXdpStats::default();
+        counters.0[0].add(AfXdpPacketIoStats {
+            rx_recv_calls: u64::MAX,
+            ..AfXdpPacketIoStats::default()
+        });
+        counters.0[1].add(AfXdpPacketIoStats {
+            rx_recv_calls: 3,
+            ..AfXdpPacketIoStats::default()
+        });
+        assert_eq!(counters.sum().rx_recv_calls, 2);
+    }
+}
+
+const METRIC_COUNTER_SHARDS: usize = 64;
+static NEXT_METRIC_COUNTER_SHARD: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static METRIC_COUNTER_SHARD: usize =
+        NEXT_METRIC_COUNTER_SHARD.fetch_add(1, Ordering::Relaxed) % METRIC_COUNTER_SHARDS;
+}
+
+#[derive(Debug, Default)]
+#[repr(align(128))]
+struct CounterShard(AtomicU64);
+
+/// Exact counters without one contended cache line across all query workers.
+/// Threads may share a shard; atomic increments still cannot lose updates.
+/// Scrapes sum immediately visible values, with no deferred flush on shutdown.
+#[derive(Debug)]
+pub(crate) struct ShardedCounter([CounterShard; METRIC_COUNTER_SHARDS]);
+
+impl Default for ShardedCounter {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| CounterShard::default()))
+    }
+}
+
+impl ShardedCounter {
+    fn increment(&self) {
+        METRIC_COUNTER_SHARD.with(|&shard| {
+            self.0[shard].0.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+
+    fn sum(&self) -> u64 {
+        self.0.iter().fold(0u64, |sum, shard| {
+            sum.wrapping_add(shard.0.load(Ordering::Relaxed))
+        })
+    }
+}
+
+/// Packet counters share one cache-aligned shard per writer. Each increment is
+/// immediately visible; a scrape sums all shards without requiring workers to
+/// flush again. Shard collisions remain safe because the fields are atomic.
+#[derive(Debug, Default)]
+#[repr(align(128))]
+struct AfXdpCounterShard {
+    rx_recv_calls: AtomicU64,
+    rx_empty_recv_calls: AtomicU64,
+    rx_received_packets: AtomicU64,
+    rx_parse_errors: AtomicU64,
+    tx_send_calls: AtomicU64,
+    tx_queued_packets: AtomicU64,
+    tx_empty_send_calls: AtomicU64,
+    tx_wakeups: AtomicU64,
+    tx_kick_successes: AtomicU64,
+    tx_kick_transient_failures: AtomicU64,
+    tx_delivery_failures: AtomicU64,
+    tx_poll_write_calls: AtomicU64,
+    tx_poll_write_ready: AtomicU64,
+    completion_dequeues: AtomicU64,
+    completed_packets: AtomicU64,
+}
+
+impl AfXdpCounterShard {
+    fn add(&self, stats: AfXdpPacketIoStats) {
+        fn add_nonzero(counter: &AtomicU64, value: u64) {
+            if value != 0 {
+                counter.fetch_add(value, Ordering::Relaxed);
+            }
+        }
+        add_nonzero(&self.rx_recv_calls, stats.rx_recv_calls);
+        add_nonzero(&self.rx_empty_recv_calls, stats.rx_empty_recv_calls);
+        add_nonzero(&self.rx_received_packets, stats.rx_received_packets);
+        add_nonzero(&self.rx_parse_errors, stats.rx_parse_errors);
+        add_nonzero(&self.tx_send_calls, stats.tx_send_calls);
+        add_nonzero(&self.tx_queued_packets, stats.tx_queued_packets);
+        add_nonzero(&self.tx_empty_send_calls, stats.tx_empty_send_calls);
+        add_nonzero(&self.tx_wakeups, stats.tx_wakeups);
+        add_nonzero(&self.tx_kick_successes, stats.tx_kick_successes);
+        add_nonzero(
+            &self.tx_kick_transient_failures,
+            stats.tx_kick_transient_failures,
+        );
+        add_nonzero(&self.tx_delivery_failures, stats.tx_delivery_failures);
+        add_nonzero(&self.tx_poll_write_calls, stats.tx_poll_write_calls);
+        add_nonzero(&self.tx_poll_write_ready, stats.tx_poll_write_ready);
+        add_nonzero(&self.completion_dequeues, stats.completion_dequeues);
+        add_nonzero(&self.completed_packets, stats.completed_packets);
+    }
+}
+
+#[derive(Debug)]
+struct ShardedAfXdpStats([AfXdpCounterShard; METRIC_COUNTER_SHARDS]);
+
+impl Default for ShardedAfXdpStats {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| AfXdpCounterShard::default()))
+    }
+}
+
+impl ShardedAfXdpStats {
+    #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
+    fn add(&self, stats: AfXdpPacketIoStats) {
+        if stats == AfXdpPacketIoStats::default() {
+            return;
+        }
+        METRIC_COUNTER_SHARD.with(|&shard| self.0[shard].add(stats));
+    }
+
+    fn sum(&self) -> AfXdpPacketIoStats {
+        let mut total = AfXdpPacketIoStats::default();
+        for shard in &self.0 {
+            total.rx_recv_calls = total
+                .rx_recv_calls
+                .wrapping_add(shard.rx_recv_calls.load(Ordering::Relaxed));
+            total.rx_empty_recv_calls = total
+                .rx_empty_recv_calls
+                .wrapping_add(shard.rx_empty_recv_calls.load(Ordering::Relaxed));
+            total.rx_received_packets = total
+                .rx_received_packets
+                .wrapping_add(shard.rx_received_packets.load(Ordering::Relaxed));
+            total.rx_parse_errors = total
+                .rx_parse_errors
+                .wrapping_add(shard.rx_parse_errors.load(Ordering::Relaxed));
+            total.tx_send_calls = total
+                .tx_send_calls
+                .wrapping_add(shard.tx_send_calls.load(Ordering::Relaxed));
+            total.tx_queued_packets = total
+                .tx_queued_packets
+                .wrapping_add(shard.tx_queued_packets.load(Ordering::Relaxed));
+            total.tx_empty_send_calls = total
+                .tx_empty_send_calls
+                .wrapping_add(shard.tx_empty_send_calls.load(Ordering::Relaxed));
+            total.tx_wakeups = total
+                .tx_wakeups
+                .wrapping_add(shard.tx_wakeups.load(Ordering::Relaxed));
+            total.tx_kick_successes = total
+                .tx_kick_successes
+                .wrapping_add(shard.tx_kick_successes.load(Ordering::Relaxed));
+            total.tx_kick_transient_failures = total
+                .tx_kick_transient_failures
+                .wrapping_add(shard.tx_kick_transient_failures.load(Ordering::Relaxed));
+            total.tx_delivery_failures = total
+                .tx_delivery_failures
+                .wrapping_add(shard.tx_delivery_failures.load(Ordering::Relaxed));
+            total.tx_poll_write_calls = total
+                .tx_poll_write_calls
+                .wrapping_add(shard.tx_poll_write_calls.load(Ordering::Relaxed));
+            total.tx_poll_write_ready = total
+                .tx_poll_write_ready
+                .wrapping_add(shard.tx_poll_write_ready.load(Ordering::Relaxed));
+            total.completion_dequeues = total
+                .completion_dequeues
+                .wrapping_add(shard.completion_dequeues.load(Ordering::Relaxed));
+            total.completed_packets = total
+                .completed_packets
+                .wrapping_add(shard.completed_packets.load(Ordering::Relaxed));
+        }
+        total
+    }
 }
 
 #[derive(Debug, Default)]
@@ -3585,54 +3760,7 @@ impl RuntimeMetrics {
 
     #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
     pub(crate) fn record_af_xdp_packet_io_stats(&self, stats: AfXdpPacketIoStats) {
-        if stats == AfXdpPacketIoStats::default() {
-            return;
-        }
-        self.inner
-            .af_xdp_rx_recv_calls
-            .fetch_add(stats.rx_recv_calls, Ordering::Relaxed);
-        self.inner
-            .af_xdp_rx_empty_recv_calls
-            .fetch_add(stats.rx_empty_recv_calls, Ordering::Relaxed);
-        self.inner
-            .af_xdp_rx_received_packets
-            .fetch_add(stats.rx_received_packets, Ordering::Relaxed);
-        self.inner
-            .af_xdp_rx_parse_errors
-            .fetch_add(stats.rx_parse_errors, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_send_calls
-            .fetch_add(stats.tx_send_calls, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_queued_packets
-            .fetch_add(stats.tx_queued_packets, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_empty_send_calls
-            .fetch_add(stats.tx_empty_send_calls, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_wakeups
-            .fetch_add(stats.tx_wakeups, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_kick_successes
-            .fetch_add(stats.tx_kick_successes, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_kick_transient_failures
-            .fetch_add(stats.tx_kick_transient_failures, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_delivery_failures
-            .fetch_add(stats.tx_delivery_failures, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_poll_write_calls
-            .fetch_add(stats.tx_poll_write_calls, Ordering::Relaxed);
-        self.inner
-            .af_xdp_tx_poll_write_ready
-            .fetch_add(stats.tx_poll_write_ready, Ordering::Relaxed);
-        self.inner
-            .af_xdp_completion_dequeues
-            .fetch_add(stats.completion_dequeues, Ordering::Relaxed);
-        self.inner
-            .af_xdp_completed_packets
-            .fetch_add(stats.completed_packets, Ordering::Relaxed);
+        self.inner.af_xdp.add(stats);
     }
 
     /// Records one explicit AF_XDP TX kick immediately after its syscall.
@@ -3647,22 +3775,13 @@ impl RuntimeMetrics {
         transient_failure: bool,
         delivery_failure: bool,
     ) {
-        self.inner.af_xdp_tx_wakeups.fetch_add(1, Ordering::Relaxed);
-        if success {
-            self.inner
-                .af_xdp_tx_kick_successes
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        if transient_failure {
-            self.inner
-                .af_xdp_tx_kick_transient_failures
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        if delivery_failure {
-            self.inner
-                .af_xdp_tx_delivery_failures
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        self.inner.af_xdp.add(AfXdpPacketIoStats {
+            tx_wakeups: 1,
+            tx_kick_successes: u64::from(success),
+            tx_kick_transient_failures: u64::from(transient_failure),
+            tx_delivery_failures: u64::from(delivery_failure),
+            ..AfXdpPacketIoStats::default()
+        });
     }
 
     pub(crate) fn record_af_xdp_worker_receive_batch(&self, worker_id: usize, packets: usize) {
@@ -3693,13 +3812,12 @@ impl RuntimeMetrics {
         &self,
         worker_id: usize,
     ) -> (u64, u64, u64, u64, u64, u64) {
+        let stats = self.inner.af_xdp.sum();
         (
-            self.inner.af_xdp_tx_send_calls.load(Ordering::Relaxed),
-            self.inner.af_xdp_tx_queued_packets.load(Ordering::Relaxed),
-            self.inner
-                .af_xdp_completion_dequeues
-                .load(Ordering::Relaxed),
-            self.inner.af_xdp_completed_packets.load(Ordering::Relaxed),
+            stats.tx_send_calls,
+            stats.tx_queued_packets,
+            stats.completion_dequeues,
+            stats.completed_packets,
             self.inner
                 .af_xdp_worker_send_batches
                 .get(worker_id)
@@ -3842,7 +3960,7 @@ impl RuntimeMetrics {
             DnsCookieRequestStatus::ValidServerCookie => &self.inner.dns_cookie_valid_server,
             DnsCookieRequestStatus::InvalidServerCookie => &self.inner.dns_cookie_invalid_server,
         };
-        counter.fetch_add(1, Ordering::Relaxed);
+        counter.increment();
         if !self.hot_path_detail_enabled() {
             return;
         }
@@ -4284,10 +4402,10 @@ impl RuntimeMetrics {
             rrl_truncated: self.inner.rrl_truncated.load(Ordering::Relaxed),
             rrl_tracked_keys: self.inner.rrl_tracked_keys.load(Ordering::Relaxed),
             rrl_key_evictions: self.inner.rrl_key_evictions.load(Ordering::Relaxed),
-            dns_cookie_no_cookie: self.inner.dns_cookie_no_cookie.load(Ordering::Relaxed),
-            dns_cookie_client_only: self.inner.dns_cookie_client_only.load(Ordering::Relaxed),
-            dns_cookie_valid_server: self.inner.dns_cookie_valid_server.load(Ordering::Relaxed),
-            dns_cookie_invalid_server: self.inner.dns_cookie_invalid_server.load(Ordering::Relaxed),
+            dns_cookie_no_cookie: self.inner.dns_cookie_no_cookie.sum(),
+            dns_cookie_client_only: self.inner.dns_cookie_client_only.sum(),
+            dns_cookie_valid_server: self.inner.dns_cookie_valid_server.sum(),
+            dns_cookie_invalid_server: self.inner.dns_cookie_invalid_server.sum(),
             dns_cookie_badcookie: self.inner.dns_cookie_badcookie.load(Ordering::Relaxed),
             configuration_warnings: self.inner.configuration_warnings.load(Ordering::Relaxed),
             nsec3_iterations_exceed_cap: self

@@ -1,9 +1,10 @@
 use std::{
     net::IpAddr,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use arc_swap::ArcSwap;
 use borondns_core::{
     config::{CookieConfig, CookiePolicyConfig},
     dns::{DnsCookieContext, DnsCookiePolicy},
@@ -27,8 +28,13 @@ pub(crate) fn dns_cookie_secret_fingerprint(secret: &[u8; 16]) -> String {
 
 #[derive(Clone)]
 pub(crate) struct DnsCookieSecretStore {
-    inner: Arc<RwLock<DnsCookieSecretState>>,
+    inner: Arc<DnsCookieSecretStoreInner>,
     rotation_interval: Option<Duration>,
+}
+
+struct DnsCookieSecretStoreInner {
+    state: ArcSwap<DnsCookieSecretState>,
+    rotation: Mutex<()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +43,7 @@ pub(crate) struct DnsCookieSecrets {
     pub(crate) previous: Option<Zeroizing<[u8; 16]>>,
 }
 
+#[derive(Clone)]
 struct DnsCookieSecretState {
     current: Zeroizing<[u8; 16]>,
     previous: Option<Zeroizing<[u8; 16]>>,
@@ -59,11 +66,14 @@ impl DnsCookieSecretStore {
         generated_at: Instant,
     ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(DnsCookieSecretState {
-                current: Zeroizing::new(current),
-                previous: previous.map(Zeroizing::new),
-                generated_at,
-            })),
+            inner: Arc::new(DnsCookieSecretStoreInner {
+                state: ArcSwap::from_pointee(DnsCookieSecretState {
+                    current: Zeroizing::new(current),
+                    previous: previous.map(Zeroizing::new),
+                    generated_at,
+                }),
+                rotation: Mutex::new(()),
+            }),
             rotation_interval,
         }
     }
@@ -76,13 +86,11 @@ impl DnsCookieSecretStore {
         &self,
         generate_secret: impl FnOnce() -> Result<[u8; 16], getrandom::Error>,
     ) -> DnsCookieSecrets {
-        // Ordinary readers only copy a coherent current/previous pair. The
-        // exclusive path is needed when rotation is due, not for every query.
+        // Immutable snapshots keep ordinary readers off a shared reader-count
+        // cache line. Publish the current/previous pair and deadline together;
+        // the writer mutex only serializes due rotations (including RNG retry).
         {
-            let state = self
-                .inner
-                .read()
-                .expect("DNS Cookie secret store lock poisoned");
+            let state = self.inner.state.load();
             if !self
                 .rotation_interval
                 .is_some_and(|interval| state.generated_at.elapsed() >= interval)
@@ -93,11 +101,14 @@ impl DnsCookieSecretStore {
                 };
             }
         }
-        let mut state = self
+        let _rotation = self
             .inner
-            .write()
+            .rotation
+            .lock()
             .expect("DNS Cookie secret store lock poisoned");
-        // Another reader may have rotated while we acquired the write lock.
+        // Another reader may have rotated while we acquired the writer lock.
+        let snapshot = self.inner.state.load();
+        let mut state = (**snapshot).clone();
         if self
             .rotation_interval
             .is_some_and(|interval| state.generated_at.elapsed() >= interval)
@@ -122,6 +133,7 @@ impl DnsCookieSecretStore {
                     );
                 }
             }
+            self.inner.state.store(Arc::new(state.clone()));
         }
         DnsCookieSecrets {
             current: state.current.clone(),
@@ -149,9 +161,9 @@ mod concurrency_tests {
     };
 
     #[test]
-    fn ordinary_secret_reads_can_overlap() {
+    fn ordinary_secret_reads_do_not_wait_for_rotation_lock() {
         let store = DnsCookieSecretStore::configured([3; 16], Some([2; 16]));
-        let held = store.inner.read().unwrap();
+        let held = store.inner.rotation.lock().unwrap();
         let reader = store.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {

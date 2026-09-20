@@ -3289,11 +3289,15 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
 }
 
 const ZONE_DIRECTORY_SHARD_COUNT: usize = 256;
+const SMALL_ZONE_DIRECTORY_LIMIT: usize = 4;
 
 #[derive(Debug, Clone)]
 struct ZoneDirectory {
     by_origin: [Arc<HashMap<String, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
     suffix_index: [Arc<HashMap<Vec<u8>, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
+    // Publication-local shortcut, ordered most-specific first. Larger
+    // directories use the sharded suffix index without a linear scan.
+    small: SmallVec<[Arc<ZoneStoreEntry>; SMALL_ZONE_DIRECTORY_LIMIT]>,
     len: usize,
     active_count: usize,
 }
@@ -3303,6 +3307,7 @@ impl Default for ZoneDirectory {
         Self {
             by_origin: std::array::from_fn(|_| Arc::new(HashMap::new())),
             suffix_index: std::array::from_fn(|_| Arc::new(HashMap::new())),
+            small: SmallVec::new(),
             len: 0,
             active_count: 0,
         }
@@ -4574,6 +4579,15 @@ impl ZoneDirectory {
         self.active_count = self.active_count.saturating_add(usize::from(
             entry.state == ZoneState::Active && !entry.hidden,
         ));
+        if self.len <= SMALL_ZONE_DIRECTORY_LIMIT {
+            self.small
+                .retain(|cached| cached.origin_key != entry.origin_key);
+            self.small.push(entry.clone());
+            self.small
+                .sort_unstable_by_key(|cached| std::cmp::Reverse(cached.origin_label_count));
+        } else {
+            self.small.clear();
+        }
         Arc::make_mut(&mut self.suffix_index[suffix_shard]).insert(suffix_key, entry);
     }
 
@@ -4587,6 +4601,11 @@ impl ZoneDirectory {
         let suffix_key = canonical_reverse_label_key(&entry.origin);
         let suffix_shard = zone_directory_shard(&suffix_key);
         Arc::make_mut(&mut self.suffix_index[suffix_shard]).remove(suffix_key.as_slice());
+        if self.len <= SMALL_ZONE_DIRECTORY_LIMIT {
+            self.small = self.values().cloned().collect();
+            self.small
+                .sort_unstable_by_key(|cached| std::cmp::Reverse(cached.origin_label_count));
+        }
         Some(entry)
     }
 
@@ -4637,6 +4656,12 @@ impl ZoneDirectory {
         qname: &DomainName,
         qname_ascii_lowercase: bool,
     ) -> Option<&Arc<ZoneStoreEntry>> {
+        if !self.small.is_empty() {
+            return self
+                .small
+                .iter()
+                .find(|entry| !entry.hidden && qname.is_equal_or_subdomain_of(&entry.origin));
+        }
         let (qname_key, prefix_lengths) =
             canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
         for prefix_len in prefix_lengths.into_iter().rev() {
@@ -6565,6 +6590,95 @@ mod tests {
         assert!(!prefix_lengths.spilled());
         assert_eq!(key.as_slice(), b"\x04test\x07example\x05child\x03www");
         assert_eq!(prefix_lengths.as_slice(), &[5, 13, 19, 23]);
+    }
+
+    #[test]
+    fn small_directory_matches_suffix_index_across_publications() {
+        let store = ZoneStore::new();
+        let names: Vec<_> = [
+            ".",
+            "test.",
+            "example.test.",
+            "child.example.test.",
+            "other.test.",
+        ]
+        .into_iter()
+        .map(|name| DomainName::from_absolute_str(name).unwrap())
+        .collect();
+        let check = || {
+            let published = store.zones.load();
+            assert_eq!(
+                published.small.len(),
+                if published.len() <= SMALL_ZONE_DIRECTORY_LIMIT {
+                    published.len()
+                } else {
+                    0
+                }
+            );
+            let mut indexed = (**published).clone();
+            indexed.small.clear();
+            for text in [
+                ".",
+                "test.",
+                "example.test.",
+                "child.example.test.",
+                "www.child.example.test.",
+                "WWW.ChIlD.ExAmPlE.TeSt.",
+                "other.test.",
+                "outside.invalid.",
+            ] {
+                let qname = DomainName::from_absolute_str(text).unwrap();
+                for prefer_parent in [false, true] {
+                    let lookup = |directory: &ZoneDirectory| {
+                        prefer_parent
+                            .then(|| directory.find_parent_of_exact_match_ref(&qname, false))
+                            .flatten()
+                            .or_else(|| directory.find_best_match_ref(&qname, false))
+                            .map(|entry| {
+                                (
+                                    entry.origin_key.clone(),
+                                    entry.serial,
+                                    entry.state,
+                                    entry.hidden,
+                                )
+                            })
+                    };
+                    assert_eq!(
+                        lookup(&published),
+                        lookup(&indexed),
+                        "{text}, parent={prefer_parent}"
+                    );
+                }
+            }
+        };
+        check();
+        for (index, origin) in names.iter().enumerate() {
+            store.insert_snapshot(ZoneSnapshot::active(
+                origin.clone(),
+                Some(index as u32 + 1),
+                Vec::new(),
+            ));
+            check();
+        }
+        // Cross the indexed/small boundary in both directions, replace a
+        // cached entry, and retain an old immutable publication throughout.
+        assert!(store.remove_zone(&names[4]));
+        check();
+        let old = store.zones.load_full();
+        store.hide_zone(&names[3]);
+        check();
+        store.show_zone(&names[3]);
+        check();
+        store.insert_snapshot(ZoneSnapshot::active(names[3].clone(), Some(99), Vec::new()));
+        check();
+        assert_eq!(
+            old.find_best_match_ref(&names[3], true).unwrap().serial,
+            Some(4)
+        );
+        for origin in names[..4].iter().rev() {
+            assert!(store.remove_zone(origin));
+            check();
+        }
     }
 
     #[test]

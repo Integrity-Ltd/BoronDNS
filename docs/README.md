@@ -51,6 +51,8 @@ performance guarantee for the current release.
 - [Client benchmarks](dns-client-benchmark.md) and
   [loss matrix](dns-server-loss-matrix-benchmark.md): choose a measurement.
 - [Knot comparison](knot-comparison-benchmark.md): matched setup and retained results.
+- [GX10 AF_XDP tuning](gx10-af-xdp-benchmark-2026-09.md): dated hot-query results
+  and host-specific limits.
 - [IXFR scaling](ixfr-scaling-2026-08.md): measured update costs and their limits.
 - [Fuzzing](../fuzz/README.md), [two-host campaigns](two-host-fuzz-soak-campaign.md),
   and [large-surface soaks](large-surface-soak.md): sustained testing.

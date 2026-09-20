@@ -1,3 +1,77 @@
+    fn xdp_frame_size_config(frame_size: u32, max_udp_payload: u16) -> String {
+        format!(r#"
+            [server]
+            allow_non_rfc5936_cold_start = true
+            listen_udp = ["192.0.2.1:5300"]
+            listen_tcp = ["192.0.2.1:5300"]
+            [limits]
+            udp_backend = "af_xdp"
+            max_udp_payload = {max_udp_payload}
+            [xdp]
+            interface = "eth0"
+            redirect_object = "target/borondns-xdp-redirect.bpf.o"
+            umem_frame_size = {frame_size}
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.53:53"]
+        "#)
+    }
+
+    #[test]
+    fn accepts_two_kib_xdp_frames_with_bounded_udp_payload() {
+        for payload in [512, 1232, 1400] {
+            ServerConfig::from_toml_str(&xdp_frame_size_config(2048, payload))
+                .expect("two-KiB frames with a bounded payload must be configurable");
+        }
+    }
+
+    #[test]
+    fn xdp_frame_size_default_roundtrip_and_memory_estimate_are_consistent() {
+        let four = XdpConfig::default();
+        assert_eq!(four.umem_frame_size, 4096);
+        let parsed: XdpConfig = toml::from_str("").expect("legacy default config");
+        assert_eq!(parsed.umem_frame_size, 4096);
+        let two = XdpConfig { umem_frame_size: 2048, ..four.clone() };
+        assert_eq!(
+            four.estimated_memory_bytes(20) - two.estimated_memory_bytes(20),
+            20 * u128::from(four.umem_frame_count) * 2048
+        );
+        let roundtrip: XdpConfig = toml::from_str(&toml::to_string(&two).unwrap()).unwrap();
+        assert_eq!(roundtrip, two);
+        let inactive = xdp_frame_size_config(2048, 4096)
+            .replace("udp_backend = \"af_xdp\"", "udp_backend = \"std\"");
+        ServerConfig::from_toml_str(&inactive)
+            .expect("inactive XDP tuning must not change the standard UDP payload policy");
+    }
+
+    #[test]
+    fn unsafe_udp_override_does_not_bypass_small_xdp_frame_budget() {
+        let mut config = ServerConfig::parse_toml_str(&xdp_frame_size_config(2048, 8192))
+            .expect("parse before applying the startup-only override");
+        let path = write_secret_file("allow_large_udp_payload = true\n", 0o600);
+        config.load_unsafe_overrides(&path).unwrap();
+        let error = config.validate().expect_err("a frame-capacity limit is not an unsafe policy opt-in");
+        assert!(error.to_string().contains("umem_frame_size"));
+        assert!(error.to_string().contains("max_udp_payload"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_unsupported_xdp_frame_sizes_and_small_frames_with_large_udp() {
+        for frame_size in [0, 1024, 2047, 2049, 3072, 4097, 8192, u32::MAX] {
+            let error = ServerConfig::from_toml_str(&xdp_frame_size_config(frame_size, 1232))
+                .expect_err("unsupported frame size");
+            assert!(error.to_string().contains("umem_frame_size"));
+        }
+        for payload in [1401, 2048, 4096] {
+            let error = ServerConfig::from_toml_str(&xdp_frame_size_config(2048, payload))
+                .expect_err("small frames must not admit oversized responses");
+            assert!(error.to_string().contains("max_udp_payload"));
+        }
+        ServerConfig::from_toml_str(&xdp_frame_size_config(4096, 4096))
+            .expect("the four-KiB default retains the existing payload policy");
+    }
+
     #[test]
     fn rejects_too_small_udp_payload_limit() {
         let error = ServerConfig::from_toml_str(

@@ -8,7 +8,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::dns::DomainName;
+use crate::dns::{DomainName, skip_compressed_name};
 
 // BDS-NFR-MAINT-004 principal functional requirement references for TSIG
 // key, MAC, TCP stream, and error-response handling:
@@ -1237,8 +1237,10 @@ fn response_mac_input(request_mac: &[u8], message: &[u8], variables: &[u8]) -> V
 fn skip_questions(message: &[u8], qdcount: u16) -> Result<usize, TsigError> {
     let mut offset = DNS_HEADER_LEN;
     for _ in 0..qdcount {
-        let (_, consumed) =
-            DomainName::parse(message, offset).map_err(|_| TsigError::MalformedMessage)?;
+        // We only need the end of the question, not an allocated owner name.
+        // The shared scanner enforces the same label/pointer/length limits.
+        let consumed =
+            skip_compressed_name(message, offset).map_err(|_| TsigError::MalformedMessage)?;
         offset += consumed;
         if offset + 4 > message.len() {
             return Err(TsigError::MalformedMessage);

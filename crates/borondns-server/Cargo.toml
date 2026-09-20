@@ -8,6 +8,7 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
+arc-swap.workspace = true
 aya = { version = "0.13.1", optional = true }
 axum.workspace = true
 http-body.workspace = true

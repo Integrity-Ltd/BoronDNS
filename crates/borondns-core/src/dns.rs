@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, OnceCell, RefCell},
     collections::{HashMap, HashSet},
     fmt,
     hash::Hasher,
@@ -272,7 +272,15 @@ impl DomainName {
         packet: &[u8],
         offset: usize,
     ) -> Result<(Self, usize, bool), DnsParseError> {
-        let mut labels = Vec::new();
+        Self::parse_with_reusable_labels::<false>(packet, offset, Vec::new())
+    }
+
+    fn parse_with_reusable_labels<const REUSE: bool>(
+        packet: &[u8],
+        offset: usize,
+        mut labels: Vec<Vec<u8>>,
+    ) -> Result<(Self, usize, bool), DnsParseError> {
+        let mut label_count = 0usize;
         let mut pos = offset;
         let mut consumed = None;
         let mut followed_pointers = 0usize;
@@ -304,6 +312,9 @@ impl DomainName {
                     pos += 1;
                     if len == 0 {
                         let consumed = consumed.unwrap_or_else(|| pos - offset);
+                        if REUSE {
+                            labels.truncate(label_count);
+                        }
                         return Ok((Self { labels }, consumed, ascii_lowercase));
                     }
 
@@ -320,7 +331,13 @@ impl DomainName {
                     ascii_lowercase &= packet[pos..pos + label_len]
                         .iter()
                         .all(|byte| byte.to_ascii_lowercase() == *byte);
-                    labels.push(packet[pos..pos + label_len].to_vec());
+                    if REUSE && let Some(label) = labels.get_mut(label_count) {
+                        label.clear();
+                        label.extend_from_slice(&packet[pos..pos + label_len]);
+                    } else {
+                        labels.push(packet[pos..pos + label_len].to_vec());
+                    }
+                    label_count += 1;
                     pos += label_len;
                 }
                 _ => return Err(DnsParseError::FormErr),
@@ -614,7 +631,7 @@ pub(crate) fn canonical_name_key_from_labels<'a>(
     key
 }
 
-fn skip_compressed_name(packet: &[u8], offset: usize) -> Result<usize, DnsParseError> {
+pub(crate) fn skip_compressed_name(packet: &[u8], offset: usize) -> Result<usize, DnsParseError> {
     scan_compressed_name(packet, offset, None).map(|scan| scan.consumed)
 }
 
@@ -779,8 +796,15 @@ pub struct Question {
 
 impl Question {
     pub fn parse(packet: &[u8]) -> Result<Self, DnsParseError> {
+        Self::parse_with_reusable_labels::<false>(packet, Vec::new())
+    }
+
+    fn parse_with_reusable_labels<const REUSE: bool>(
+        packet: &[u8],
+        labels: Vec<Vec<u8>>,
+    ) -> Result<Self, DnsParseError> {
         let (qname, qname_len, qname_ascii_lowercase) =
-            DomainName::parse_with_ascii_lowercase(packet, DNS_HEADER_LEN)?;
+            DomainName::parse_with_reusable_labels::<REUSE>(packet, DNS_HEADER_LEN, labels)?;
         let qtype_offset = DNS_HEADER_LEN + qname_len;
         if qtype_offset + 4 > packet.len() {
             return Err(DnsParseError::FormErr);
@@ -1026,23 +1050,153 @@ pub fn answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
     lookup_observed: impl Fn(LookupMetrics),
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
-    let observer = LookupMetricsObserver {
-        callback: lookup_observed,
-    };
-    answer_message_with_notify_hooks_observer_and_zone_image(
-        packet,
+    ParsedDnsRequest::new(packet).answer_with_hooks(
         zone_store,
         options,
         notify_authorized,
         notify_accepted,
-        &observer,
+        lookup_observed,
         zone_image_provider,
     )
 }
 
+/// Packet-bound parsing state shared by transport policy and answer generation.
+/// Fields stay private so cached offsets and validation cannot be paired with
+/// another packet. Failed parses are cached too; no error is converted to a
+/// successful empty question or empty EDNS metadata.
+pub struct ParsedDnsRequest<'a> {
+    packet: &'a [u8],
+    header: Result<Header, DnsParseError>,
+    question: OnceCell<Result<Question, DnsParseError>>,
+    metadata: OnceCell<Result<RequestMetadata, EdnsError>>,
+}
+
+// At most eight label buffers of at most 64 bytes, plus eight Vec headers,
+// per OS thread. Taking ownership before parsing makes nested requests safe;
+// stored zone names never use this recycler.
+const QUERY_LABEL_CACHE_LIMIT: usize = 8;
+thread_local! {
+    static QUERY_LABEL_CACHE: RefCell<Option<Vec<Vec<u8>>>> = const { RefCell::new(None) };
+}
+
+impl Drop for ParsedDnsRequest<'_> {
+    fn drop(&mut self) {
+        let Some(Ok(question)) = self.question.take() else {
+            return;
+        };
+        let labels = question.qname.labels;
+        if labels.capacity() > QUERY_LABEL_CACHE_LIMIT
+            || labels.iter().any(|label| label.capacity() > 64)
+        {
+            return;
+        }
+        // TLS may already be tearing down. Failure simply frees the buffers.
+        let _ = QUERY_LABEL_CACHE.try_with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.is_none() {
+                *cache = Some(labels);
+            }
+        });
+    }
+}
+
+impl<'a> ParsedDnsRequest<'a> {
+    pub fn new(packet: &'a [u8]) -> Self {
+        Self {
+            packet,
+            header: Header::parse(packet),
+            question: OnceCell::new(),
+            metadata: OnceCell::new(),
+        }
+    }
+
+    pub fn header(&self) -> Option<&Header> {
+        self.header.as_ref().ok()
+    }
+
+    pub fn question(&self) -> Option<&Question> {
+        (self.header()?.qdcount == 1)
+            .then(|| self.question_result().ok())
+            .flatten()
+    }
+
+    fn question_result(&self) -> Result<&Question, &DnsParseError> {
+        self.question
+            .get_or_init(|| {
+                let labels = QUERY_LABEL_CACHE
+                    .try_with(|cache| cache.borrow_mut().take())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                Question::parse_with_reusable_labels::<true>(self.packet, labels)
+            })
+            .as_ref()
+    }
+
+    fn metadata(&self) -> Result<RequestMetadata, EdnsError> {
+        *self.metadata.get_or_init(|| {
+            let header = self.header().ok_or(EdnsError::FormErr)?;
+            match header.qdcount {
+                0 => RequestMetadata::parse_without_question(header, self.packet),
+                1 => RequestMetadata::parse(
+                    header,
+                    self.packet,
+                    self.question_result().map_err(|_| EdnsError::FormErr)?,
+                ),
+                _ => Err(EdnsError::FormErr),
+            }
+        })
+    }
+
+    pub fn udp_payload_ceiling(&self, max_udp_payload: u16) -> Option<usize> {
+        let header = self.header()?;
+        if header.is_response() || header.qdcount > 1 {
+            return None;
+        }
+        let metadata = self.metadata().ok()?;
+        let client_payload = metadata.edns.map_or(512, |edns| edns.payload_size);
+        Some(usize::from(client_payload.min(max_udp_payload)))
+    }
+
+    pub fn cookie_status(
+        &self,
+        context: Option<DnsCookieContext>,
+    ) -> Option<DnsCookieRequestStatus> {
+        let header = self.header()?;
+        if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount > 1 {
+            return None;
+        }
+        dns_cookie_status_from_metadata(self.metadata().ok()?, context)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn answer_with_hooks(
+        &self,
+        zone_store: &ZoneStore,
+        options: AnswerOptions,
+        notify_authorized: impl Fn(&DomainName, u16) -> bool,
+        notify_accepted: impl Fn(&DomainName, u16, Option<u32>) -> bool,
+        lookup_observed: impl Fn(LookupMetrics),
+        zone_image_provider: ZoneImageProvider<'_>,
+    ) -> DatagramAction {
+        let observer = LookupMetricsObserver {
+            callback: lookup_observed,
+        };
+        answer_message_with_notify_hooks_observer_and_zone_image(
+            self,
+            zone_store,
+            options,
+            notify_authorized,
+            notify_accepted,
+            &observer,
+            zone_image_provider,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn answer_message_with_notify_hooks_observer_and_zone_image(
-    packet: &[u8],
+    request: &ParsedDnsRequest<'_>,
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
@@ -1050,8 +1204,9 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
-    let header = match Header::parse(packet) {
-        Ok(header) => header,
+    let packet = request.packet;
+    let header = match request.header.as_ref() {
+        Ok(header) => header.clone(),
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
         Err(DnsParseError::FormErr) => return DatagramAction::Discard,
     };
@@ -1090,7 +1245,7 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
 
     answer_query_message(
         &header,
-        packet,
+        request,
         zone_store,
         options,
         query_observer,
@@ -1127,14 +1282,14 @@ where
 
 fn answer_query_message(
     header: &Header,
-    packet: &[u8],
+    request: &ParsedDnsRequest<'_>,
     zone_store: &ZoneStore,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
     if header.qdcount == 0 {
-        return answer_empty_question_cookie_query(header, packet, options);
+        return answer_empty_question_cookie_query(header, request, options);
     }
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -1150,7 +1305,7 @@ fn answer_query_message(
         ));
     }
 
-    let question = match Question::parse(packet) {
+    let question = match request.question_result() {
         Ok(question) => question,
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
         Err(DnsParseError::FormErr) => {
@@ -1168,14 +1323,14 @@ fn answer_query_message(
         }
     };
 
-    let metadata = match RequestMetadata::parse(header, packet, &question) {
+    let metadata = match request.metadata() {
         Ok(metadata) => metadata,
         Err(EdnsError::FormErr) => {
             return DatagramAction::Respond(build_response(
                 header,
                 Rcode::FormErr,
                 false,
-                Some(&question),
+                Some(question),
                 &[],
                 &[],
                 &[],
@@ -1188,7 +1343,7 @@ fn answer_query_message(
                 header,
                 Rcode::FormErr,
                 false,
-                Some(&question),
+                Some(question),
                 &[],
                 &[],
                 &[],
@@ -1201,7 +1356,7 @@ fn answer_query_message(
                 header,
                 Rcode::NoError,
                 false,
-                Some(&question),
+                Some(question),
                 &[],
                 &[],
                 &[],
@@ -1216,7 +1371,7 @@ fn answer_query_message(
             header,
             Rcode::FormErr,
             false,
-            Some(&question),
+            Some(question),
             &[],
             &[],
             &[],
@@ -1230,7 +1385,7 @@ fn answer_query_message(
             header,
             Rcode::BadCookie,
             false,
-            Some(&question),
+            Some(question),
             &[],
             &[],
             &[],
@@ -1240,7 +1395,7 @@ fn answer_query_message(
     }
 
     if question.qclass == DNS_CLASS_CH {
-        return answer_chaos_query(header, &question, metadata, options);
+        return answer_chaos_query(header, question, metadata, options);
     }
 
     if let Some(response_code) = rejected_qtype(question.qtype) {
@@ -1248,7 +1403,7 @@ fn answer_query_message(
             header,
             response_code,
             false,
-            Some(&question),
+            Some(question),
             &[],
             &[],
             &[],
@@ -1262,7 +1417,7 @@ fn answer_query_message(
             header,
             Rcode::Refused,
             false,
-            Some(&question),
+            Some(question),
             &[],
             &[],
             &[],
@@ -1281,7 +1436,7 @@ fn answer_query_message(
                     header,
                     Rcode::ServFail,
                     false,
-                    Some(&question),
+                    Some(question),
                     &[],
                     &[],
                     &[],
@@ -1292,7 +1447,7 @@ fn answer_query_message(
             if published_zone.has_incremental_overlay() {
                 return answer_with_incremental_overlay(
                     header,
-                    &question,
+                    question,
                     metadata,
                     options,
                     query_observer,
@@ -1303,7 +1458,7 @@ fn answer_query_message(
             }
             match try_answer_with_zone_image(
                 header,
-                &question,
+                question,
                 metadata,
                 options,
                 query_observer,
@@ -1315,7 +1470,7 @@ fn answer_query_message(
                 ZoneImageAnswerAttempt::Failure(reason) => {
                     query_observer.observe_zone_image_failure(reason);
                     DatagramAction::Respond(build_zone_image_failure_response(
-                        header, &question, metadata, options,
+                        header, question, metadata, options,
                     ))
                 }
             }
@@ -1325,7 +1480,7 @@ fn answer_query_message(
             header,
             Rcode::Refused,
             false,
-            Some(&question),
+            Some(question),
             &[],
             &[],
             &[],
@@ -1494,10 +1649,10 @@ fn answer_with_incremental_overlay(
 
 fn answer_empty_question_cookie_query(
     header: &Header,
-    packet: &[u8],
+    request: &ParsedDnsRequest<'_>,
     options: AnswerOptions,
 ) -> DatagramAction {
-    let metadata = match RequestMetadata::parse_without_question(header, packet) {
+    let metadata = match request.metadata() {
         Ok(metadata) => metadata,
         Err(EdnsError::FormErr) => {
             return DatagramAction::Respond(build_response(
@@ -4094,14 +4249,37 @@ pub fn dns_cookie_request_status(
     if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount > 1 {
         return None;
     }
-    let metadata = if header.qdcount == 0 {
-        RequestMetadata::parse_without_question(&header, packet).ok()?
+    let question = if header.qdcount == 1 {
+        Some(Question::parse(packet).ok()?)
     } else {
-        let Ok(question) = Question::parse(packet) else {
-            return None;
-        };
-        RequestMetadata::parse(&header, packet, &question).ok()?
+        None
     };
+    dns_cookie_request_status_from_parsed(packet, &header, question.as_ref(), context)
+}
+
+/// Inspect COOKIE status while reusing the header and question parsed from
+/// this same packet. Section/EDNS validation is still performed here.
+pub fn dns_cookie_request_status_from_parsed(
+    packet: &[u8],
+    header: &Header,
+    question: Option<&Question>,
+    context: Option<DnsCookieContext>,
+) -> Option<DnsCookieRequestStatus> {
+    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount > 1 {
+        return None;
+    }
+    let metadata = if header.qdcount == 0 {
+        RequestMetadata::parse_without_question(header, packet).ok()?
+    } else {
+        RequestMetadata::parse(header, packet, question?).ok()?
+    };
+    dns_cookie_status_from_metadata(metadata, context)
+}
+
+fn dns_cookie_status_from_metadata(
+    metadata: RequestMetadata,
+    context: Option<DnsCookieContext>,
+) -> Option<DnsCookieRequestStatus> {
     let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
         return Some(DnsCookieRequestStatus::NoCookie);
     };

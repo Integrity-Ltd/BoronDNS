@@ -1,4 +1,5 @@
 use std::{
+    cell::OnceCell,
     collections::HashMap,
     future::Future,
     io::ErrorKind,
@@ -14,11 +15,10 @@ use borondns_core::{
     config::{MAX_UDP_BATCH_SIZE, UdpBackend, UdpIdleStrategy, UdpRuntime, XdpConfig},
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
-        DatagramAction, DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode, Header,
-        LookupMetrics, LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
-        ZoneImageProvider, answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
-        chaos_query_observation_from_parsed, default_zone_image_provider,
-        dns_cookie_request_status, request_udp_payload_ceiling,
+        DatagramAction, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode,
+        Header, LookupMetrics, LookupTermination, Opcode, ParsedDnsRequest, Question, Rcode,
+        RecordType, Transport, ZoneImageProvider, chaos_query_observation_from_parsed,
+        default_zone_image_provider,
     },
     zone::ZoneStore,
 };
@@ -30,6 +30,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(feature = "af-xdp")]
 use crate::af_xdp;
+use crate::dns_cookie::DnsCookieSecrets;
 use crate::rate_limit::rrl_truncated_response;
 use crate::{
     CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore, NotifyAuthority,
@@ -464,13 +465,18 @@ where
             record_udp_worker_source_ports(&settings.metrics, udp_worker_id, inbound);
             outbound.clear();
 
+            let cookie_batch = UdpCookieBatch::new(&settings);
             for packet in inbound {
                 if !udp_inbound_has_reply_port(packet) {
                     continue;
                 }
-                if let Some(response) =
-                    handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
-                {
+                if let Some(response) = handle_udp_datagram(
+                    packet.payload(),
+                    packet.peer,
+                    &zones,
+                    &settings,
+                    &cookie_batch,
+                ) {
                     outbound.push(response.with_target(packet.target()));
                 }
             }
@@ -739,7 +745,47 @@ mod dedicated_worker_ownership_tests {
         time::Duration,
     };
 
-    use super::{DedicatedUdpWorkerControl, DedicatedUdpWorkerGuard};
+    use super::{
+        DedicatedUdpWorkerControl, DedicatedUdpWorkerGuard, DnsCookieSecretStore, UdpCookieBatch,
+    };
+
+    #[test]
+    fn cookie_batch_keeps_a_coherent_pair_and_next_batch_checks_rotation() {
+        let store = DnsCookieSecretStore::new([1; 16], Some(Duration::ZERO));
+        let batch = UdpCookieBatch {
+            store: Some(&store),
+            secrets: std::cell::OnceCell::new(),
+        };
+        assert!(
+            batch.secrets.get().is_none(),
+            "unused batches do not load or rotate keys"
+        );
+        let first = batch.current().unwrap().clone();
+        assert_eq!(first.previous.as_deref(), Some(&[1; 16]));
+        let rotated = store.current_with_generator(|| Ok([9; 16]));
+        assert_eq!(rotated.previous.as_deref(), Some(&*first.current));
+        assert_eq!(
+            batch.current(),
+            Some(&first),
+            "a concurrent rotation cannot tear the batch pair"
+        );
+        drop(batch);
+        let next = UdpCookieBatch {
+            store: Some(&store),
+            secrets: std::cell::OnceCell::new(),
+        };
+        assert_eq!(
+            next.current().unwrap().previous.as_deref(),
+            Some(&[9; 16]),
+            "a fresh batch performs its own due rotation"
+        );
+        let disabled = UdpCookieBatch {
+            store: None,
+            secrets: std::cell::OnceCell::new(),
+        };
+        assert!(disabled.current().is_none());
+        assert!(disabled.secrets.get().is_none());
+    }
 
     #[test]
     fn dropping_dedicated_worker_guard_requests_stop_without_blocking() {
@@ -871,13 +917,18 @@ fn run_dedicated_std_udp_worker(
                 .record_udp_worker_receive_batch(worker_id, active);
 
             outbound.clear();
+            let cookie_batch = UdpCookieBatch::new(&settings);
             for packet in &inbound[..active] {
                 if !udp_inbound_has_reply_port(packet) {
                     continue;
                 }
-                if let Some(response) =
-                    handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
-                {
+                if let Some(response) = handle_udp_datagram(
+                    packet.payload(),
+                    packet.peer,
+                    &zones,
+                    &settings,
+                    &cookie_batch,
+                ) {
                     outbound.push(response.with_target(packet.target()));
                 }
             }
@@ -1368,12 +1419,35 @@ pub(crate) fn ensure_udp_admission_open(admission_open: &AtomicBool) -> std::io:
 
 impl UdpInbound {
     pub(crate) fn new() -> Self {
+        Self::with_buffer(vec![0; UDP_PACKET_BUFFER_LEN])
+    }
+
+    #[cfg(feature = "af-xdp")]
+    pub(crate) fn new_af_xdp() -> Self {
+        Self::with_buffer(Vec::new())
+    }
+
+    fn with_buffer(buffer: Vec<u8>) -> Self {
         Self {
-            buffer: vec![0; UDP_PACKET_BUFFER_LEN],
+            buffer,
             len: 0,
             peer: SocketAddr::from(([0, 0, 0, 0], 0)),
             target: UdpPacketTarget::Socket(SocketAddr::from(([0, 0, 0, 0], 0))),
         }
+    }
+
+    #[cfg(feature = "af-xdp")]
+    pub(crate) fn copy_af_xdp_payload(&mut self, payload: &[u8]) {
+        // AF_XDP has validated the complete frame and payload length before
+        // this copy. Grow in bounded power-of-two buckets: ordinary queries
+        // need no separate 4 KiB allocation, while larger packets still fit.
+        assert!(payload.len() <= UDP_PACKET_BUFFER_LEN);
+        if self.buffer.len() < payload.len() {
+            self.buffer
+                .resize(payload.len().next_power_of_two().max(128), 0);
+        }
+        self.buffer[..payload.len()].copy_from_slice(payload);
+        self.len = payload.len();
     }
 
     pub(crate) fn payload(&self) -> &[u8] {
@@ -1394,13 +1468,49 @@ impl UdpOutbound {
 
 pub(crate) const UDP_PACKET_BUFFER_LEN: usize = 4096;
 
+/// A receive batch is processed synchronously, without yielding between
+/// queries. Lazily take one coherent current/previous key pair for that batch;
+/// discard it before waiting for more traffic. This amortizes the secret-store
+/// load, rotation clock check and zeroization, without retaining keys across
+/// idle periods or changing the per-query Cookie timestamp and validation.
+struct UdpCookieBatch<'a> {
+    store: Option<&'a DnsCookieSecretStore>,
+    secrets: OnceCell<DnsCookieSecrets>,
+}
+
+impl<'a> UdpCookieBatch<'a> {
+    fn new(settings: &'a UdpServerSettings) -> Self {
+        Self {
+            store: settings
+                .dns_cookie
+                .policy
+                .is_some()
+                .then_some(&settings.dns_cookie_secrets),
+            secrets: OnceCell::new(),
+        }
+    }
+
+    fn current(&self) -> Option<&DnsCookieSecrets> {
+        self.store
+            .map(|store| self.secrets.get_or_init(|| store.current()))
+    }
+}
+
 fn handle_udp_datagram(
     packet: &[u8],
     peer: SocketAddr,
     zones: &ZoneStore,
     settings: &UdpServerSettings,
+    cookie_batch: &UdpCookieBatch<'_>,
 ) -> Option<UdpOutbound> {
-    handle_udp_datagram_with_optional_prepared_hook(packet, peer, zones, settings, None)
+    handle_udp_datagram_with_optional_prepared_hook(
+        packet,
+        peer,
+        zones,
+        settings,
+        cookie_batch,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -1416,6 +1526,7 @@ pub(crate) fn handle_udp_datagram_with_prepared_hook(
         peer,
         zones,
         settings,
+        &UdpCookieBatch::new(settings),
         Some(prepared_hook),
     )
 }
@@ -1425,6 +1536,7 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     peer: SocketAddr,
     zones: &ZoneStore,
     settings: &UdpServerSettings,
+    cookie_batch: &UdpCookieBatch<'_>,
     prepared_hook: Option<&dyn Fn()>,
 ) -> Option<UdpOutbound> {
     let peer_ip = peer.ip();
@@ -1446,28 +1558,39 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         return None;
     };
     let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
-    let tsig_udp_ceiling = request_udp_payload_ceiling(&prepared.packet, settings.max_udp_payload)
-        .unwrap_or_else(|| usize::from(settings.max_udp_payload.min(512)));
+    let request = ParsedDnsRequest::new(&prepared.packet);
+    // Normal answers already enforce the client's EDNS limit in the core.
+    // Only immediate errors and TSIG signing need a separate ceiling here.
+    let tsig_udp_ceiling =
+        if prepared.immediate_response.is_some() || prepared.response_tsig.is_some() {
+            request
+                .udp_payload_ceiling(settings.max_udp_payload)
+                .unwrap_or_else(|| usize::from(settings.max_udp_payload.min(512)))
+        } else {
+            usize::from(settings.max_udp_payload)
+        };
     let parse_duration = parse_started.map(|started| started.elapsed());
-    let parsed_header = Header::parse(&prepared.packet).ok();
-    let parsed_question = parsed_header
-        .as_ref()
-        .filter(|header| header.qdcount == 1)
-        .and_then(|_| Question::parse(&prepared.packet).ok());
-    let dns_cookie_secrets = settings
-        .dns_cookie
-        .policy
-        .is_some()
-        .then(|| settings.dns_cookie_secrets.current());
+    let parsed_header = request.header();
+    let parsed_question = request.question();
+    let dns_cookie_secrets = cookie_batch.current();
+    // The packet-bound metadata has already validated all sections. A lenient
+    // query without COOKIE cannot mint or validate a token, so it needs no
+    // wall-clock timestamp. Secret rotation above still runs on this traffic.
+    let plain_lenient_query = settings.dns_cookie.policy == Some(DnsCookiePolicy::Lenient)
+        && request.cookie_status(None) == Some(DnsCookieRequestStatus::NoCookie);
     let dns_cookie = dns_cookie_secrets
         .as_ref()
+        .filter(|_| !plain_lenient_query)
         .and_then(|secrets| dns_cookie_context(peer_ip, secrets, settings.dns_cookie));
-    let dns_cookie_status =
-        dns_cookie.and_then(|context| dns_cookie_request_status(&prepared.packet, Some(context)));
+    let dns_cookie_status = if plain_lenient_query {
+        Some(DnsCookieRequestStatus::NoCookie)
+    } else {
+        dns_cookie.and_then(|context| request.cookie_status(Some(context)))
+    };
     let cookie_validated = dns_cookie_status == Some(DnsCookieRequestStatus::ValidServerCookie);
     let query_metrics = observe_query_metrics_from_parsed(
-        parsed_header.as_ref(),
-        parsed_question.as_ref(),
+        parsed_header,
+        parsed_question,
         zones,
         &settings.metrics,
         QueryObservationOptions {
@@ -1479,7 +1602,7 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     let query_tsig_authenticated = prepared.tsig_authenticated || prepared.response_tsig.is_some();
     let query_cache_ineligible = response_cache_ineligible_reason(
         query_tsig_authenticated,
-        dns_cookie.is_some(),
+        settings.dns_cookie.policy.is_some(),
         settings.rrl.enabled() && !query_tsig_authenticated && !cookie_validated,
         settings.edns_padding_block_size,
     );
@@ -1519,12 +1642,8 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         version: &settings.chaos_version,
         hostname: &settings.chaos_hostname,
     };
-    let chaos_observation = chaos_query_observation_from_parsed(
-        parsed_header.as_ref()?,
-        parsed_question.as_ref(),
-        &settings.nsid,
-        chaos,
-    );
+    let chaos_observation =
+        chaos_query_observation_from_parsed(parsed_header?, parsed_question, &settings.nsid, chaos);
     let compose_started = settings.metrics.start_pipeline_timer();
     let answer_options = AnswerOptions {
         transport: Transport::Udp,
@@ -1565,8 +1684,7 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     let lookup_observed = |lookup_metrics| {
         record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
     };
-    let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
-        &prepared.packet,
+    let action = request.answer_with_hooks(
         zones,
         answer_options,
         notify_authorized,

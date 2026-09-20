@@ -28,6 +28,8 @@ UNSAFE-BORONDNS-SERVER-AF-XDP-006	crates/borondns-server/src/af_xdp.rs	let recei
 UNSAFE-BORONDNS-SERVER-AF-XDP-007	crates/borondns-server/src/af_xdp.rs	let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
 UNSAFE-BORONDNS-SERVER-AF-XDP-008	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
 UNSAFE-BORONDNS-SERVER-AF-XDP-009	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-010	crates/borondns-server/src/af_xdp.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-011	crates/borondns-server/src/af_xdp.rs	unsafe {
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-001	crates/borondns-server/src/privilege.rs	unsafe { std::mem::zeroed() }
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-002	crates/borondns-server/src/privilege.rs	unsafe {
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-003	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::initgroups(name.as_ptr(), gid) })

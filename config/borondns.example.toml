@@ -315,6 +315,8 @@ zsm_loading_warning_threshold_secs = 3600
 # of 64. Validation caps UMEM frames at 262144, every ring at 65536, and the
 # effective batch at 1024. The conservative aggregate estimate across all
 # effective queues must remain at or below 32 GiB.
+# 2048-byte frames require max_udp_payload <= 1400; 4096 remains the default.
+#umem_frame_size = 4096
 #umem_frame_count = 4096
 #rx_ring_size = 1024
 #tx_ring_size = 1024

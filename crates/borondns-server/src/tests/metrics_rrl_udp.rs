@@ -5,6 +5,89 @@ const LINUX_ERRNO_EBUSY: i32 = 16;
 const LINUX_ERRNO_ENOBUFS: i32 = 105;
 
 #[test]
+fn cookie_counters_remain_exact_with_more_threads_than_shards() {
+    let metrics = RuntimeMetrics::new_with_settings(
+        1,
+        DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+        false,
+        MetricsHotPathDetail::Off,
+    );
+    let source = "192.0.2.1".parse().unwrap();
+    let prefix_settings = cookie_prefix_metrics_for_test();
+    let barrier = std::sync::Barrier::new(128);
+    std::thread::scope(|scope| {
+        for _ in 0..128 {
+            scope.spawn(|| {
+                barrier.wait();
+                for _ in 0..1000 {
+                    for status in [
+                        DnsCookieRequestStatus::NoCookie,
+                        DnsCookieRequestStatus::ClientCookieOnly,
+                        DnsCookieRequestStatus::ValidServerCookie,
+                        DnsCookieRequestStatus::InvalidServerCookie,
+                    ] {
+                        metrics.record_dns_cookie_status(status, source, prefix_settings);
+                    }
+                }
+            });
+        }
+    });
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.dns_cookie_no_cookie, 128_000);
+    assert_eq!(snapshot.dns_cookie_client_only, 128_000);
+    assert_eq!(snapshot.dns_cookie_valid_server, 128_000);
+    assert_eq!(snapshot.dns_cookie_invalid_server, 128_000);
+    assert_eq!(RuntimeMetrics::new().snapshot().dns_cookie_no_cookie, 0);
+}
+
+#[test]
+fn udp_unsigned_query_still_validates_question_and_trailing_bytes() {
+    let zones = active_example_zone();
+    let settings = udp_settings_for_test(RuntimeMetrics::new(), RrlConfig::default());
+    let peer = "192.0.2.1:53000".parse().unwrap();
+    let valid = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let mut trailing = valid.clone();
+    trailing.push(0xff);
+    let mut truncated = valid.clone();
+    truncated.pop();
+    for packet in [trailing, truncated] {
+        let response = handle_udp_datagram_with_prepared_hook(&packet, peer, &zones, &settings, &|| {})
+            .expect("malformed unsigned query gets FORMERR")
+            .response;
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+    }
+    let response = handle_udp_datagram_with_prepared_hook(&valid, peer, &zones, &settings, &|| {})
+        .expect("ordinary query still works")
+        .response;
+    assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+}
+
+#[test]
+fn lenient_plain_udp_query_keeps_cookie_rotation_metrics_and_answer_bytes() {
+    let zones = active_example_zone();
+    let metrics = RuntimeMetrics::new();
+    let mut settings = udp_settings_for_test(metrics.clone(), RrlConfig::default());
+    settings.dns_cookie_secrets = DnsCookieSecretStore::new_at(
+        [7; 16], None, Some(std::time::Duration::from_secs(60)),
+        std::time::Instant::now() - std::time::Duration::from_secs(120),
+    );
+    let peer: SocketAddr = "192.0.2.1:53000".parse().unwrap();
+    let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let response = handle_udp_datagram_with_prepared_hook(&packet, peer, &zones, &settings, &|| {})
+        .expect("plain query response").response;
+    let secrets = settings.dns_cookie_secrets.current_with_generator(|| {
+        panic!("plain query must already have handled the due rotation")
+    });
+    let mut options = borondns_core::dns::AnswerOptions::udp(settings.max_udp_payload);
+    options.dns_cookie = crate::dns_cookie_context(peer.ip(), &secrets, settings.dns_cookie);
+    let expected = borondns_core::dns::answer_message_with_notify_hooks(
+        &packet, &zones, options, |_, _| false, |_, _, _| false,
+    );
+    assert_eq!(borondns_core::dns::DatagramAction::Respond(response), expected);
+    assert_eq!(metrics.snapshot().dns_cookie_no_cookie, 1);
+}
+
+#[test]
 fn query_metrics_count_configured_zone_queries_only() {
     let zones = ZoneStore::new();
     let active_origin = DomainName::from_absolute_str("example.test.").unwrap();

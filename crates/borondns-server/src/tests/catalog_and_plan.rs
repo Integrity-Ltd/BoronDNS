@@ -4644,6 +4644,19 @@ allow_non_rfc5936_cold_start = true
 }
 
 #[test]
+fn unsigned_query_preparation_borrows_the_original_packet() {
+    let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let authority = NotifyAuthority::default();
+    let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.1".parse().unwrap())
+        .expect("ordinary query is admitted");
+    let prepared = prepare_query_tsig_packet(prepared, &authority);
+    assert_eq!(&prepared.packet[..], packet.as_slice());
+    assert_eq!(prepared.packet.as_ptr(), packet.as_ptr(), "unsigned preparation must not allocate a packet copy");
+    assert!(!prepared.tsig_authenticated);
+    assert!(prepared.response_tsig.is_none());
+}
+
+#[test]
 fn ordinary_query_with_unknown_tsig_key_gets_badkey_response() {
     let config = ServerConfig::from_toml_str(
         r#"
@@ -4674,7 +4687,7 @@ allow_non_rfc5936_cold_start = true
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: signed.message,
+            packet: signed.message.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4708,7 +4721,7 @@ fn ordinary_query_with_bad_tsig_mac_gets_badsig_response() {
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: bad,
+            packet: bad.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4740,7 +4753,7 @@ fn ordinary_query_with_too_short_tsig_mac_gets_formerr_without_tsig() {
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: bad,
+            packet: bad.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4769,7 +4782,7 @@ fn ordinary_query_with_overlong_tsig_mac_gets_formerr_without_tsig() {
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: malformed,
+            packet: malformed.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4795,7 +4808,7 @@ fn ordinary_query_with_nonzero_request_tsig_error_gets_formerr_without_tsig() {
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: malformed,
+            packet: malformed.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4821,7 +4834,7 @@ fn ordinary_query_with_hmac_md5_tsig_gets_unsigned_badkey_response() {
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: bad,
+            packet: bad.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,
@@ -4850,7 +4863,7 @@ fn ordinary_query_outside_tsig_fudge_gets_signed_badtime_echoing_request_time_an
 
     let prepared = prepare_query_tsig_packet(
         PreparedDnsMessage {
-            packet: signed.message,
+            packet: signed.message.into(),
             response_tsig: None,
             immediate_response: None,
             tsig_authenticated: false,

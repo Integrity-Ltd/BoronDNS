@@ -76,7 +76,7 @@ pub const DEFAULT_HEALTH_MAX_CONNECTIONS: usize = 128;
 /// Number of queue slots in the shipped `BORONDNS_XSKS` eBPF redirect map.
 /// The eBPF crate has a compile-time contract test for the same value.
 pub const XDP_REDIRECT_MAP_CAPACITY: usize = 64;
-/// Maximum frames in one AF_XDP UMEM. With the xdp crate's 4 KiB frames this
+/// Maximum frames in one AF_XDP UMEM. With the default 4 KiB frames this
 /// permits a 1 GiB queue-local packet pool without allowing a configuration
 /// typo to request a multi-terabyte mapping and frame freelist.
 pub const MAX_XDP_UMEM_FRAME_COUNT: u32 = 262_144;
@@ -89,7 +89,10 @@ pub const MAX_XDP_BATCH_SIZE: usize = 1_024;
 /// queues. GX10-class 128 GiB systems retain ample headroom for zones, the
 /// runtime, and the kernel even at this intentionally generous ceiling.
 pub const MAX_XDP_ESTIMATED_MEMORY_BYTES: u128 = 32 * 1024 * 1024 * 1024;
-const XDP_UMEM_FRAME_BYTES: u128 = 4_096;
+const DEFAULT_XDP_UMEM_FRAME_SIZE: u32 = 4_096;
+// Conservative response budget for 2 KiB frames with kernel headroom and
+// Ethernet/IP/UDP headers, including IPv4 options. Not an RFC payload limit.
+const MAX_SMALL_XDP_FRAME_UDP_PAYLOAD: u16 = 1_400;
 // UdpInbound owns a maximum-size DNS datagram buffer. Round its remaining
 // metadata up so validation remains conservative and independent of the
 // server crate's concrete layout.
@@ -420,6 +423,13 @@ impl ServerConfig {
         self.xdp
             .validate(self.limits.udp_backend, self.limits.udp_reuseport_workers)?;
         if self.limits.udp_backend == UdpBackend::AfXdp {
+            if self.xdp.umem_frame_size == 2048
+                && self.limits.max_udp_payload > MAX_SMALL_XDP_FRAME_UDP_PAYLOAD
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "limits.max_udp_payload must not exceed {MAX_SMALL_XDP_FRAME_UDP_PAYLOAD} when xdp.umem_frame_size = 2048; use 4096-byte frames for larger payloads"
+                )));
+            }
             let listeners = self.dns_udp_listeners();
             if listeners.len() != 1 {
                 return Err(ConfigError::Invalid(format!(
@@ -2784,6 +2794,8 @@ pub struct XdpConfig {
     pub queue_id: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queue_ids: Vec<u32>,
+    #[serde(default = "default_xdp_umem_frame_size")]
+    pub umem_frame_size: u32,
     #[serde(default = "default_xdp_umem_frame_count")]
     pub umem_frame_count: u32,
     #[serde(default = "default_xdp_rx_ring_size")]
@@ -2812,6 +2824,7 @@ impl Default for XdpConfig {
             mode: XdpMode::default(),
             queue_id: 0,
             queue_ids: Vec::new(),
+            umem_frame_size: default_xdp_umem_frame_size(),
             umem_frame_count: default_xdp_umem_frame_count(),
             rx_ring_size: default_xdp_rx_ring_size(),
             tx_ring_size: default_xdp_tx_ring_size(),
@@ -2844,6 +2857,11 @@ impl XdpConfig {
         if udp_backend == UdpBackend::AfXdp && self.redirect_object.is_none() {
             return Err(ConfigError::Invalid(
                 "xdp.redirect_object must be set when limits.udp_backend = \"af_xdp\"".to_owned(),
+            ));
+        }
+        if !matches!(self.umem_frame_size, 2048 | 4096) {
+            return Err(ConfigError::Invalid(
+                "xdp.umem_frame_size must be 2048 or 4096".to_owned(),
             ));
         }
         if self.umem_frame_count == 0 {
@@ -2950,7 +2968,8 @@ impl XdpConfig {
     }
 
     fn estimated_memory_bytes(&self, queue_count: usize) -> u128 {
-        let umem = u128::from(self.umem_frame_count).saturating_mul(XDP_UMEM_FRAME_BYTES);
+        let umem =
+            u128::from(self.umem_frame_count).saturating_mul(u128::from(self.umem_frame_size));
         let effective_batch = self
             .batch_size
             .min(self.rx_ring_size as usize)
@@ -4119,6 +4138,10 @@ fn default_udp_batch_size() -> usize {
 
 fn default_udp_reuseport_workers() -> usize {
     1
+}
+
+fn default_xdp_umem_frame_size() -> u32 {
+    DEFAULT_XDP_UMEM_FRAME_SIZE
 }
 
 fn default_xdp_umem_frame_count() -> u32 {

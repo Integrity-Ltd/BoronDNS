@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::{
@@ -3764,8 +3765,8 @@ fn notify_sources_for_catalog_member_zone(
     sources
 }
 
-struct PreparedDnsMessage {
-    packet: Vec<u8>,
+struct PreparedDnsMessage<'a> {
+    packet: Cow<'a, [u8]>,
     response_tsig: Option<ResponseTsig>,
     immediate_response: Option<Vec<u8>>,
     tsig_authenticated: bool,
@@ -3780,21 +3781,21 @@ struct ResponseTsig {
 }
 
 #[cfg(test)]
-fn prepare_notify_packet(
-    packet: &[u8],
+fn prepare_notify_packet<'a>(
+    packet: &'a [u8],
     notify_authority: &NotifyAuthority,
     source: IpAddr,
-) -> Option<PreparedDnsMessage> {
+) -> Option<PreparedDnsMessage<'a>> {
     prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, None, None)
 }
 
-fn prepare_notify_packet_with_metrics(
-    packet: &[u8],
+fn prepare_notify_packet_with_metrics<'a>(
+    packet: &'a [u8],
     notify_authority: &NotifyAuthority,
     source: IpAddr,
     metrics: &RuntimeMetrics,
     notify_log_limiter: &NotifyLogLimiter,
-) -> Option<PreparedDnsMessage> {
+) -> Option<PreparedDnsMessage<'a>> {
     prepare_notify_packet_with_optional_metrics(
         packet,
         notify_authority,
@@ -3804,15 +3805,15 @@ fn prepare_notify_packet_with_metrics(
     )
 }
 
-fn prepare_notify_packet_with_optional_metrics(
-    packet: &[u8],
+fn prepare_notify_packet_with_optional_metrics<'a>(
+    packet: &'a [u8],
     notify_authority: &NotifyAuthority,
     source: IpAddr,
     metrics: Option<&RuntimeMetrics>,
     notify_log_limiter: Option<&NotifyLogLimiter>,
-) -> Option<PreparedDnsMessage> {
+) -> Option<PreparedDnsMessage<'a>> {
     let unsigned = || PreparedDnsMessage {
-        packet: packet.to_vec(),
+        packet: Cow::Borrowed(packet),
         response_tsig: None,
         immediate_response: None,
         tsig_authenticated: false,
@@ -3861,7 +3862,7 @@ fn prepare_notify_packet_with_optional_metrics(
             );
             return basic_error_response(packet, &header, Rcode::NotAuth).map(|response| {
                 PreparedDnsMessage {
-                    packet: packet.to_vec(),
+                    packet: Cow::Borrowed(packet),
                     response_tsig: None,
                     immediate_response: Some(response),
                     tsig_authenticated: false,
@@ -3877,7 +3878,7 @@ fn prepare_notify_packet_with_optional_metrics(
                 metrics.record_notify_tsig_result(NotifyTsigResult::Ok);
             }
             Some(PreparedDnsMessage {
-                packet: verified.message,
+                packet: Cow::Owned(verified.message),
                 response_tsig: Some(ResponseTsig {
                     key,
                     request_mac: verified.mac,
@@ -3915,7 +3916,7 @@ fn prepare_notify_packet_with_optional_metrics(
                 notify_authority.tsig_fudge_seconds,
             )
             .map(|response| PreparedDnsMessage {
-                packet: packet.to_vec(),
+                packet: Cow::Borrowed(packet),
                 response_tsig: None,
                 immediate_response: Some(response),
                 tsig_authenticated: false,
@@ -3925,10 +3926,10 @@ fn prepare_notify_packet_with_optional_metrics(
     }
 }
 
-fn prepare_query_tsig_packet(
-    prepared: PreparedDnsMessage,
+fn prepare_query_tsig_packet<'a>(
+    prepared: PreparedDnsMessage<'a>,
     notify_authority: &NotifyAuthority,
-) -> PreparedDnsMessage {
+) -> PreparedDnsMessage<'a> {
     if prepared.immediate_response.is_some() || prepared.response_tsig.is_some() {
         return prepared;
     }
@@ -3986,7 +3987,7 @@ fn prepare_query_tsig_packet(
 
     match key.verify_request(&prepared.packet, tsig_time_signed()) {
         Ok(verified) => PreparedDnsMessage {
-            packet: verified.message,
+            packet: Cow::Owned(verified.message),
             response_tsig: Some(ResponseTsig {
                 key,
                 request_mac: verified.mac,

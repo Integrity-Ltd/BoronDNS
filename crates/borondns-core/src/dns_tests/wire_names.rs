@@ -1,4 +1,41 @@
     #[test]
+    fn allocation_free_name_scan_matches_owned_parser() {
+        let mut long = Vec::new();
+        for _ in 0..5 {
+            long.push(63);
+            long.extend_from_slice(&[b'x'; 63]);
+        }
+        long.push(0);
+        let cases = [
+            (b"\x03www\x07example\x04test\x00".to_vec(), 0),
+            (b"\x03www\x00\x01a\xc0\x00".to_vec(), 5),
+            (b"\x03www\xc0\x00".to_vec(), 0),
+            (long, 0),
+        ];
+        for (wire, offset) in cases {
+            for len in 0..=wire.len() {
+                let packet = &wire[..len];
+                assert_eq!(
+                    skip_compressed_name(packet, offset),
+                    DomainName::parse(packet, offset).map(|(_, consumed)| consumed),
+                );
+            }
+            // Exercise invalid label kinds and compression offsets, not just
+            // successful names, through the scanner used by TSIG preflight.
+            for position in 0..wire.len() {
+                for byte in [0, 1, 63, 64, 128, 192, 255] {
+                    let mut packet = wire.clone();
+                    packet[position] = byte;
+                    assert_eq!(
+                        skip_compressed_name(&packet, offset),
+                        DomainName::parse(&packet, offset).map(|(_, consumed)| consumed),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn wire_name_helpers_reject_malformed_names_without_panicking() {
         let invalid_standalone_names: &[&[u8]] = &[
             b"",

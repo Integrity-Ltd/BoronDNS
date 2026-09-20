@@ -175,6 +175,7 @@ dependencies = [
 name = "borondns-server"
 version = "1.0.1"
 dependencies = [
+ "arc-swap",
  "axum",
  "borondns-core",
  "flate2",

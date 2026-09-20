@@ -4269,7 +4269,10 @@ if "ascii_lowercase &= packet[pos..pos + label_len]" not in parse_lowercase_text
     compression_failures.append("DomainName parser does not update lowercase tracking while walking label bytes")
 if "return Ok((Self { labels }, consumed, ascii_lowercase))" not in parse_lowercase_text:
     compression_failures.append("DomainName parser does not return the carried lowercase-name fact")
-if "DomainName::parse_with_ascii_lowercase(packet, DNS_HEADER_LEN)" not in dns_text:
+if not re.search(
+    r"DomainName::parse_with_reusable_labels::<REUSE>\(\s*packet,\s*DNS_HEADER_LEN,\s*labels,?\s*\)",
+    dns_text,
+):
     compression_failures.append("Question parse does not consume the parser-carried QNAME lowercase fact")
 if "labels_are_ascii_lowercase(qname.labels())" in dns_text:
     compression_failures.append("Question parse still rescans parsed labels for lowercase status")

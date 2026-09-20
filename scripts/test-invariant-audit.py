@@ -43,6 +43,10 @@ class InvariantAuditTests(unittest.TestCase):
 
     def test_mutations_are_rejected(self):
         cases = [
+            ("crates/borondns-core/src/dns.rs",
+             "DomainName::parse_with_reusable_labels::<REUSE>",
+             "DomainName::parse_without_lowercase_fact",
+             "Question parse does not consume the parser-carried QNAME lowercase fact"),
             ("crates/borondns-core/src/dns.rs", None,
              "\nfn audit_probe() { std::fs::write(\"x\", b\"x\"); }\n",
              "BDS-INV-002"),

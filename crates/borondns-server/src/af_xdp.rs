@@ -231,23 +231,24 @@ pub(crate) struct PreparedXdpConfig {
     rings: xdp::RingConfig,
 }
 
-pub(crate) fn prepare_xdp_config(
-    config: &XdpConfig,
-) -> Result<PreparedXdpConfig, xdp::error::Error> {
+pub(crate) fn prepare_xdp_config(config: &XdpConfig) -> io::Result<PreparedXdpConfig> {
     let umem = xdp::umem::UmemCfgBuilder {
+        frame_size: configured_umem_frame_size(config.umem_frame_size)?,
         frame_count: config.umem_frame_count,
         tx_checksum: false,
         tx_timestamp: false,
         ..Default::default()
     }
-    .build()?;
+    .build()
+    .map_err(xdp_config_error)?;
     let rings = xdp::RingConfigBuilder {
         rx_count: config.rx_ring_size,
         tx_count: config.tx_ring_size,
         fill_count: config.fill_ring_size,
         completion_count: config.completion_ring_size,
     }
-    .build()?;
+    .build()
+    .map_err(xdp_config_error)?;
     Ok(PreparedXdpConfig {
         interface: config.interface.clone().unwrap_or_default(),
         queue_id: config.queue_id,
@@ -259,6 +260,17 @@ pub(crate) fn prepare_xdp_config(
         umem,
         rings,
     })
+}
+
+fn configured_umem_frame_size(bytes: u32) -> io::Result<xdp::umem::FrameSize> {
+    match bytes {
+        2048 => Ok(xdp::umem::FrameSize::TwoK),
+        4096 => Ok(xdp::umem::FrameSize::FourK),
+        _ => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "xdp.umem_frame_size must be 2048 or 4096",
+        )),
+    }
 }
 
 pub(crate) struct AfXdpPacketIo {
@@ -278,7 +290,7 @@ pub(crate) struct AfXdpPacketIo {
     inbound: Vec<UdpInbound>,
     active_inbound: usize,
     frames: Vec<Option<ReceivedFrame>>,
-    recv_slab: HeapSlab,
+    recv_slab: ReceiveSlab,
     tx_slab: HeapSlab,
     tx_kick_pending: bool,
     fill_kick_pending: bool,
@@ -289,6 +301,61 @@ struct ReceivedFrame {
     packet: xdp::Packet,
     frame: UdpIpFrame,
 }
+
+/// RX owns each packet before it enters this slab. Start bringing its first
+/// two cache lines into the CPU while the ring continues collecting the batch.
+/// These are only hints; parsing and all ownership rules remain unchanged.
+struct ReceiveSlab(HeapSlab);
+
+impl ReceiveSlab {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(HeapSlab::with_capacity(capacity))
+    }
+}
+
+impl Slab for ReceiveSlab {
+    fn available(&self) -> usize {
+        self.0.available()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn push_front(&mut self, packet: xdp::Packet) -> Option<xdp::Packet> {
+        if self.available() == 0 {
+            return Some(packet);
+        }
+        prefetch_packet_head(&packet);
+        self.0.push_front(packet)
+    }
+    fn pop_back(&mut self) -> Option<xdp::Packet> {
+        self.0.pop_back()
+    }
+}
+
+#[inline]
+#[cfg(target_arch = "aarch64")]
+fn prefetch_packet_head(packet: &[u8]) {
+    for offset in [0, 64] {
+        let Some(byte) = packet.get(offset) else {
+            break;
+        };
+        // SAFETY: the address points inside a currently owned, live packet
+        // slice. The instruction only issues a read-prefetch hint; it neither
+        // changes the bytes nor transfers or extends descriptor ownership.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-010
+        unsafe {
+            std::arch::asm!("prfm pldl1keep, [{address}]", address = in(reg) byte as *const u8, options(nostack, readonly, preserves_flags));
+        }
+    }
+}
+
+// Keep unmeasured targets unchanged; the GX10 evidence covers AArch64 only.
+#[inline]
+#[cfg(not(target_arch = "aarch64"))]
+fn prefetch_packet_head(_packet: &[u8]) {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReceiveSlabDrain {
@@ -847,7 +914,7 @@ impl AfXdpPacketIo {
                 "xdp.tx_wakeup_interval must be 1; the current AF_XDP ring API does not expose the kernel needs-wakeup flag",
             ));
         }
-        let prepared = prepare_xdp_config(config).map_err(xdp_config_error)?;
+        let prepared = prepare_xdp_config(config)?;
         if (config.completion_ring_size as usize) < prepared.batch_size {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
@@ -925,7 +992,7 @@ impl AfXdpPacketIo {
         nic: xdp::nic::NicIndex,
         queue_id: u32,
     ) -> io::Result<(Self, RawFd)> {
-        let mut prepared = prepare_xdp_config(config).map_err(xdp_config_error)?;
+        let mut prepared = prepare_xdp_config(config)?;
         prepared.queue_id = queue_id;
         let mut umem = xdp::Umem::map(prepared.umem)?;
         let mut builder = XdpSocketBuilder::new().map_err(xdp_socket_error)?;
@@ -1001,11 +1068,11 @@ impl AfXdpPacketIo {
                 fill_ring_size,
                 completion_ring_size: config.completion_ring_size as usize,
                 inbound: (0..prepared.batch_size)
-                    .map(|_| UdpInbound::new())
+                    .map(|_| UdpInbound::new_af_xdp())
                     .collect(),
                 active_inbound: 0,
                 frames: Vec::with_capacity(prepared.batch_size),
-                recv_slab: HeapSlab::with_capacity(prepared.batch_size),
+                recv_slab: ReceiveSlab::with_capacity(prepared.batch_size),
                 tx_slab: HeapSlab::with_capacity(prepared.batch_size),
                 tx_kick_pending: false,
                 fill_kick_pending,
@@ -1165,15 +1232,13 @@ impl AfXdpPacketIo {
                 return false;
             }
             if *active_inbound == inbound.len() {
-                inbound.push(UdpInbound::new());
+                inbound.push(UdpInbound::new_af_xdp());
             }
 
             let frame_index = frames.len();
             let peer = frame.source_addr(&packet);
             let admitted = &mut inbound[*active_inbound];
-            let payload_len = payload.len();
-            admitted.buffer[..payload_len].copy_from_slice(&packet[payload]);
-            admitted.len = payload_len;
+            admitted.copy_af_xdp_payload(&packet[payload]);
             admitted.peer = peer;
             admitted.target = target_for_frame(frame_index);
             frames.push(Some(ReceivedFrame { packet, frame }));
@@ -1772,6 +1837,14 @@ pub(crate) fn parse_udp_ip_frame(frame: &[u8]) -> Result<UdpIpFrame, AfXdpFrameE
     }
 }
 
+#[inline]
+fn swap_adjacent_header_fields<const WIDTH: usize>(frame: &mut [u8], offset: usize) {
+    // A single bounded region lets the compiler swap fixed-width fields in
+    // words instead of independently checking every byte in each address.
+    let (left, right) = frame[offset..offset + WIDTH * 2].split_at_mut(WIDTH);
+    left.swap_with_slice(right);
+}
+
 pub(crate) fn rewrite_udp_ipv4_response_headers(
     frame: &mut [u8],
     packet: UdpIpv4Frame,
@@ -1786,21 +1859,9 @@ pub(crate) fn rewrite_udp_ipv4_response_headers(
         return Err(AfXdpFrameError::ResponseTooLarge);
     }
 
-    for index in 0..6 {
-        frame.swap(index, index + 6);
-    }
-    for index in 0..4 {
-        frame.swap(
-            packet.ipv4_header_offset + 12 + index,
-            packet.ipv4_header_offset + 16 + index,
-        );
-    }
-    for index in 0..2 {
-        frame.swap(
-            packet.udp_header_offset + index,
-            packet.udp_header_offset + 2 + index,
-        );
-    }
+    swap_adjacent_header_fields::<6>(frame, 0);
+    swap_adjacent_header_fields::<4>(frame, packet.ipv4_header_offset + 12);
+    swap_adjacent_header_fields::<2>(frame, packet.udp_header_offset);
 
     // Do not reflect request-owned IPv4 state into the response. Keep the
     // parsed header width so the UDP payload remains in place, but make any
@@ -1859,21 +1920,9 @@ pub(crate) fn rewrite_udp_ipv6_response_headers(
         return Err(AfXdpFrameError::ResponseTooLarge);
     }
 
-    for index in 0..6 {
-        frame.swap(index, index + 6);
-    }
-    for index in 0..16 {
-        frame.swap(
-            packet.ipv6_header_offset + 8 + index,
-            packet.ipv6_header_offset + 24 + index,
-        );
-    }
-    for index in 0..2 {
-        frame.swap(
-            packet.udp_header_offset + index,
-            packet.udp_header_offset + 2 + index,
-        );
-    }
+    swap_adjacent_header_fields::<6>(frame, 0);
+    swap_adjacent_header_fields::<16>(frame, packet.ipv6_header_offset + 8);
+    swap_adjacent_header_fields::<2>(frame, packet.udp_header_offset);
 
     // Traffic class, flow label, and hop limit belong to this server's
     // response rather than to the received query.
@@ -2011,6 +2060,31 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
 }
 
 fn ones_complement_add_bytes(mut sum: u32, bytes: &[u8]) -> u32 {
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    let bytes = {
+        let (wide, tail) = bytes.as_chunks::<16>();
+        // SAFETY: this branch is compiled only with little-endian AArch64 NEON.
+        // Each unaligned load is bounded by an exact 16-byte chunk. No store,
+        // pointer escape or access beyond the supplied slice is performed.
+        // At most 65535 UDP bytes plus the separately added pseudo-header are
+        // summed by callers, so neither the u32 lanes nor their total overflow.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-011
+        unsafe {
+            use std::arch::aarch64::*;
+            let mut lanes = vdupq_n_u32(0);
+            for chunk in wide {
+                let octets = vld1q_u8(chunk.as_ptr());
+                let words = vreinterpretq_u16_u8(vrev16q_u8(octets));
+                lanes = vaddq_u32(lanes, vpaddlq_u16(words));
+            }
+            sum += vaddvq_u32(lanes);
+        }
+        tail
+    };
     let (chunks, remainder) = bytes.as_chunks::<2>();
     for chunk in chunks {
         sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
@@ -2098,6 +2172,125 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn af_xdp_payload_buffers_grow_within_bound_and_do_not_expose_stale_tails() {
+        let mut first = UdpInbound::new_af_xdp();
+        let mut second = UdpInbound::new_af_xdp();
+        assert!(first.buffer.is_empty());
+        assert_eq!(UdpInbound::new().buffer.len(), UDP_PACKET_BUFFER_LEN);
+        for len in [
+            0, 1, 127, 128, 129, 255, 256, 511, 512, 1023, 1024, 1025, 2047, 2048, 4095, 4096, 13,
+            0,
+        ] {
+            let data: Vec<u8> = (0..len)
+                .map(|i| (i as u8).wrapping_add(len as u8))
+                .collect();
+            first.copy_af_xdp_payload(&data);
+            second.copy_af_xdp_payload(&[0xa5; 17]);
+            assert_eq!(first.payload(), data);
+            assert_eq!(second.payload(), [0xa5; 17]);
+            assert!(first.buffer.len() <= UDP_PACKET_BUFFER_LEN);
+            assert!(first.buffer.capacity() <= UDP_PACKET_BUFFER_LEN);
+            assert!(second.buffer.capacity() <= 128);
+        }
+        let allocation = first.buffer.as_ptr();
+        first.copy_af_xdp_payload(&[0x5a; 31]);
+        assert_eq!(first.buffer.as_ptr(), allocation);
+        assert_eq!(first.payload(), [0x5a; 31]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn af_xdp_payload_storage_rejects_oversized_input_before_growing() {
+        let mut inbound = UdpInbound::new_af_xdp();
+        inbound.copy_af_xdp_payload(&vec![0; UDP_PACKET_BUFFER_LEN + 1]);
+    }
+
+    #[test]
+    fn fixed_width_header_swaps_match_bytewise_oracle_without_touching_neighbors() {
+        fn check<const WIDTH: usize>() {
+            for offset in 0..32 {
+                let mut actual: Vec<u8> = (0..offset + WIDTH * 2 + 33)
+                    .map(|index| (index as u8).wrapping_mul(73).wrapping_add(11))
+                    .collect();
+                let original = actual.clone();
+                let mut expected = actual.clone();
+                for index in 0..WIDTH {
+                    expected.swap(offset + index, offset + WIDTH + index);
+                }
+                swap_adjacent_header_fields::<WIDTH>(&mut actual, offset);
+                assert_eq!(actual, expected, "width={WIDTH}, offset={offset}");
+                swap_adjacent_header_fields::<WIDTH>(&mut actual, offset);
+                assert_eq!(actual, original);
+            }
+        }
+        check::<2>();
+        check::<4>();
+        check::<6>();
+        check::<16>();
+    }
+
+    #[test]
+    fn checksum_wide_chunks_match_scalar_for_offsets_tails_and_max_udp_lengths() {
+        for pattern in [0u8, 0xff, 0xa5, 0x37] {
+            let bytes: Vec<u8> = (0..65568)
+                .map(|i| {
+                    if pattern == 0x37 {
+                        (i as u8).wrapping_mul(73).wrapping_add((i >> 8) as u8)
+                    } else {
+                        pattern
+                    }
+                })
+                .collect();
+            for offset in 0..16 {
+                for len in (0..=257).chain([511, 512, 1232, 4096, 65507, 65527, 65535]) {
+                    let data = &bytes[offset..offset + len];
+                    let mut expected = 123456u32;
+                    for pair in data.chunks(2) {
+                        expected += u32::from(pair[0]) << 8;
+                        if pair.len() == 2 {
+                            expected += u32::from(pair[1]);
+                        }
+                    }
+                    assert_eq!(
+                        ones_complement_add_bytes(123456, data),
+                        expected,
+                        "pattern={pattern}, offset={offset}, len={len}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn receive_prefetch_slab_preserves_bytes_order_capacity_and_empty_packets() {
+        let mut buffers = [[0u8; 2048]; 7];
+        let lengths = [0, 1, 63, 64, 65, 128, 257];
+        let mut slab = ReceiveSlab::with_capacity(4);
+        for (index, (buffer, length)) in buffers.iter_mut().zip(lengths).enumerate() {
+            let mut packet = xdp::Packet::testing_new(buffer);
+            packet.insert(0, &vec![index as u8; length]).unwrap();
+            if index < 4 {
+                assert!(slab.push_front(packet).is_none());
+            } else {
+                let packet = slab
+                    .push_front(packet)
+                    .expect("a full slab returns ownership");
+                assert_eq!(&*packet, vec![index as u8; length]);
+                prefetch_packet_head(&packet);
+            }
+        }
+        assert_eq!(slab.len(), 4);
+        assert_eq!(slab.available(), 0);
+        for (index, length) in lengths[..4].iter().enumerate() {
+            let packet = slab.pop_back().unwrap();
+            assert_eq!(&*packet, vec![index as u8; *length]);
+        }
+        assert!(slab.is_empty());
+        assert!(slab.pop_back().is_none());
+        assert_eq!(slab.available(), 4);
+    }
 
     #[test]
     fn fill_refill_progresses_with_partial_capacity_and_available_frames() {
@@ -2685,7 +2878,7 @@ mod tests {
         );
     }
 
-    fn push_test_packet(slab: &mut HeapSlab, buffer: &mut [u8; 2 * 1024], id: u8) {
+    fn push_test_packet(slab: &mut impl Slab, buffer: &mut [u8; 2 * 1024], id: u8) {
         let mut packet = xdp::Packet::testing_new(buffer);
         packet.insert(0, &[id]).expect("test packet payload");
         assert!(slab.push_front(packet).is_none());
@@ -2695,7 +2888,7 @@ mod tests {
     fn full_second_receive_pass_retains_exact_tail_for_next_batch() {
         const BATCH_SIZE: usize = 8;
         let mut buffers = [[0u8; 2 * 1024]; BATCH_SIZE * 2 - 1];
-        let mut slab = HeapSlab::with_capacity(BATCH_SIZE);
+        let mut slab = ReceiveSlab::with_capacity(BATCH_SIZE);
         let mut seen = Vec::new();
         let mut active = 0usize;
 
@@ -2761,7 +2954,7 @@ mod tests {
     fn receive_slab_drain_accounts_for_zero_rejected_and_exact_full_edges() {
         const BATCH_SIZE: usize = 4;
         let mut buffers = [[0u8; 2 * 1024]; BATCH_SIZE];
-        let mut slab = HeapSlab::with_capacity(BATCH_SIZE);
+        let mut slab = ReceiveSlab::with_capacity(BATCH_SIZE);
 
         assert_eq!(
             drain_receive_slab(&mut slab, 0, |_| unreachable!()),
@@ -3038,6 +3231,32 @@ mod tests {
         assert_eq!(interface, "eth0");
         assert_eq!(queue_id, 3);
         assert_eq!(batch_size, 1024);
+    }
+
+    #[test]
+    fn selects_validated_umem_frame_size_without_silent_fallback() {
+        assert_eq!(XdpConfig::default().umem_frame_size, 4096);
+        for size in [2048, 4096] {
+            assert_eq!(
+                u32::try_from(configured_umem_frame_size(size).unwrap()).unwrap(),
+                size
+            );
+            prepare_xdp_config(&XdpConfig {
+                umem_frame_size: size,
+                ..XdpConfig::default()
+            })
+            .expect("supported frame size");
+        }
+        for size in [0, 1024, 3072, 8192, u32::MAX] {
+            let config = XdpConfig {
+                umem_frame_size: size,
+                ..XdpConfig::default()
+            };
+            assert_eq!(
+                prepare_xdp_config(&config).err().unwrap().kind(),
+                ErrorKind::InvalidInput
+            );
+        }
     }
 
     #[test]

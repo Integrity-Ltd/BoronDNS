@@ -1,4 +1,160 @@
     #[test]
+    fn parsed_request_recycles_names_without_aliasing_live_questions() {
+        QUERY_LABEL_CACHE.with(|cache| {
+            cache.borrow_mut().take();
+        });
+        let packet = query(&example_name(), RecordType::A as u16, 1);
+        let request = ParsedDnsRequest::new(&packet);
+        let pointer = request.question().unwrap().qname.labels()[0].as_ptr();
+        drop(request);
+        let upper = DomainName::from_absolute_str("EXAMPLE.TEST.").unwrap();
+        let packet_upper = query(&upper.to_wire(), RecordType::Aaaa as u16, 1);
+        let request_upper = ParsedDnsRequest::new(&packet_upper);
+        let question_upper = request_upper.question().unwrap();
+        assert_eq!(question_upper.qname, upper);
+        assert_eq!(question_upper.qtype, RecordType::Aaaa as u16);
+        assert!(!question_upper.qname_ascii_lowercase());
+        assert_eq!(question_upper.qname.labels()[0].as_ptr(), pointer);
+
+        let nested = ParsedDnsRequest::new(&packet);
+        assert_ne!(nested.question().unwrap().qname.labels()[0].as_ptr(), pointer);
+        assert_eq!(question_upper.qname, upper);
+        drop(nested);
+        // A failed parse can consume and discard the spare buffer but cannot
+        // change another live request or leave old trailing labels visible.
+        let malformed = ParsedDnsRequest::new(&packet[..packet.len() - 1]);
+        assert!(malformed.question().is_none());
+        drop(malformed);
+        assert_eq!(question_upper.qname, upper);
+        drop(request_upper);
+        let short_name = DomainName::from_absolute_str("x.").unwrap();
+        let short_packet = query(&short_name.to_wire(), RecordType::A as u16, 1);
+        let short_request = ParsedDnsRequest::new(&short_packet);
+        assert_eq!(short_request.question().unwrap().qname, short_name);
+        drop(short_request);
+        QUERY_LABEL_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            let labels = cache.as_ref().unwrap();
+            assert!(labels.capacity() <= QUERY_LABEL_CACHE_LIMIT);
+            assert!(labels.iter().all(|label| label.capacity() <= 64));
+        });
+    }
+
+    #[test]
+    fn parsed_request_name_recycler_does_not_retain_large_questions() {
+        QUERY_LABEL_CACHE.with(|cache| {
+            cache.borrow_mut().take();
+        });
+        let name = DomainName::from_absolute_str("a.b.c.d.e.f.g.h.i.").unwrap();
+        let packet = query(&name.to_wire(), RecordType::A as u16, 1);
+        let request = ParsedDnsRequest::new(&packet);
+        assert_eq!(request.question().unwrap().qname, name);
+        drop(request);
+        QUERY_LABEL_CACHE.with(|cache| assert!(cache.borrow().is_none()));
+    }
+
+    #[test]
+    fn packet_bound_parse_cache_preserves_errors_and_answer_bytes() {
+        let secret = [7; 16];
+        let context = DnsCookieContext::new("192.0.2.1".parse().unwrap(), &secret, 100);
+        let zones = ZoneStore::new();
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 1232, 0, &edns_option(10, &[1; 8]));
+        let compare = |wire: &[u8]| {
+            let request = ParsedDnsRequest::new(wire);
+            let question = request.question();
+            let independently_parsed = Header::parse(wire).ok()
+                .filter(|header| header.qdcount == 1)
+                .and_then(|_| Question::parse(wire).ok());
+            assert_eq!(question, independently_parsed.as_ref());
+            assert_eq!(
+                request.cookie_status(Some(context)),
+                dns_cookie_request_status(wire, Some(context)),
+            );
+            assert_eq!(
+                request.udp_payload_ceiling(1232),
+                request_udp_payload_ceiling(wire, 1232),
+            );
+            if let Some(question) = question {
+                assert!(std::ptr::eq(question, request.question().unwrap()));
+            }
+            let mut options = AnswerOptions::udp(1232);
+            options.dns_cookie = Some(context);
+            let warmed = request.answer_with_hooks(
+                &zones,
+                options,
+                |_, _| false,
+                |_, _, _| false,
+                |_| {},
+                &default_zone_image_provider as ZoneImageProvider<'_>,
+            );
+            let cold = answer_message_with_notify_hooks(
+                wire, &zones, options, |_, _| false, |_, _, _| false,
+            );
+            assert_eq!(warmed, cold, "packet={wire:?}");
+        };
+        for len in 0..=packet.len() {
+            compare(&packet[..len]);
+        }
+        // Header counts/opcodes, labels, OPT version/length, and malformed
+        // cookie lengths must keep their response semantics after prewarming.
+        for position in 0..packet.len() {
+            for byte in [0, 1, 2, 63, 64, 128, 192, 255] {
+                let mut mutated = packet.clone();
+                mutated[position] = byte;
+                compare(&mutated);
+            }
+        }
+        let mut empty = packet[..12].to_vec();
+        empty[4..6].copy_from_slice(&0u16.to_be_bytes());
+        empty[10..12].copy_from_slice(&0u16.to_be_bytes());
+        append_opt(&mut empty, 1232, 0, &edns_option(10, &[1; 8]));
+        compare(&empty);
+    }
+
+    #[test]
+    fn cookie_status_reuses_question_without_relaxing_validation() {
+        let secret = [7; 16];
+        let context = DnsCookieContext::new("192.0.2.1".parse().unwrap(), &secret, 100);
+        let plain = query(&example_name(), RecordType::A as u16, 1);
+        let mut packets = vec![plain.clone()];
+        for option in [
+            vec![],
+            edns_option(10, &[1; 8]),
+            edns_option(10, &[1; 24]),
+            edns_option(10, &[1; 7]),
+        ] {
+            let mut packet = plain.clone();
+            append_opt(&mut packet, 1232, 0, &option);
+            packets.push(packet.clone());
+            append_opt(&mut packet, 1232, 0, &[]);
+            packets.push(packet);
+        }
+        let mut empty = plain[..12].to_vec();
+        empty[4..6].copy_from_slice(&0u16.to_be_bytes());
+        append_opt(&mut empty, 1232, 0, &edns_option(10, &[1; 8]));
+        packets.push(empty);
+        for mut packet in packets {
+            // Include every truncated prefix and an undeclared trailing byte.
+            packet.push(0xff);
+            for len in 12..=packet.len() {
+                let wire = &packet[..len];
+                let header = Header::parse(wire).unwrap();
+                let question = (header.qdcount == 1)
+                    .then(|| Question::parse(wire).ok())
+                    .flatten();
+                assert_eq!(
+                    dns_cookie_request_status_from_parsed(
+                        wire, &header, question.as_ref(), Some(context),
+                    ),
+                    dns_cookie_request_status(wire, Some(context)),
+                    "packet={wire:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn edns_query_gets_opt_response() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0x8000, &[]);
