@@ -137,3 +137,5 @@ include!("tests/refresh_xot_runtime.rs");
 include!("tests/secret_store.rs");
 include!("tests/tcp.rs");
 include!("tests/support.rs");
+#[cfg(feature = "af-xdp")]
+include!("tests/xdp_runtime.rs");

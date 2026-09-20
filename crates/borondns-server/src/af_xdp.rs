@@ -1082,6 +1082,15 @@ impl AfXdpPacketIo {
         ))
     }
 
+    /// Move registration to the runtime that will own this queue task. Moving
+    /// only the future would leave readiness attached to the old reactor.
+    pub(crate) fn reregister_runtime(mut self) -> io::Result<Self> {
+        // Keep the rest of the adapter intact, including its normal field-drop
+        // order on error. No packet/ring/UMEM ownership is split or duplicated.
+        self.socket = crate::xdp_runtime::reregister(self.socket)?;
+        Ok(self)
+    }
+
     fn drain_completions(&mut self) {
         drain_completions_into(
             &mut self.completion_ring,

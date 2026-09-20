@@ -310,6 +310,12 @@ zsm_loading_warning_threshold_secs = 3600
 # Leave unset for the contiguous queue range starting at queue_id. Do not set
 # queue_id and queue_ids together.
 #queue_ids = [0, 1, 2, 3]
+# Optional CPU-affined runtimes; empty keeps the shared runtime. Groups divide
+# the effective queue list equally, in its configured order. For the four queues
+# above, [[0, 1], [2, 3]] gives each two-worker runtime two queues. CPU lists must
+# be nonempty, disjoint and available to the process. This does not set IRQ/RSS
+# placement; benchmark locality versus reduced cross-group load balancing.
+#worker_cpu_groups = []
 # Per-queue packet memory and rings. Defaults are 4096 UMEM frames,
 # 1024 RX/TX entries, 2048 fill entries, 1024 completion entries, and a batch
 # of 64. Validation caps UMEM frames at 262144, every ring at 65536, and the

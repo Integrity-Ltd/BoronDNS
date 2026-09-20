@@ -40,6 +40,14 @@ management listeners through `[interfaces].dns`, `transfer`, and `mgmt`.
 Health, metrics, and the authenticated observability API are management
 surfaces; they are not DNS query protocols.
 
+AF_XDP queue tasks normally share the application runtime. Optional
+`xdp.worker_cpu_groups` assigns equal, ordered queue partitions to separate
+CPU-affined runtimes. Each adapter moves as one owned unit and re-registers its
+socket with its serving reactor before receiving packets. Kernel-fallback UDP
+and all control-plane tasks stay on the original runtime. Group workers start
+after process hardening and privilege dropping; the existing admission gate and
+task set still govern shutdown. Defaults and DNS response processing are unchanged.
+
 ## Zone storage and publication
 
 [`ZoneStore`](../crates/borondns-core/src/zone.rs) uses `ArcSwap` to publish
@@ -157,6 +165,10 @@ modules carry their principal functional requirement references
 | `crates/borondns-server/src/af_xdp.rs` | feature-gated server AF_XDP packet-I/O adapter. |
 | `crates/borondns-server/src/std_udp_mmsg.rs` | standard UDP recvmmsg/sendmmsg batch adapter. |
 | `crates/borondns-server/src/std_udp_socket.rs` | standard UDP socket creation, reuseport, and CPU affinity adapter. |
+| `crates/borondns-server/src/xdp_runtime.rs` | optional AF_XDP queue-runtime ownership, CPU affinity, and reactor migration. |
+| `crates/borondns-server/src/operator.rs` | local authenticated operator socket and commands. |
+| `crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs` | catalog cache lifecycle and authorization binding. |
+| `crates/borondns-cli/src/operator.rs` | operator command-line client and local control protocol. |
 | `crates/borondns-server/src/privilege.rs` | audited POSIX privilege-drop FFI boundary. |
 | `crates/borondns-server/src/process_hardening.rs` | audited POSIX process-hardening FFI boundary. |
 | `crates/borondns-server/src/process_signals.rs` | audited POSIX signal disposition FFI boundary. |

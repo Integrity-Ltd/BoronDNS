@@ -5132,6 +5132,15 @@ Identification value. IPv6 UDP checksums remain mandatory. Regression tests
 MUST cover malformed checksums, invalid sources, and constructed response
 headers before this profile can be promoted beyond experimental status.
 
+The optional `xdp.worker_cpu_groups` setting partitions the effective queue list
+equally, in configured order, among CPU-affined serving runtimes. The default
+remains the shared runtime. Configured CPU sets MUST be nonempty, disjoint and
+available to the process; invalid placement MUST fail startup. Moving a queue
+MUST preserve exclusive adapter ownership, register its socket with its serving
+reactor, and retain the normal admission, publication and shutdown rules.
+Kernel-fallback UDP and control-plane work remain on the shared runtime.
+This setting does not configure NIC interrupts or imply portable performance gains.
+
 *Re-entry pointer.* Promote only when current implementation benchmarking shows that
 the socket path blocks a relevant performance target, or when a dedicated
 XDP-capable deployment profile becomes a standard target. Detailed adapter,

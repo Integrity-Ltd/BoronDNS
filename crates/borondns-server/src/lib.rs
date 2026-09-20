@@ -35,6 +35,8 @@ mod tcp;
 mod transfer;
 mod transfer_plan;
 mod udp;
+#[cfg(feature = "af-xdp")]
+mod xdp_runtime;
 mod zone_persistence;
 
 use borondns_core::{
@@ -581,6 +583,21 @@ impl Runtime {
             info!("enabled process no-new-privileges hardening");
         }
 
+        #[cfg(feature = "af-xdp")]
+        let queue_runtimes = {
+            let queue_count = bound_udp_listeners
+                .iter()
+                .find_map(|listener| match listener {
+                    udp::BoundUdpListener::AfXdp { worker_count, .. } => Some(worker_count - 1),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            xdp_runtime::QueueRuntimes::new(&self.config.xdp.worker_cpu_groups, queue_count)
+                .map_err(|error| {
+                    RuntimeError::InvalidRuntimeConfig(format!("AF_XDP worker placement: {error}"))
+                })?
+        };
+
         #[cfg(unix)]
         if let Some(path) = &self.config.server.operator_socket {
             let listener = operator::OperatorListener::bind(path).map_err(|error| {
@@ -723,6 +740,15 @@ impl Runtime {
             ));
         }
         for udp_listener in bound_udp_listeners {
+            #[cfg(feature = "af-xdp")]
+            let queue_handle = match (&queue_runtimes, &udp_listener) {
+                (Some(groups), udp::BoundUdpListener::AfXdp { worker_id, .. }) => {
+                    Some(groups.handle(*worker_id).map_err(RuntimeError::Udp)?)
+                }
+                _ => None,
+            };
+            #[cfg(feature = "af-xdp")]
+            let move_reactor = queue_handle.is_some();
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let udp_batch_size = self.config.limits.udp_batch_size;
@@ -772,7 +798,13 @@ impl Runtime {
             let (udp_shutdown_tx, udp_shutdown_rx) = oneshot::channel();
             udp_shutdown.push(udp_shutdown_tx);
             let udp_admission_open = udp_admission_open.clone();
-            udp_listeners.spawn(async move {
+            let task = async move {
+                #[cfg(feature = "af-xdp")]
+                let udp_listener = if move_reactor {
+                    udp_listener.reregister_xdp_runtime()?
+                } else {
+                    udp_listener
+                };
                 serve_bound_udp_until(
                     udp_listener,
                     zones,
@@ -785,7 +817,13 @@ impl Runtime {
                     },
                 )
                 .await
-            });
+            };
+            #[cfg(feature = "af-xdp")]
+            if let Some(handle) = queue_handle {
+                udp_listeners.spawn_on(task, handle);
+                continue;
+            }
+            udp_listeners.spawn(task);
         }
         for listener in bound_tcp_listeners {
             let zones = self.zones.clone();

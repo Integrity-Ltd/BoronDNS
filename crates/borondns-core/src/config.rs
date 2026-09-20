@@ -2794,6 +2794,10 @@ pub struct XdpConfig {
     pub queue_id: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queue_ids: Vec<u32>,
+    /// Optional CPU sets for equal, ordered partitions of the effective queue set.
+    /// Empty keeps all queue tasks on the application's shared Tokio runtime.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_cpu_groups: Vec<Vec<usize>>,
     #[serde(default = "default_xdp_umem_frame_size")]
     pub umem_frame_size: u32,
     #[serde(default = "default_xdp_umem_frame_count")]
@@ -2824,6 +2828,7 @@ impl Default for XdpConfig {
             mode: XdpMode::default(),
             queue_id: 0,
             queue_ids: Vec::new(),
+            worker_cpu_groups: Vec::new(),
             umem_frame_size: default_xdp_umem_frame_size(),
             umem_frame_count: default_xdp_umem_frame_count(),
             rx_ring_size: default_xdp_rx_ring_size(),
@@ -2962,6 +2967,34 @@ impl XdpConfig {
                 return Err(ConfigError::Invalid(format!(
                     "estimated aggregate AF_XDP memory {estimated_memory} bytes for {queue_count} queue(s) must not exceed {MAX_XDP_ESTIMATED_MEMORY_BYTES} bytes"
                 )));
+            }
+        }
+        if !self.worker_cpu_groups.is_empty() {
+            if udp_backend != UdpBackend::AfXdp {
+                return Err(ConfigError::Invalid(
+                    "xdp.worker_cpu_groups requires limits.udp_backend = \"af_xdp\"".to_owned(),
+                ));
+            }
+            let queues = self.effective_queue_ids(udp_worker_count)?.len();
+            if !queues.is_multiple_of(self.worker_cpu_groups.len()) {
+                return Err(ConfigError::Invalid(
+                    "xdp.worker_cpu_groups must divide the effective queue count into equal nonempty groups".to_owned(),
+                ));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for cpus in &self.worker_cpu_groups {
+                if cpus.is_empty() {
+                    return Err(ConfigError::Invalid(
+                        "xdp.worker_cpu_groups must not contain an empty CPU group".to_owned(),
+                    ));
+                }
+                for &cpu in cpus {
+                    if cpu >= MAX_LINUX_CPU_AFFINITY_INDEX || !seen.insert(cpu) {
+                        return Err(ConfigError::Invalid(format!(
+                            "xdp.worker_cpu_groups CPU {cpu} must be unique across all groups and below {MAX_LINUX_CPU_AFFINITY_INDEX}"
+                        )));
+                    }
+                }
             }
         }
         Ok(())

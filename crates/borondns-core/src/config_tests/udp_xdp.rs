@@ -18,6 +18,40 @@
     }
 
     #[test]
+    fn xdp_worker_cpu_groups_default_and_sparse_queue_roundtrip() {
+        let legacy: XdpConfig = toml::from_str("").unwrap();
+        assert!(!toml::to_string(&legacy).unwrap().contains("worker_cpu_groups"));
+        let text = xdp_frame_size_config(4096, 1232).replace(
+            "interface = \"eth0\"",
+            "interface = \"eth0\"\nqueue_ids = [7, 2, 5, 9]\nworker_cpu_groups = [[0, 1], [2, 3]]",
+        );
+        let config = ServerConfig::from_toml_str(&text).expect("explicit cache-local groups");
+        assert_eq!(config.xdp.effective_queue_ids(1).unwrap(), vec![7, 2, 5, 9]);
+        let serialized = toml::to_string(&config.xdp).unwrap();
+        assert!(serialized.contains("worker_cpu_groups"));
+        let restored: XdpConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored, config.xdp);
+    }
+
+    #[test]
+    fn xdp_worker_cpu_groups_reject_invalid_or_inactive_placement() {
+        for groups in ["[[]]", "[[0], []]", "[[0, 0]]", "[[0], [0]]", "[[1024]]", "[[0], [1], [2]]"] {
+            let text = xdp_frame_size_config(4096, 1232).replace(
+                "interface = \"eth0\"",
+                &format!("interface = \"eth0\"\nqueue_ids = [7, 2, 5, 9]\nworker_cpu_groups = {groups}"),
+            );
+            let error = ServerConfig::from_toml_str(&text).expect_err(groups);
+            assert!(error.to_string().contains("worker_cpu_groups"), "{error}");
+        }
+        let text = xdp_frame_size_config(4096, 1232).replace(
+            "interface = \"eth0\"",
+            "interface = \"eth0\"\nworker_cpu_groups = [[0]]",
+        ).replace("udp_backend = \"af_xdp\"", "udp_backend = \"std\"");
+        let error = ServerConfig::from_toml_str(&text).expect_err("inactive CPU groups");
+        assert!(error.to_string().contains("worker_cpu_groups"));
+    }
+
+    #[test]
     fn accepts_two_kib_xdp_frames_with_bounded_udp_payload() {
         for payload in [512, 1232, 1400] {
             ServerConfig::from_toml_str(&xdp_frame_size_config(2048, payload))

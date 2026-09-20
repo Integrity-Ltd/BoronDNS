@@ -87,6 +87,26 @@ pub(crate) enum BoundUdpListener {
     },
 }
 
+#[cfg(feature = "af-xdp")]
+impl BoundUdpListener {
+    pub(crate) fn reregister_xdp_runtime(self) -> Result<Self, RuntimeError> {
+        match self {
+            Self::AfXdp {
+                packet_io,
+                worker_id,
+                worker_count,
+            } => Ok(Self::AfXdp {
+                packet_io: packet_io.reregister_runtime().map_err(RuntimeError::Udp)?,
+                worker_id,
+                worker_count,
+            }),
+            _ => Err(RuntimeError::InvalidRuntimeConfig(
+                "only AF_XDP queue adapters may move to a queue runtime".to_owned(),
+            )),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn bind_udp_listeners(
     addr: SocketAddr,

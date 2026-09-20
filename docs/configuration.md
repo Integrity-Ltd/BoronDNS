@@ -435,6 +435,39 @@ The aggregate memory estimate uses the configured frame size.
 `xdp.tx_wakeup_interval` must remain `1`. Consult the example configuration
 and physical-NIC benchmarks before enabling this backend.
 
+### Optional AF_XDP CPU groups
+
+By default, AF_XDP queue tasks use the shared Tokio runtime. To keep selected
+queues within a CPU/cache domain, set `xdp.worker_cpu_groups`. For example,
+with the other AF_XDP settings already configured:
+
+```toml
+[xdp]
+queue_ids = [0, 1, 2, 3]
+worker_cpu_groups = [[0, 1], [2, 3]]
+```
+
+This assigns queues 0–1 to a two-worker runtime allowed on CPUs 0–1, and queues
+2–3 to another two-worker runtime on CPUs 2–3. Assignment follows the configured
+`queue_ids` order, including sparse or reordered lists. Without `queue_ids`, it
+follows the contiguous range starting at `queue_id`. Groups must divide the
+effective queue count equally. Each group needs a nonempty CPU list; CPU indices
+must be unique across all groups, below 1024 and available in the process's
+allowed CPU mask. Startup verifies the applied affinity. A nonempty setting is
+rejected for the standard UDP backend; `[]` retains existing behavior.
+
+Each group owns its I/O reactor. Kernel-fallback UDP, TCP, transfers and management
+remain on the shared runtime, whose thread count is still controlled by
+`TOKIO_WORKER_THREADS`. Group threads are additional to it, so leave CPU and
+memory headroom for that work. This setting does not change IRQ affinity, RSS,
+NIC rings or CPU frequency policy, or bind zone/UMEM memory to NUMA nodes.
+Choose CPU lists from the actual topology;
+the numbers above are an example, not portable tuning defaults. See the
+[GX10 evidence and limitations](gx10-af-xdp-benchmark-2026-09.md#repeated-26m-result).
+Grouping trades cross-group load balancing for locality: a busy group cannot
+borrow idle workers from another group. Uneven RSS or client traffic can perform
+worse, so benchmark representative queue distributions before enabling it.
+
 ### AF_XDP buffer reuse on mlx5
 
 On the tested GX10/ConnectX-7 setup, zero-copy with `rx_striding_rq` enabled
@@ -459,6 +492,9 @@ size 8,192, and RX/TX/completion sizes 4,096.
 Reducing the frame pool and FILL ring produced parse errors under load even
 with striding disabled; those tuning results were rejected. That observation
 does not establish the same root cause as the diagnosed duplicate delivery.
+Increasing the hardware RX ring to 4,096 also produced parse errors in a
+26.1M-QPS GX10 trial with the larger pool. That configuration was rejected;
+see the [GX10 tuning record](gx10-af-xdp-benchmark-2026-09.md).
 Revalidate buffer ownership, parse-error counters, and overload recovery after
 changing ring sizes; the striding workaround alone is not sufficient evidence.
 
