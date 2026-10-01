@@ -115,6 +115,14 @@ struct XdpQueueOutputRecord {
     xdp_tx_outstanding_packets_total: u64,
     rx_packets_total: u64,
     rx_dns_responses_total: u64,
+    positive_total: u64,
+    nxdomain_total: u64,
+    nodata_total: u64,
+    servfail_total: u64,
+    refused_total: u64,
+    other_rcode_total: u64,
+    rx_dns_unmatched_total: u64,
+    rx_truncated_total: u64,
     rx_dns_responses_minus_tx_packets: i64,
     rx_kernel_dropped_total: u64,
     errors_total: u64,
@@ -597,7 +605,8 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         aggregate_config.source.port_range = Some(format!("{first_port}-{last_port}"));
         aggregate_config.source.port_select = PortSelect::Sequential;
     }
-    let query_pool = query_pool(&aggregate_config)?;
+    let prepared = Arc::new(PreparedQueries::new(&aggregate_config)?);
+    let query_pool = &prepared.pool;
     let source_selector = SourceSelector::new(&aggregate_config.source, aggregate_config.run.seed)?;
     let destination_port_bounds = source_port_bounds(&aggregate_config)?;
     let mut workers = Vec::with_capacity(queue_count as usize);
@@ -630,8 +639,15 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         None
     };
     let mut handles = Vec::with_capacity(queue_count as usize);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut start_txs = Vec::with_capacity(queue_count as usize);
 
-    for (worker_index, (worker_config, worker)) in workers.into_iter().enumerate() {
+    for (worker_index, (worker_config, mut worker)) in workers.into_iter().enumerate() {
+        let ready_tx = ready_tx.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        start_txs.push(start_tx);
+        let query_offset = prepared.worker_offset(worker_index, queue_count as usize);
+        let prepared = Arc::clone(&prepared);
         let inflight = shared_inflight
             .as_ref()
             .map(|shared| InflightTracker::Shared(Arc::clone(shared)));
@@ -649,15 +665,38 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
                     )
                 })?;
             }
+            warmup_worker(
+                &worker_config,
+                &mut worker,
+                Arc::clone(&prepared),
+                query_offset,
+            )?;
+            ready_tx.send(()).context("XDP start coordinator closed")?;
+            drop(ready_tx);
+            start_rx
+                .recv()
+                .context("another XDP worker failed before measurement")?;
             run_bound_worker(
                 worker_config,
-                worker,
+                &mut worker,
                 inflight,
                 Some(destination_port_bounds),
                 false,
+                prepared,
+                query_offset,
             )
         }));
     }
+    drop(ready_tx);
+    // A failed worker drops its sender, so initialization errors cannot deadlock
+    // other workers behind a fixed-size barrier.
+    let ready = ready_rx.into_iter().count();
+    if ready == queue_count as usize {
+        for start_tx in start_txs.drain(..) {
+            let _ = start_tx.send(());
+        }
+    }
+    drop(start_txs);
 
     let mut aggregate = Stats::default();
     let mut send_duration = Duration::ZERO;
@@ -690,7 +729,7 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         interface,
         target,
         query_pool.first(),
-        &query_pool,
+        query_pool,
         &source_selector,
         &aggregate,
         start,
@@ -835,6 +874,14 @@ impl XdpQueueOutputRecord {
                 .saturating_sub(outcome.stats.xdp_tx_completed_packets),
             rx_packets_total: outcome.stats.rx_packets,
             rx_dns_responses_total: outcome.stats.rx_dns_responses,
+            positive_total: outcome.stats.positive,
+            nxdomain_total: outcome.stats.nxdomain,
+            nodata_total: outcome.stats.nodata,
+            servfail_total: outcome.stats.servfail,
+            refused_total: outcome.stats.refused,
+            other_rcode_total: outcome.stats.other_rcode,
+            rx_dns_unmatched_total: outcome.stats.rx_dns_unmatched,
+            rx_truncated_total: outcome.stats.rx_truncated,
             rx_dns_responses_minus_tx_packets: signed_delta(
                 outcome.stats.rx_dns_responses,
                 outcome.stats.tx_packets,
@@ -860,10 +907,20 @@ fn run_single(
         .nic
         .as_deref()
         .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
-    let worker = bind_xdp_worker(&config)?;
+    let mut worker = bind_xdp_worker(&config)?;
     let xsk_entries = [(config.interface.rx_queue, worker.socket_fd)];
     let _reply_redirect = attach_reply_redirect(&config, interface, target, &xsk_entries)?;
-    run_bound_worker(config, worker, shared_inflight, None, emit_records)
+    let prepared = Arc::new(PreparedQueries::new(&config)?);
+    warmup_worker(&config, &mut worker, Arc::clone(&prepared), 0)?;
+    run_bound_worker(
+        config,
+        &mut worker,
+        shared_inflight,
+        None,
+        emit_records,
+        prepared,
+        0,
+    )
 }
 
 fn bind_xdp_worker(config: &FileConfig) -> Result<BoundXdpWorker> {
@@ -978,12 +1035,56 @@ fn attach_reply_redirect(
     .map(Some)
 }
 
+struct PreparedQueries {
+    pool: QueryPool,
+    encoded: Vec<Vec<u8>>,
+}
+
+impl PreparedQueries {
+    fn new(config: &FileConfig) -> Result<Self> {
+        let pool = query_pool(config)?;
+        let encoded = encoded_query_pool(&pool)?;
+        Ok(Self { pool, encoded })
+    }
+
+    fn worker_offset(&self, worker: usize, workers: usize) -> u64 {
+        // Separate phases in a shared schedule, independent of ports and queue IDs.
+        (self.pool.schedule.len() as u64 * worker as u64) / workers as u64
+    }
+}
+
+fn warmup_worker(
+    config: &FileConfig,
+    worker: &mut BoundXdpWorker,
+    prepared: Arc<PreparedQueries>,
+    offset: u64,
+) -> Result<()> {
+    if config.run.warmup_seconds == 0.0 {
+        return Ok(());
+    }
+    let mut warmup = config.clone();
+    warmup.run.duration_seconds = Some(config.run.warmup_seconds);
+    warmup.run.max_packets = 0;
+    warmup.run.warmup_seconds = 0.0;
+    let outcome = run_bound_worker(warmup, worker, None, None, false, prepared, offset)?;
+    eprintln!(
+        "{}",
+        serde_json::json!({"record_type": "warmup", "queue": XdpQueueOutputRecord::from_outcome(&outcome)})
+    );
+    if outcome.stats.errors != 0 {
+        bail!("XDP warmup reported errors");
+    }
+    Ok(())
+}
+
 fn run_bound_worker(
     config: FileConfig,
-    mut worker: BoundXdpWorker,
+    worker: &mut BoundXdpWorker,
     shared_inflight: Option<InflightTracker>,
     destination_port_bounds: Option<(u16, u16)>,
     emit_records: bool,
+    prepared: Arc<PreparedQueries>,
+    query_offset: u64,
 ) -> Result<XdpRunOutcome> {
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
     let interface = config
@@ -999,10 +1100,10 @@ fn run_bound_worker(
         .target
         .mac
         .ok_or_else(|| anyhow!("backend xdp requires target.mac"))?;
-    let query_pool = query_pool(&config)?;
-    let encoded_queries = encoded_query_pool(&query_pool)?;
+    let query_pool = &prepared.pool;
+    let encoded_queries = &prepared.encoded;
     let packet_templates =
-        XdpPacketTemplates::new(&config, target_mac, source_mac, target, &encoded_queries)?;
+        XdpPacketTemplates::new(&config, target_mac, source_mac, target, encoded_queries)?;
     let mut source_selector = SourceSelector::new(&config.source, config.run.seed)?;
     let kernel_drop = if config.recv.mode == RecvMode::Drop {
         match config.xdp.drop_object.as_deref() {
@@ -1070,7 +1171,7 @@ fn run_bound_worker(
     let mut query_rng = super::XorShift64::new(config.run.seed);
     let mut fast_template_cursor = packet_templates
         .as_ref()
-        .and_then(|templates| SequentialTemplateCursor::new(&config, &query_pool, templates));
+        .and_then(|templates| SequentialTemplateCursor::new(&config, query_pool, templates));
     let uses_shared_inflight = shared_inflight.is_some();
     let mut inflight = track_latency.then(|| {
         shared_inflight.unwrap_or_else(|| InflightTracker::Local(vec![None; u16::MAX as usize + 1]))
@@ -1085,7 +1186,7 @@ fn run_bound_worker(
         while send_slab.available() > 0 && stats.tx_packets + (send_slab.len() as u64) < max_packets
         {
             query_id = query_id.wrapping_add(1);
-            let query_index = stats.tx_packets + send_slab.len() as u64;
+            let query_index = query_offset.wrapping_add(stats.tx_packets + send_slab.len() as u64);
             let (source, selected_query_index, fast_template) =
                 if let Some(cursor) = fast_template_cursor.as_mut() {
                     let (source_port, template) = cursor.next();
@@ -1261,7 +1362,7 @@ fn run_bound_worker(
                 interface,
                 target,
                 query_pool.first(),
-                &query_pool,
+                query_pool,
                 &source_selector,
                 &stats,
                 start,
@@ -1328,7 +1429,7 @@ fn run_bound_worker(
             interface,
             target,
             query_pool.first(),
-            &query_pool,
+            query_pool,
             &source_selector,
             &stats,
             start,
@@ -2531,6 +2632,46 @@ fn checksum_parts(parts: &[&[u8]]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_output_preserves_dns_classes_including_warmup() {
+        let outcome = XdpRunOutcome {
+            stats: Stats {
+                positive: 101,
+                nxdomain: 2,
+                nodata: 3,
+                servfail: 4,
+                refused: 5,
+                other_rcode: 6,
+                rx_dns_unmatched: 7,
+                rx_truncated: 8,
+                ..Stats::default()
+            },
+            send_duration: Duration::from_secs(2),
+            tx_queue: 0,
+            rx_queue: 0,
+            source_port: 53000,
+            requested_qps: Some(100),
+            rx_destination_ports: Vec::new(),
+        };
+        // warmup_worker and the final per-queue summary use this same record.
+        // A negative reply is not a transport error and must remain observable
+        // even when errors_total is zero (negative-response workloads are valid).
+        let record = serde_json::to_value(XdpQueueOutputRecord::from_outcome(&outcome)).unwrap();
+        assert_eq!(record["errors_total"], 0);
+        for (key, expected) in [
+            ("positive_total", 101),
+            ("nxdomain_total", 2),
+            ("nodata_total", 3),
+            ("servfail_total", 4),
+            ("refused_total", 5),
+            ("other_rcode_total", 6),
+            ("rx_dns_unmatched_total", 7),
+            ("rx_truncated_total", 8),
+        ] {
+            assert_eq!(record[key], expected, "missing or incorrect {key}");
+        }
+    }
 
     #[test]
     fn builds_ipv4_ethernet_udp_dns_frame_with_checksums() {

@@ -258,6 +258,49 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "experimental-freshness-batching")]
+    #[tokio::test]
+    async fn batched_freshness_cannot_cross_a_revoked_catalog_namespace() {
+        let (root, persistence, mut plan, catalog, node) = fixture();
+        let snapshot = super::super::tests::snapshot();
+        plan.origin = snapshot.origin().clone();
+        let old = persistence.catalog_binding(&catalog, &node, &plan).unwrap();
+        let bound = persistence.with_binding(Some(old));
+        bound.persist(&snapshot).unwrap();
+        bound
+            .renew_freshness_batched(snapshot.origin(), snapshot.serial())
+            .await
+            .unwrap();
+        let checksum = bound.active_cache_checksum(snapshot.origin()).unwrap();
+        let batcher = bound.batcher().unwrap();
+        assert!(
+            batcher
+                .read(&bound, snapshot.origin(), snapshot.serial(), &checksum)
+                .is_some()
+        );
+        persistence.revoke_catalog_binding(old).unwrap();
+        let new = persistence.catalog_binding(&catalog, &node, &plan).unwrap();
+        let rebound = persistence.with_binding(Some(new));
+        // Even identical serial/content cannot carry freshness across lifecycles.
+        assert_eq!(
+            batcher.read(&rebound, snapshot.origin(), snapshot.serial(), &checksum),
+            None
+        );
+        assert_eq!(
+            batcher.read(
+                &persistence,
+                snapshot.origin(),
+                snapshot.serial(),
+                &checksum
+            ),
+            None
+        );
+        drop(rebound);
+        drop(bound);
+        drop(persistence);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn catalog_cache_binding_rejects_malformed_token_instead_of_reusing_cache() {
         let (root, persistence, plan, catalog, node) = fixture();

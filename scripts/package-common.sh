@@ -138,7 +138,7 @@ package_canonical_output_root() {
         return 1
     }
     mode=$((8#$mode))
-    ((!(mode & 0022))) || {
+    ((! (mode & 0022))) || {
         printf '%s must not be group/world-writable: %q\n' "$label" "$canonical" >&2
         return 1
     }
@@ -1381,7 +1381,7 @@ package_acquire_publication_lock() {
     mode="$(stat -c '%a' -- "$lock_root")" || return 1
     [[ "$owner" == "$(id -u)" && "$mode" =~ ^[0-7]+$ ]] || return 1
     mode=$((8#$mode))
-    ((!(mode & 0077))) || {
+    ((! (mode & 0077))) || {
         printf 'package publication lock root is not private: %q\n' "$lock_root" >&2
         return 1
     }
@@ -1628,7 +1628,7 @@ package_acquire_docker_image_lock() {
     mode="$(stat -c '%a' -- "$lock_root")" || return 1
     [[ "$owner" == "$(id -u)" && "$mode" =~ ^[0-7]+$ ]] || return 1
     mode=$((8#$mode))
-    ((!(mode & 0077))) || {
+    ((! (mode & 0077))) || {
         printf 'Docker publication lock root is not private: %q\n' "$lock_root" >&2
         return 1
     }

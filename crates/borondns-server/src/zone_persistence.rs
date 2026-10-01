@@ -19,6 +19,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod catalog_lifecycle;
+#[cfg(feature = "experimental-freshness-batching")]
+mod freshness_batch;
 pub(crate) use catalog_lifecycle::CatalogCacheBinding;
 
 const MAGIC: &[u8; 8] = b"BORONZ01";
@@ -45,9 +47,11 @@ pub(crate) enum ZonePersistenceError {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ZonePersistence {
-    directory: PathBuf,
+    directory: std::sync::Arc<Path>,
     max_file_bytes: u64,
     binding: Option<CatalogCacheBinding>,
+    #[cfg(feature = "experimental-freshness-batching")]
+    freshness_batch: std::sync::Arc<std::sync::OnceLock<Result<freshness_batch::Batcher, String>>>,
 }
 
 pub(crate) struct RestoredZone {
@@ -150,11 +154,47 @@ impl Drop for StagedZoneCache {
 }
 
 impl ZonePersistence {
+    #[cfg(feature = "experimental-freshness-batching")]
+    pub(crate) async fn renew_freshness_batched(
+        &self,
+        origin: &DomainName,
+        serial: Option<u32>,
+    ) -> Result<(), String> {
+        // Capture the authenticated observation time before queuing or disk I/O.
+        let observed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if self.freshness_batch.get().is_none() {
+            let persistence = self.clone();
+            tokio::task::spawn_blocking(move || persistence.batcher().map(|_| ()))
+                .await
+                .map_err(|error| error.to_string())??;
+        }
+        self.batcher()?.renew(self, origin, serial, observed).await
+    }
+
+    #[cfg(feature = "experimental-freshness-batching")]
+    fn batcher(&self) -> Result<&freshness_batch::Batcher, String> {
+        self.freshness_batch
+            .get_or_init(|| {
+                freshness_batch::Batcher::open(&self.directory).map_err(|error| {
+                    tracing::warn!(directory = %self.directory.display(), %error,
+                        "freshness group-commit journal unavailable; retaining conservative cache expiry");
+                    error.to_string()
+                })
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
     pub(crate) fn new(directory: PathBuf, max_file_bytes: u64) -> Self {
         Self {
-            directory,
+            directory: directory.into(),
             max_file_bytes,
             binding: None,
+            #[cfg(feature = "experimental-freshness-batching")]
+            freshness_batch: Default::default(),
         }
     }
 
@@ -525,6 +565,15 @@ impl ZonePersistence {
             .read_freshness(&origin, snapshot.serial(), &active_checksum)
             .unwrap_or(effective_persisted_unix_secs)
             .max(effective_persisted_unix_secs);
+        #[cfg(feature = "experimental-freshness-batching")]
+        if (self.freshness_batch.get().is_some()
+            || fs::symlink_metadata(self.directory.join("freshness-v1.bfg")).is_ok())
+            && let Ok(batcher) = self.batcher()
+            && let Some(refreshed) =
+                batcher.read(self, &origin, snapshot.serial(), &active_checksum)
+        {
+            effective_persisted_unix_secs = effective_persisted_unix_secs.max(refreshed);
+        }
         {
             let elapsed = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -566,11 +615,7 @@ impl ZonePersistence {
         Ok(())
     }
 
-    pub(crate) fn renew_freshness(
-        &self,
-        origin: &DomainName,
-        serial: Option<u32>,
-    ) -> Result<(), ZonePersistenceError> {
+    fn active_cache_checksum(&self, origin: &DomainName) -> Result<[u8; 32], ZonePersistenceError> {
         let final_path = self.path_for(origin);
         let base_checksum = self.cache_checksum(&final_path)?;
         let journal_path = self.journal_path_for(origin);
@@ -586,6 +631,16 @@ impl ZonePersistence {
             Err(error) if error.kind() == io::ErrorKind::NotFound => base_checksum,
             Err(source) => return Err(self.io_error(&journal_path, source)),
         };
+        Ok(cache_checksum)
+    }
+
+    #[cfg(any(test, not(feature = "experimental-freshness-batching")))]
+    pub(crate) fn renew_freshness(
+        &self,
+        origin: &DomainName,
+        serial: Option<u32>,
+    ) -> Result<(), ZonePersistenceError> {
+        let cache_checksum = self.active_cache_checksum(origin)?;
         let refreshed_unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -1179,7 +1234,7 @@ mod tests {
         rdata
     }
 
-    fn snapshot() -> ZoneSnapshot {
+    pub(super) fn snapshot() -> ZoneSnapshot {
         ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
             Some(7),
@@ -1916,6 +1971,57 @@ mod tests {
             restored.snapshot.state(),
             borondns_core::zone::ZoneState::Active
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "experimental-freshness-batching")]
+    #[tokio::test]
+    async fn batched_freshness_recovers_without_per_zone_freshness_files() {
+        let root = std::env::temp_dir().join(format!(
+            "borondns-batched-freshness-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let persistence = ZonePersistence::new(root.clone(), 1024 * 1024);
+        let snapshot = snapshot();
+        persistence.persist(&snapshot).unwrap();
+        let path = persistence.path_for(snapshot.origin());
+        let mut bytes = fs::read(&path).unwrap();
+        let offset = MAGIC.len() + 2 + snapshot.origin().to_wire().len() + 1 + 4;
+        bytes[offset..offset + 8].copy_from_slice(&0u64.to_be_bytes());
+        let end = bytes.len() - 32;
+        let digest = Sha256::digest(&bytes[..end]);
+        bytes[end..].copy_from_slice(&digest);
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            persistence
+                .restore(snapshot.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .state(),
+            borondns_core::zone::ZoneState::Expired
+        );
+        persistence
+            .renew_freshness_batched(snapshot.origin(), snapshot.serial())
+            .await
+            .unwrap();
+        assert!(
+            !persistence.freshness_path_for(snapshot.origin()).exists(),
+            "group commit must not rewrite a separate file for each zone"
+        );
+        drop(persistence);
+        let restarted = ZonePersistence::new(root.clone(), 1024 * 1024);
+        assert_eq!(
+            restarted
+                .restore(snapshot.origin(), 1)
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .state(),
+            borondns_core::zone::ZoneState::Active
+        );
+        drop(restarted);
         fs::remove_dir_all(root).unwrap();
     }
 

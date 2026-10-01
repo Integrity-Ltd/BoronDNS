@@ -1200,7 +1200,7 @@ status_plan() {
         helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
         [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
         if ! campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
-            -- "$host" bash -s -- "$systemd_unit" "$host_evidence" "$remote_repo" "$source_commit" "$runner_prefix" "$helper_sha256" <<'REMOTE'; then
+            -- "$host" bash -s -- "$systemd_unit" "$host_evidence" "$remote_repo" "$source_commit" "$runner_prefix" "$helper_sha256" <<'REMOTE'
 set -euo pipefail
 unit="$1"
 host_evidence="$2"
@@ -1298,6 +1298,7 @@ fi
 timeout --preserve-status --kill-after=5 30 journalctl -u "$unit" --no-pager -n 80 2>/dev/null || true
 exit "$remote_probe_status"
 REMOTE
+        then
             printf 'status probe failed: host=%s unit=%s\n' "$host" "$systemd_unit" >&2
             status_result=1
         fi

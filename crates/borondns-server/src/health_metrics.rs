@@ -15,7 +15,7 @@ use std::{
 use axum::{
     Router,
     body::{Body, Bytes, HttpBody},
-    extract::{ConnectInfo, Path, Request, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -598,23 +598,41 @@ async fn readyz(State(state): State<HealthEndpointState>) -> Response {
     readiness_response(&state)
 }
 
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum MetricsScope {
+    #[default]
+    All,
+    Global,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct MetricsQuery {
+    #[serde(default)]
+    scope: MetricsScope,
+}
+
 async fn metrics(
     ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
+    Query(query): Query<MetricsQuery>,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     if let Err(retry_after_seconds) = state.metrics_rate_limiter.check(peer.ip()) {
         return rate_limited_response(retry_after_seconds);
     }
 
-    let mut body = metrics_body(
-        &state.zones,
-        &state.metrics,
-        &state.catalog_manager,
-        &state.refresh_registry,
-        Instant::now(),
-        state.zone_shape_metrics_enabled,
-    );
+    let mut body = match query.scope {
+        MetricsScope::All => metrics_body(
+            &state.zones,
+            &state.metrics,
+            &state.catalog_manager,
+            &state.refresh_registry,
+            Instant::now(),
+            state.zone_shape_metrics_enabled,
+        ),
+        MetricsScope::Global => global_metrics_body(&state.zones, &state.metrics),
+    };
     append_transfer_ingest_budget_metrics(&mut body, &state.transfer_ingest_budget);
     if accepts_gzip(&headers) {
         match gzip_bytes(body.as_bytes()) {
@@ -1346,6 +1364,21 @@ pub(crate) fn metrics_body(
     now: Instant,
     zone_shape_metrics_enabled: bool,
 ) -> String {
+    let mut body = global_metrics_body(zones, metrics);
+    append_catalog_member_metrics(&mut body, catalog_manager);
+    let refresh_statuses = refresh_registry.snapshots_by_zone_at(now);
+    append_zone_status_metrics(&mut body, zones, &refresh_statuses);
+    if zone_shape_metrics_enabled {
+        append_zone_shape_metrics(&mut body, zones);
+    }
+    append_zone_scheduler_metrics(&mut body, zones, &refresh_statuses);
+    append_zone_query_metrics(&mut body, zones, metrics);
+    body
+}
+
+// Deliberately independent of catalog membership and refresh registries: a
+// global scrape must not enumerate zones and then discard their rendered data.
+fn global_metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
     let snapshot = metrics.snapshot();
     let mut body = format!(
         "# HELP borondns_zones_total Configured zones.\n\
@@ -1429,14 +1462,6 @@ pub(crate) fn metrics_body(
     append_chaos_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
-    append_catalog_member_metrics(&mut body, catalog_manager);
-    let refresh_statuses = refresh_registry.snapshots_by_zone_at(now);
-    append_zone_status_metrics(&mut body, zones, &refresh_statuses);
-    if zone_shape_metrics_enabled {
-        append_zone_shape_metrics(&mut body, zones);
-    }
-    append_zone_scheduler_metrics(&mut body, zones, &refresh_statuses);
-    append_zone_query_metrics(&mut body, zones, metrics);
     body
 }
 
@@ -3791,6 +3816,20 @@ impl RuntimeMetrics {
         if let Some(counter) = self.inner.af_xdp_worker_received_packets.get(worker_id) {
             counter.fetch_add(packets as u64, Ordering::Relaxed);
         }
+    }
+
+    #[cfg(all(test, feature = "experimental-xdp-group-loop"))]
+    pub(crate) fn af_xdp_worker_receive_stats_for_test(&self, worker_id: usize) -> (u64, u64) {
+        (
+            self.inner
+                .af_xdp_worker_receive_batches
+                .get(worker_id)
+                .map_or(0, |counter| counter.load(Ordering::Relaxed)),
+            self.inner
+                .af_xdp_worker_received_packets
+                .get(worker_id)
+                .map_or(0, |counter| counter.load(Ordering::Relaxed)),
+        )
     }
 
     #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]

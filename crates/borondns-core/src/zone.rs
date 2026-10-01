@@ -3288,13 +3288,59 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
     }
 }
 
+#[cfg(any(
+    test,
+    feature = "experimental-fused-serving",
+    not(feature = "experimental-directory-shards")
+))]
 const ZONE_DIRECTORY_SHARD_COUNT: usize = 256;
 const SMALL_ZONE_DIRECTORY_LIMIT: usize = 4;
 
+#[cfg(feature = "experimental-batch-authority")]
+mod batch_authority;
+mod directory_shards;
+use directory_shards::{DirectoryShards, new_directory_shards};
+#[cfg(feature = "experimental-fused-serving")]
+mod fused_serving;
+#[cfg(feature = "experimental-serving-directory")]
+mod serving_directory;
+#[cfg(feature = "experimental-serving-directory")]
+use serving_directory::{
+    ServingDirectoryEntry as ZoneSuffixEntry, ServingOriginKey as ZoneSuffixKey,
+};
+#[cfg(not(feature = "experimental-serving-directory"))]
+type ZoneSuffixEntry = Arc<ZoneStoreEntry>;
+#[cfg(not(feature = "experimental-serving-directory"))]
+type ZoneSuffixKey = Vec<u8>;
+
+#[inline]
+fn suffix_control_entry(entry: &ZoneSuffixEntry) -> &Arc<ZoneStoreEntry> {
+    #[cfg(feature = "experimental-serving-directory")]
+    {
+        &entry.control
+    }
+    #[cfg(not(feature = "experimental-serving-directory"))]
+    {
+        entry
+    }
+}
+
+#[cfg(all(test, feature = "experimental-serving-directory"))]
+fn suffix_control_entry_mut(entry: &mut ZoneSuffixEntry) -> &mut Arc<ZoneStoreEntry> {
+    &mut entry.control
+}
+
 #[derive(Debug, Clone)]
 struct ZoneDirectory {
-    by_origin: [Arc<HashMap<String, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
-    suffix_index: [Arc<HashMap<Vec<u8>, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT],
+    #[cfg(feature = "experimental-fused-serving")]
+    fused: fused_serving::FusedDirectory,
+    by_origin: DirectoryShards<String, Arc<ZoneStoreEntry>>,
+    suffix_index: DirectoryShards<ZoneSuffixKey, ZoneSuffixEntry>,
+    // Conservative lengths present in the suffix index. Stale bits after a
+    // removal only cost an extra lookup; they cannot hide a matching zone.
+    // DNS names fit in 255 wire bytes, but out-of-range internal keys still
+    // take the ordinary lookup path rather than imposing a new size limit.
+    suffix_key_lengths: [u64; 4],
     // Publication-local shortcut, ordered most-specific first. Larger
     // directories use the sharded suffix index without a linear scan.
     small: SmallVec<[Arc<ZoneStoreEntry>; SMALL_ZONE_DIRECTORY_LIMIT]>,
@@ -3305,8 +3351,11 @@ struct ZoneDirectory {
 impl Default for ZoneDirectory {
     fn default() -> Self {
         Self {
-            by_origin: std::array::from_fn(|_| Arc::new(HashMap::new())),
-            suffix_index: std::array::from_fn(|_| Arc::new(HashMap::new())),
+            #[cfg(feature = "experimental-fused-serving")]
+            fused: fused_serving::FusedDirectory::default(),
+            by_origin: new_directory_shards(),
+            suffix_index: new_directory_shards(),
+            suffix_key_lengths: [0; 4],
             small: SmallVec::new(),
             len: 0,
             active_count: 0,
@@ -3333,6 +3382,123 @@ pub struct PublishedZone {
 #[derive(Debug, Clone, Copy)]
 pub struct PublishedZoneRef<'a> {
     entry: &'a ZoneStoreEntry,
+    #[cfg(feature = "experimental-serving-directory")]
+    serving_state: ZoneState,
+    #[cfg(feature = "experimental-serving-directory")]
+    serving_image: Option<&'a ZoneImage>,
+    #[cfg(feature = "experimental-serving-directory")]
+    serving_has_overlay: bool,
+    #[cfg(feature = "experimental-selected-query")]
+    serving_origin_label_count: usize,
+}
+
+impl<'a> PublishedZoneRef<'a> {
+    fn from_entry(entry: &'a ZoneStoreEntry) -> Self {
+        Self {
+            entry,
+            #[cfg(feature = "experimental-serving-directory")]
+            serving_state: entry.state,
+            #[cfg(feature = "experimental-serving-directory")]
+            serving_image: entry.image.as_deref(),
+            #[cfg(feature = "experimental-serving-directory")]
+            serving_has_overlay: entry.overlay_dirty.is_some(),
+            #[cfg(feature = "experimental-selected-query")]
+            serving_origin_label_count: entry.origin_label_count,
+        }
+    }
+}
+
+/// Borrow one directory publication for the initial authority selections in a
+/// bounded group. Cross-zone fallback retains the ordinary resolver's semantics.
+#[cfg(feature = "experimental-staged-serving")]
+pub(crate) struct BatchZoneSelector<'a> {
+    directory: &'a ZoneDirectory,
+}
+
+#[cfg(feature = "experimental-staged-serving")]
+impl BatchZoneSelector<'_> {
+    pub(crate) fn select<'a>(
+        &'a self,
+        qname: &'a DomainName,
+        lowercase: bool,
+        prefer_parent: bool,
+    ) -> Option<(PublishedZoneRef<'a>, Option<SelectedZoneQuery<'a>>)> {
+        let view = self
+            .directory
+            .find_query_serving_view(qname, lowercase, prefer_parent)?;
+        let selected =
+            (view.state() == ZoneState::Active && !view.has_incremental_overlay()).then(|| {
+                SelectedZoneQuery {
+                    qname,
+                    image: view.serving_image.expect("active published image"),
+                    relative_labels: qname.label_count() - view.serving_origin_label_count,
+                }
+            });
+        Some((view, selected))
+    }
+}
+
+#[cfg(feature = "experimental-selected-query")]
+#[derive(Clone, Copy)]
+/// Query/image proof with private fields, bound to its immutable publication.
+pub(crate) struct SelectedZoneQuery<'a> {
+    qname: &'a DomainName,
+    image: &'a ZoneImage,
+    relative_labels: usize,
+}
+
+#[cfg(feature = "experimental-selected-query")]
+impl SelectedZoneQuery<'_> {
+    #[cfg(feature = "experimental-staged-serving")]
+    pub(crate) fn image(&self) -> &ZoneImage {
+        self.image
+    }
+
+    #[cfg(feature = "experimental-staged-serving")]
+    pub(crate) fn prepare_compact(
+        &self,
+        qtype: u16,
+        qclass: u16,
+        lowercase: bool,
+    ) -> Option<crate::zone_image::PreparedCompactLookup<'_>> {
+        self.image.prepare_compact_relative(
+            self.qname,
+            self.relative_labels,
+            qtype,
+            qclass,
+            lowercase,
+        )
+    }
+
+    /// An absent descriptor in the selected image is a completed lookup, not
+    /// a reason to repeat the same compact search through the checked path.
+    pub(crate) fn lookup_compact_or_else<'a>(
+        &self,
+        image: &'a ZoneImage,
+        qtype: u16,
+        qclass: u16,
+        lowercase: bool,
+        fallback: impl FnOnce() -> Option<crate::zone_image::ZoneImageDirectRrset<'a>>,
+    ) -> Option<crate::zone_image::ZoneImageDirectRrset<'a>> {
+        if std::ptr::eq(image, self.image) {
+            self.lookup_compact(image, qtype, qclass, lowercase)
+        } else {
+            fallback()
+        }
+    }
+
+    pub(crate) fn lookup_compact<'a>(
+        &self,
+        image: &'a ZoneImage,
+        qtype: u16,
+        qclass: u16,
+        lowercase: bool,
+    ) -> Option<crate::zone_image::ZoneImageDirectRrset<'a>> {
+        if !std::ptr::eq(image, self.image) {
+            return None;
+        }
+        image.lookup_compact_relative(self.qname, self.relative_labels, qtype, qclass, lowercase)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3498,6 +3664,16 @@ impl Default for ZoneStore {
 }
 
 impl ZoneStore {
+    #[cfg(feature = "experimental-staged-serving")]
+    pub(crate) fn with_batch_selector<R>(
+        &self,
+        visit: impl FnOnce(BatchZoneSelector<'_>) -> R,
+    ) -> R {
+        let directory = self.zones.load();
+        visit(BatchZoneSelector {
+            directory: &directory,
+        })
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -4106,8 +4282,13 @@ impl ZoneStore {
         visit: impl FnOnce(PublishedZoneRef<'_>) -> R,
     ) -> Option<R> {
         let zones = self.zones.load();
+        #[cfg(feature = "experimental-serving-directory")]
+        let view = zones.find_query_serving_view(qname, qname_ascii_lowercase, false)?;
+        #[cfg(not(feature = "experimental-serving-directory"))]
         let entry = zones.find_best_match_ref(qname, qname_ascii_lowercase)?;
-        Some(visit(PublishedZoneRef { entry }))
+        #[cfg(not(feature = "experimental-serving-directory"))]
+        let view = PublishedZoneRef::from_entry(entry);
+        Some(visit(view))
     }
 
     /// Borrow the query's published zone, optionally preferring the closest
@@ -4124,11 +4305,45 @@ impl ZoneStore {
         visit: impl FnOnce(PublishedZoneRef<'_>) -> R,
     ) -> Option<R> {
         let zones = self.zones.load();
+        #[cfg(feature = "experimental-serving-directory")]
+        let view = zones.find_query_serving_view(
+            qname,
+            qname_ascii_lowercase,
+            prefer_parent_of_exact_child,
+        )?;
+        #[cfg(not(feature = "experimental-serving-directory"))]
         let entry = prefer_parent_of_exact_child
             .then(|| zones.find_parent_of_exact_match_ref(qname, qname_ascii_lowercase))
             .flatten()
             .or_else(|| zones.find_best_match_ref(qname, qname_ascii_lowercase))?;
-        Some(visit(PublishedZoneRef { entry }))
+        #[cfg(not(feature = "experimental-serving-directory"))]
+        let view = PublishedZoneRef::from_entry(entry);
+        Some(visit(view))
+    }
+
+    #[cfg(feature = "experimental-selected-query")]
+    pub(crate) fn with_selected_query_zone<R>(
+        &self,
+        qname: &DomainName,
+        lowercase: bool,
+        prefer_parent: bool,
+        visit: impl FnOnce(PublishedZoneRef<'_>, Option<SelectedZoneQuery<'_>>) -> R,
+    ) -> Option<R> {
+        self.with_published_zone_for_query_with_ascii_lowercase_hint(
+            qname,
+            lowercase,
+            prefer_parent,
+            |view| {
+                let selected = (view.state() == ZoneState::Active
+                    && !view.has_incremental_overlay())
+                .then(|| SelectedZoneQuery {
+                    qname,
+                    image: view.active_zone_image_ref(),
+                    relative_labels: qname.label_count() - view.serving_origin_label_count,
+                });
+                visit(view, selected)
+            },
+        )
     }
 
     /// Return cheap published-zone metadata for status and metrics without
@@ -4297,7 +4512,7 @@ impl ZoneStore {
         #[cfg(test)]
         if !current.is_empty() {
             self.publication_clone_work
-                .fetch_add(ZONE_DIRECTORY_SHARD_COUNT * 2, Ordering::Relaxed);
+                .fetch_add(directory_shards::ROOT_OWNER_COUNT * 2, Ordering::Relaxed);
         }
         current.clone()
     }
@@ -4517,15 +4732,31 @@ impl PublishedZoneView for PublishedZoneRef<'_> {
     }
 
     fn state(&self) -> ZoneState {
-        self.entry.state
+        #[cfg(feature = "experimental-serving-directory")]
+        {
+            self.serving_state
+        }
+        #[cfg(not(feature = "experimental-serving-directory"))]
+        {
+            self.entry.state
+        }
     }
 
     fn active_zone_image_ref(&self) -> &ZoneImage {
-        debug_assert_eq!(self.entry.state, ZoneState::Active);
-        self.entry
-            .image
-            .as_deref()
-            .expect("active published zone must include a compiled ZoneImage")
+        #[cfg(feature = "experimental-serving-directory")]
+        {
+            debug_assert_eq!(self.serving_state, ZoneState::Active);
+            self.serving_image
+                .expect("active published zone must include a compiled ZoneImage")
+        }
+        #[cfg(not(feature = "experimental-serving-directory"))]
+        {
+            debug_assert_eq!(self.entry.state, ZoneState::Active);
+            self.entry
+                .image
+                .as_deref()
+                .expect("active published zone must include a compiled ZoneImage")
+        }
     }
 
     fn active_snapshot_ref(&self) -> &ZoneSnapshot {
@@ -4534,7 +4765,14 @@ impl PublishedZoneView for PublishedZoneRef<'_> {
     }
 
     fn has_incremental_overlay(&self) -> bool {
-        self.entry.overlay_dirty.is_some()
+        #[cfg(feature = "experimental-serving-directory")]
+        {
+            self.serving_has_overlay
+        }
+        #[cfg(not(feature = "experimental-serving-directory"))]
+        {
+            self.entry.overlay_dirty.is_some()
+        }
     }
 
     fn overlay_allows_compact_direct_shape(
@@ -4566,9 +4804,14 @@ impl PublishedZoneView for PublishedZoneRef<'_> {
 impl ZoneDirectory {
     fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
         let suffix_key = canonical_reverse_label_key(&entry.origin);
-        let origin_shard = zone_directory_shard(key.as_bytes());
-        let suffix_shard = zone_directory_shard(&suffix_key);
+        if let Some(lengths) = self.suffix_key_lengths.get_mut(suffix_key.len() / 64) {
+            *lengths |= 1 << (suffix_key.len() % 64);
+        }
+        let origin_shard = main_directory_shard(key.as_bytes());
+        let suffix_shard = main_directory_shard(&suffix_key);
         let previous = Arc::make_mut(&mut self.by_origin[origin_shard]).insert(key, entry.clone());
+        #[cfg(feature = "experimental-fused-serving")]
+        self.update_fused(&entry, previous.as_ref());
         if let Some(previous) = previous {
             self.active_count = self.active_count.saturating_sub(usize::from(
                 previous.state == ZoneState::Active && !previous.hidden,
@@ -4588,18 +4831,27 @@ impl ZoneDirectory {
         } else {
             self.small.clear();
         }
+        #[cfg(feature = "experimental-serving-directory")]
+        let suffix_key = ZoneSuffixKey::from(suffix_key);
+        #[cfg(feature = "experimental-serving-directory")]
+        let entry = ZoneSuffixEntry::from(entry);
         Arc::make_mut(&mut self.suffix_index[suffix_shard]).insert(suffix_key, entry);
     }
 
     fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
-        let origin_shard = zone_directory_shard(key.as_bytes());
+        let origin_shard = main_directory_shard(key.as_bytes());
         let entry = Arc::make_mut(&mut self.by_origin[origin_shard]).remove(key)?;
+        #[cfg(feature = "experimental-fused-serving")]
+        self.remove_fused(&entry);
         self.len = self.len.saturating_sub(1);
+        if self.len == 0 {
+            self.suffix_key_lengths = [0; 4];
+        }
         self.active_count = self.active_count.saturating_sub(usize::from(
             entry.state == ZoneState::Active && !entry.hidden,
         ));
         let suffix_key = canonical_reverse_label_key(&entry.origin);
-        let suffix_shard = zone_directory_shard(&suffix_key);
+        let suffix_shard = main_directory_shard(&suffix_key);
         Arc::make_mut(&mut self.suffix_index[suffix_shard]).remove(suffix_key.as_slice());
         if self.len <= SMALL_ZONE_DIRECTORY_LIMIT {
             self.small = self.values().cloned().collect();
@@ -4614,7 +4866,7 @@ impl ZoneDirectory {
     }
 
     fn get(&self, key: &str) -> Option<&Arc<ZoneStoreEntry>> {
-        self.by_origin[zone_directory_shard(key.as_bytes())].get(key)
+        self.by_origin[main_directory_shard(key.as_bytes())].get(key)
     }
 
     fn values(&self) -> impl Iterator<Item = &Arc<ZoneStoreEntry>> {
@@ -4679,6 +4931,7 @@ impl ZoneDirectory {
         None
     }
 
+    #[cfg(any(test, not(feature = "experimental-serving-directory")))]
     fn find_parent_of_exact_match_ref(
         &self,
         qname: &DomainName,
@@ -4704,17 +4957,42 @@ impl ZoneDirectory {
     }
 
     fn suffix_get(&self, key: &[u8]) -> Option<&Arc<ZoneStoreEntry>> {
-        self.suffix_index[zone_directory_shard(key)].get(key)
+        self.suffix_get_indexed(key).map(suffix_control_entry)
+    }
+
+    fn suffix_get_indexed(&self, key: &[u8]) -> Option<&ZoneSuffixEntry> {
+        if self
+            .suffix_key_lengths
+            .get(key.len() / 64)
+            .is_some_and(|lengths| lengths & (1 << (key.len() % 64)) == 0)
+        {
+            return None;
+        }
+        #[cfg(test)]
+        tests::SUFFIX_HASH_PROBES.with(|probes| probes.set(probes.get() + 1));
+        self.suffix_index[main_directory_shard(key)].get(key)
     }
 }
 
+#[cfg(any(
+    feature = "experimental-fused-serving",
+    all(test, feature = "experimental-directory-shards")
+))]
 fn zone_directory_shard(bytes: &[u8]) -> usize {
+    zone_directory_hash(bytes) & (ZONE_DIRECTORY_SHARD_COUNT - 1)
+}
+
+fn main_directory_shard(bytes: &[u8]) -> usize {
+    zone_directory_hash(bytes) & (directory_shards::MAP_COUNT - 1)
+}
+
+fn zone_directory_hash(bytes: &[u8]) -> usize {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    (hash as usize) & (ZONE_DIRECTORY_SHARD_COUNT - 1)
+    hash as usize
 }
 
 fn canonical_reverse_label_key(name: &DomainName) -> Vec<u8> {
@@ -5438,6 +5716,146 @@ impl RrsetKey {
 mod tests {
     use super::*;
     use std::mem;
+
+    thread_local! {
+        pub(super) static SUFFIX_HASH_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[test]
+    fn zone_directory_skips_impossible_suffix_lengths() {
+        let store = ZoneStore::new();
+        for index in 0..5 {
+            let origin =
+                DomainName::from_absolute_str(&format!("z{index:04}.example.test.")).unwrap();
+            store.insert_snapshot(ZoneSnapshot::active(origin, Some(1), Vec::new()));
+        }
+        let directory = store.zones.load();
+        assert!(directory.small.is_empty());
+        for (name, lowercase) in [
+            ("www.z0000.example.test.", true),
+            ("WWW.Z0000.Example.TEST.", false),
+        ] {
+            let qname = DomainName::from_absolute_str(name).unwrap();
+            SUFFIX_HASH_PROBES.set(0);
+            let entry = directory.find_best_match_ref(&qname, lowercase).unwrap();
+            assert_eq!(entry.origin.to_string(), "z0000.example.test.");
+            assert_eq!(
+                SUFFIX_HASH_PROBES.get(),
+                1,
+                "impossible query-name length must not hash"
+            );
+        }
+        SUFFIX_HASH_PROBES.set(0);
+        let outside = DomainName::from_absolute_str("outside.invalid.").unwrap();
+        assert!(directory.find_best_match_ref(&outside, true).is_none());
+        assert_eq!(SUFFIX_HASH_PROBES.get(), 0, "absent lengths must not hash");
+    }
+
+    #[test]
+    fn zone_directory_length_filter_covers_every_valid_wire_length() {
+        let store = ZoneStore::new();
+        let mut origins = Vec::new();
+        // Encoded suffix keys omit the terminal root byte. Length one is not
+        // possible for a valid non-root name; 254 represents a 255-byte name.
+        for length in std::iter::once(0).chain(2..=254) {
+            let mut remaining = length;
+            let mut wire = Vec::new();
+            while remaining != 0 {
+                let mut label_len = (remaining - 1).min(63);
+                if remaining - label_len - 1 == 1 {
+                    label_len -= 1;
+                }
+                wire.push(label_len as u8);
+                wire.extend((0..label_len).map(|index| [b'A', 0, b'.', 0xff][index % 4]));
+                remaining -= label_len + 1;
+            }
+            wire.push(0);
+            let (origin, consumed) = DomainName::parse(&wire, 0).unwrap();
+            assert_eq!(consumed, length + 1);
+            assert_eq!(canonical_reverse_label_key(&origin).len(), length);
+            store.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
+            origins.push(origin);
+        }
+        let directory = store.zones.load();
+        assert!(directory.small.is_empty());
+        for origin in origins {
+            let key = canonical_reverse_label_key(&origin);
+            assert!(
+                directory.suffix_get(&key).is_some(),
+                "key length {}",
+                key.len()
+            );
+            assert_eq!(
+                directory
+                    .find_best_match_ref(&origin, false)
+                    .unwrap()
+                    .origin,
+                origin
+            );
+        }
+        // Defensive fallback: a private out-of-range key still takes the old
+        // map path, rather than silently treating an unsupported length as absent.
+        SUFFIX_HASH_PROBES.set(0);
+        assert!(directory.suffix_get(&[0; 256]).is_none());
+        assert_eq!(SUFFIX_HASH_PROBES.get(), 1);
+    }
+
+    #[test]
+    fn zone_directory_length_filter_preserves_publications_and_parent_fallback() {
+        let store = ZoneStore::new();
+        let parents: Vec<_> = (0..5)
+            .map(|index| DomainName::from_absolute_str(&format!("zone{index}.example.")).unwrap())
+            .collect();
+        for origin in &parents {
+            store.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
+        }
+        let old = store.zones.load_full();
+        let child = DomainName::from_absolute_str("deep.zone0.example.").unwrap();
+        let query = DomainName::from_absolute_str("WWW.DEEP.ZONE0.EXAMPLE.").unwrap();
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(2), Vec::new()));
+        assert_eq!(store.find_published_zone(&query).unwrap().origin(), &child);
+        assert_eq!(
+            store
+                .zones
+                .load()
+                .find_parent_of_exact_match_ref(&child, true)
+                .unwrap()
+                .origin,
+            parents[0]
+        );
+        assert_eq!(
+            old.find_best_match_ref(&query, false).unwrap().origin,
+            parents[0]
+        );
+        store.hide_zone(&child);
+        assert_eq!(
+            store.find_published_zone(&query).unwrap().origin(),
+            &parents[0]
+        );
+        store.show_zone(&child);
+        assert_eq!(store.find_published_zone(&query).unwrap().origin(), &child);
+        assert!(store.remove_zone(&child));
+        assert_eq!(
+            store.find_published_zone(&query).unwrap().origin(),
+            &parents[0]
+        );
+        let root = DomainName::root();
+        let outside = DomainName::from_absolute_str("outside.invalid.").unwrap();
+        store.insert_snapshot(ZoneSnapshot::active(root.clone(), Some(3), Vec::new()));
+        assert_eq!(store.find_published_zone(&outside).unwrap().origin(), &root);
+        assert!(old.find_best_match_ref(&outside, true).is_none());
+        for origin in &parents {
+            assert!(store.remove_zone(origin));
+        }
+        assert!(store.remove_zone(&root));
+        assert_eq!(store.zones.load().suffix_key_lengths, [0; 4]);
+        assert_eq!(
+            old.find_best_match_ref(&query, false).unwrap().origin,
+            parents[0]
+        );
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(4), Vec::new()));
+        assert_eq!(store.find_published_zone(&query).unwrap().origin(), &child);
+    }
 
     #[test]
     fn nsec3_hashes_canonical_wire_octets_not_escaped_display_text() {
@@ -6475,6 +6893,57 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "experimental-serving-directory")]
+    fn serving_directory_hot_lookup_does_not_read_control_entry() {
+        let mut directory = ZoneDirectory::default();
+        let query = DomainName::from_absolute_str("www.z3.example.test.").unwrap();
+        for index in 0..8 {
+            let origin = DomainName::from_absolute_str(&format!("z{index}.example.test.")).unwrap();
+            let entry = Arc::new(
+                ZoneStoreEntry::try_new(
+                    origin.canonical_key(),
+                    Arc::new(ZoneSnapshot::active(origin, Some(1), Vec::new())),
+                    false,
+                    index,
+                )
+                .unwrap(),
+            );
+            directory.insert(entry.origin_key.to_string(), entry);
+        }
+        let expected_image = directory
+            .find_best_match_ref(&query, true)
+            .unwrap()
+            .image
+            .clone()
+            .unwrap();
+        assert!(directory.small.is_empty());
+        // Test-only corruption of exclusively owned cold metadata. A published
+        // production directory is immutable; its serving view must not need
+        // these fields to select and answer an ordinary active-zone query.
+        directory.by_origin = new_directory_shards();
+        for shard in directory.suffix_index.iter_mut() {
+            for indexed in Arc::make_mut(shard).values_mut() {
+                let cold = Arc::get_mut(suffix_control_entry_mut(indexed)).unwrap();
+                cold.hidden = true;
+                cold.state = ZoneState::Expired;
+                cold.image = None;
+            }
+        }
+        let store = ZoneStore::new();
+        store.zones.store(Arc::new(directory));
+        store
+            .with_published_zone_for_query_with_ascii_lowercase_hint(&query, true, false, |view| {
+                assert_eq!(view.state(), ZoneState::Active);
+                assert!(!view.has_incremental_overlay());
+                assert!(std::ptr::eq(
+                    view.active_zone_image_ref(),
+                    expected_image.as_ref()
+                ));
+            })
+            .expect("serving-only metadata remains available independently of cold control fields");
+    }
+
+    #[test]
     fn published_zone_lookup_uses_most_specific_suffix() {
         let store = ZoneStore::new();
         let parent = DomainName::from_absolute_str("example.test.").unwrap();
@@ -6735,6 +7204,65 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "experimental-directory-shards")]
+    fn directory_shards_publication_copies_few_unrelated_keys() {
+        let store = ZoneStore::new();
+        let origins = (0..10_000)
+            .map(|index| {
+                DomainName::from_absolute_str(&format!("zone-{index:05}.cow.test.")).unwrap()
+            })
+            .collect::<Vec<_>>();
+        store.insert_loading_batch(&origins, &[]);
+        let old = store.zones.load_full();
+        // Pick a populous old-layout shard, not an accidentally empty one.
+        let mut counts = [0usize; ZONE_DIRECTORY_SHARD_COUNT];
+        for origin in &origins {
+            counts[zone_directory_shard(origin.canonical_key().as_bytes())] += 1;
+        }
+        let shard = counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, count)| *count)
+            .unwrap()
+            .0;
+        assert!(counts[shard] > 32);
+        let target = origins
+            .iter()
+            .find(|origin| zone_directory_shard(origin.canonical_key().as_bytes()) == shard)
+            .unwrap();
+        let key = target.canonical_key();
+        let original = old.get(&key).unwrap();
+        let mut next = old.as_ref().clone();
+        next.insert(key.clone(), Arc::new(original.with_hidden(true)));
+        assert!(!old.get(&key).unwrap().hidden);
+        assert!(next.get(&key).unwrap().hidden);
+        assert_eq!(old.len(), next.len());
+        let copied = old
+            .by_origin
+            .iter()
+            .flat_map(|map| map.iter())
+            .filter(|(name, _)| {
+                if *name == &key {
+                    return false;
+                }
+                let new_key = next.by_origin[main_directory_shard(name.as_bytes())]
+                    .get_key_value(*name)
+                    .unwrap()
+                    .0;
+                !std::ptr::eq(name.as_ptr(), new_key.as_ptr())
+            })
+            .count();
+        assert!(
+            copied <= 16,
+            "one publication copied {copied} unrelated origin keys"
+        );
+        assert!(next.remove(&key).is_some());
+        assert!(next.get(&key).is_none());
+        assert!(old.get(&key).is_some());
+        assert_eq!(next.values().count(), origins.len() - 1);
+    }
+
+    #[test]
     fn ten_thousand_zone_batch_publication_has_bounded_shallow_clone_work() {
         let store = ZoneStore::new();
         let initial = (0..10_000)
@@ -6762,7 +7290,7 @@ mod tests {
         assert_eq!(store.len(), 10_000);
         assert_eq!(
             store.publication_clone_work(),
-            ZONE_DIRECTORY_SHARD_COUNT * 2,
+            directory_shards::ROOT_OWNER_COUNT * 2,
             "a 1k-zone replacement must shallow-clone only the fixed shard handles"
         );
         assert!(store.contains_exact_zone_for_control(&replacements[999]));

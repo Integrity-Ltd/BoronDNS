@@ -1,4 +1,98 @@
     #[test]
+    fn compact_name_edges_fit_four_per_cache_line() {
+        assert_eq!(
+            mem::size_of::<NameEdge>(),
+            16,
+            "name edges should fit four per 64-byte cache line"
+        );
+    }
+
+    #[test]
+    fn compact_name_edges_round_trip_every_label_length() {
+        let mut arena = vec![0xcc; 19];
+        let mut edges = Vec::new();
+        for len in 1..=63 {
+            // Include zero and non-ASCII bytes: labels are not C strings.
+            let label = (0..len).map(|index| (index * 137) as u8).collect::<Vec<_>>();
+            let before = arena.len();
+            let edge = NameEdge::new(&label, len as u32, &mut arena).unwrap();
+            assert_eq!(edge.child, len as u32);
+            assert_eq!(edge.label(&arena), label);
+            assert_eq!(arena.len() - before, if len <= 8 { 0 } else { len });
+            assert_eq!(edge.label_arena_range().is_none(), len <= 8);
+            edges.push((edge, label));
+        }
+        // Arena growth must not invalidate inline labels or stored offsets.
+        for (edge, label) in &edges {
+            assert_eq!(edge.label(&arena), label);
+        }
+        let original = arena.clone();
+        for invalid in [&[][..], &[0; 64][..]] {
+            assert_eq!(
+                NameEdge::new(invalid, 0, &mut arena),
+                Err(ZoneImageBuildError::InvalidCompiledOwner)
+            );
+        }
+        assert_eq!(arena, original);
+    }
+
+    #[test]
+    fn compact_name_edge_preserves_u64_arena_offsets() {
+        let offset = u64::from(u32::MAX) + 123;
+        let edge = NameEdge {
+            label_bytes_or_offset: offset.to_le_bytes(),
+            child: u32::MAX - 1,
+            label_len: 63,
+        };
+        assert_eq!(edge.label_arena_range(), Some(BlobRange { offset, len: 63 }));
+    }
+
+    #[test]
+    fn compact_name_edges_preserve_all_child_lookup_strategies() {
+        for fanout in [1, 4, 5, CHILD_HASH_FANOUT_THRESHOLD] {
+            let origin = DomainName::from_absolute_str("example.test.").unwrap();
+            let owners = (0..fanout)
+                .map(|index| {
+                    DomainName::from_absolute_str(&format!(
+                        "a{index:04x}{}.example.test.",
+                        "x".repeat(index % 59)
+                    ))
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let rrsets = owners
+                .iter()
+                .enumerate()
+                .map(|(index, owner)| {
+                    Rrset::new(
+                        owner.clone(),
+                        RecordType::A as u16,
+                        1,
+                        300,
+                        vec![(index as u32).to_be_bytes().to_vec()],
+                    )
+                })
+                .collect();
+            let image = ZoneImage::compile(&ZoneSnapshot::active(origin, Some(1), rrsets))
+                .expect("mixed inline and arena labels compile");
+            assert_eq!(image.nodes[0].edge_count as usize, fanout);
+            for owner in &owners {
+                let label = &owner.labels()[0];
+                let exact = image.find_child_with_ascii_lowercase_hint(0, label, true);
+                assert!(exact.is_some());
+                assert_eq!(image.find_child(0, &label.to_ascii_uppercase()), exact);
+                assert!(image.lookup_direct_answer_plan(owner, RecordType::A as u16, 1).is_some());
+                let mut missing = label.clone();
+                *missing.last_mut().unwrap() = b'z';
+                assert_eq!(image.find_child(0, &missing), None);
+            }
+            if fanout == 1 {
+                assert!(image.labels.is_empty(), "short labels need no arena allocation");
+            }
+        }
+    }
+
+    #[test]
     fn compact_rdata_range_keeps_image_record_and_rrset_metadata_bounded() {
         assert_eq!(mem::size_of::<RdataRange>(), mem::size_of::<BlobRange>());
         assert_eq!(mem::size_of::<ImageRecord>(), mem::size_of::<BlobRange>());
@@ -131,12 +225,10 @@
         let mut labels = Vec::with_capacity(fanout * mem::size_of::<u32>());
         let mut edges = Vec::with_capacity(fanout);
         for index in 0..fanout {
-            let offset = labels.len() as u64;
-            labels.extend_from_slice(&(index as u32).to_be_bytes());
-            edges.push(NameEdge {
-                label: BlobRange { offset, len: 4 },
-                child: index as u32,
-            });
+            edges.push(
+                NameEdge::new(&(index as u32).to_be_bytes(), index as u32, &mut labels)
+                    .expect("four-byte child label"),
+            );
         }
         let mut nodes = [NameNode {
             first_edge: 0,
@@ -1004,4 +1096,148 @@
             canonical_key_from_uncompressed_wire(b"\x03WWW\x07Example\x04TEST\x00"),
             canonical_key_from_uncompressed_wire(b"\x03www\x07example\x04test\x00")
         );
+    }
+    #[test]
+    #[cfg(feature = "experimental-compact-serving")]
+    fn compact_direct_result_does_not_carry_a_general_lookup_plan() {
+        let image = ZoneImage::compile(&sample_snapshot()).unwrap();
+        let qname = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let result = image.lookup_compact_direct(&qname, RecordType::A as u16, 1, true).unwrap();
+        assert!(mem::size_of_val(&result) <= 64, "direct wire lookup must not return the general resolver plan: {} bytes", mem::size_of_val(&result));
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-compact-serving")]
+    fn detached_template_preserves_counts_and_rejects_record_offsets() {
+        let image = ZoneImage::compile(&sample_snapshot()).unwrap();
+        let name = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let direct = image.lookup_compact_direct(&name, 1, 1, true).unwrap();
+        let template = direct.template_answer().unwrap();
+        #[cfg(not(feature = "experimental-compact-a-answers"))]
+        assert!(mem::size_of_val(&template) <= 32);
+        #[cfg(feature = "experimental-compact-a-answers")]
+        assert_eq!(mem::size_of_val(&template), 40);
+        assert_eq!(template.body_wire_len(), direct.body_wire_len);
+        let mut expected = Vec::new();
+        image.append_eligible_direct_answer_wire(&direct, &mut expected);
+        assert_eq!(template.wire_body().unwrap(), expected);
+        for edns in [false, true] {
+            assert_eq!(template.section_count_header_bytes(edns), direct.section_count_header_bytes(edns));
+        }
+        let records = ZoneImageDirectRrset {
+            body: ZoneImageDirectRrsetBody::Records { records: &[], record_prefix: [0; 10] },
+            ..direct
+        };
+        assert!(records.template_answer().is_none(), "record offsets require the ordinary image-backed writer");
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-compact-serving")]
+    fn compact_direct_wire_does_not_read_general_lookup_storage() {
+        let mut image = ZoneImage::compile(&sample_snapshot()).unwrap();
+        let qname = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let expected = image.lookup_direct_answer_plan(&qname, RecordType::A as u16, 1);
+        assert!(expected.is_some());
+        let wire = image.lookup_compact_direct(&qname, RecordType::A as u16, 1, true).unwrap();
+        let mut expected_wire = Vec::new();
+        image.append_eligible_direct_answer_wire(&wire, &mut expected_wire);
+
+        // A serving descriptor must carry everything needed to find and size
+        // this ordinary positive answer, independently of the general graph.
+        image.nodes = Box::default();
+        image.edges = Box::default();
+        image.rrsets = Box::default();
+        image.node_low_rrtype_bitmaps = Box::default();
+        #[cfg(feature = "experimental-packed-serving")]
+        { image.wire = Box::default(); }
+        let wire = image.lookup_compact_direct(&qname, RecordType::A as u16, 1, true).unwrap();
+        let mut actual_wire = Vec::new();
+        image.append_eligible_direct_answer_wire(&wire, &mut actual_wire);
+        assert_eq!(actual_wire, expected_wire);
+        #[cfg(feature = "experimental-packed-serving")]
+        {
+            let prepared = image.prepare_compact_relative(&qname, 1, 1, 1, true).unwrap();
+            let first = prepared.read_first();
+            let direct = prepared.resolve(&first).unwrap();
+            let mut staged_wire = Vec::new();
+            image.append_eligible_direct_answer_wire(&direct, &mut staged_wire);
+            assert_eq!(staged_wire, expected_wire);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-compact-serving")]
+    fn compact_direct_descriptors_match_graph_plans_and_wire() {
+        assert_eq!(mem::size_of::<compact_direct::DirectAnswerEntry>(), 64);
+        for snapshot in [sample_snapshot(), semantic_snapshot()] {
+            let image = ZoneImage::compile(&snapshot).unwrap();
+            let mut names = snapshot.rrsets().map(|rrset| rrset.owner.clone()).collect::<Vec<_>>();
+            for text in ["absent.example.test.", "absent.wild.example.test.", "absent.subtree.example.test.", "www.other.test."] {
+                names.push(DomainName::from_absolute_str(text).unwrap());
+            }
+            for owner in names {
+                for qclass in [1, 3, 255] {
+                    for qtype in [1, 2, 5, 6, 16, 28, 39, 43, 46, 47, 50, 255, 65280] {
+                        let actual = image.lookup_compact_direct(&owner, qtype, qclass, false);
+                        let expected = image.lookup_direct_answer_plan(&owner, qtype, qclass);
+                        if let Some(wire) = actual {
+                            let plan = expected.expect("compact descriptor must be eligible in the reference graph");
+                            let old_wire = image.direct_rrset_wire(plan.answer_rrsets()[0]).unwrap();
+                            assert_eq!(wire.body_wire_len, old_wire.body_wire_len);
+                            for edns in [false, true] {
+                                assert_eq!(wire.section_count_header_bytes(edns), old_wire.section_count_header_bytes(edns));
+                            }
+                            let mut actual = Vec::new();
+                            let mut expected = Vec::new();
+                            image.append_eligible_direct_answer_wire(&wire, &mut actual);
+                            image.append_eligible_direct_answer_wire(&old_wire, &mut expected);
+                            assert_eq!(actual, expected);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-compact-serving")]
+    fn compact_direct_bounded_index_preserves_case_long_names_and_missing_entries() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut owners = Vec::new();
+        let mut rrsets = Vec::new();
+        for index in 0..512 {
+            let owner = DomainName::from_absolute_str(&format!("n{index:04x}{}.example.test.", "x".repeat(index % 55))).unwrap();
+            rrsets.push(Rrset::new(owner.clone(), 1, 1, 300, vec![vec![192, 0, 2, 1]]));
+            owners.push(owner);
+        }
+        // Binary label bytes must not be confused with separators or a root.
+        for name in [&b"\x03a.b\x07example\x04test\0"[..], &b"\x03a\0b\x07example\x04test\0"[..]] {
+            let owner = DomainName::from_uncompressed_wire(name).unwrap();
+            rrsets.push(Rrset::new(owner.clone(), 1, 1, 300, vec![vec![192, 0, 2, 2]]));
+            owners.push(owner);
+        }
+        let mut image = ZoneImage::compile(&ZoneSnapshot::active(origin, Some(1), rrsets)).unwrap();
+        for owner in &owners {
+            let mut uppercase_wire = owner.to_wire();
+            uppercase_wire.make_ascii_uppercase();
+            let uppercase = DomainName::from_uncompressed_wire(&uppercase_wire).unwrap();
+            for name in [owner, &uppercase] {
+                let expected = image.lookup_direct_answer_plan(name, 1, 1).unwrap();
+                if let Some(wire) = image.lookup_compact_direct(name, 1, 1, false) {
+                    let old_wire = image.direct_rrset_wire(expected.answer_rrsets()[0]).unwrap();
+                    let mut actual = Vec::new();
+                    let mut reference = Vec::new();
+                    image.append_eligible_direct_answer_wire(&wire, &mut actual);
+                    image.append_eligible_direct_answer_wire(&old_wire, &mut reference);
+                    assert_eq!(actual, reference);
+                }
+            }
+        }
+        // A bounded-probe insertion may omit an entry. Missing accelerator
+        // entries must never become missing DNS answers.
+        image.compact_direct = Default::default();
+        for owner in &owners {
+            assert!(image.lookup_compact_direct(owner, 1, 1, false).is_none());
+            assert!(image.lookup_direct_answer_plan(owner, 1, 1).is_some());
+        }
     }

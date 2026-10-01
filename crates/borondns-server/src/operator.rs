@@ -362,13 +362,15 @@ primaries = ["127.0.0.1:9"]
 
     fn private_dir() -> PathBuf {
         use std::os::unix::fs::DirBuilderExt;
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "borondns-operator-{}-{}",
+            "borondns-operator-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::DirBuilder::new()
             .mode(0o700)

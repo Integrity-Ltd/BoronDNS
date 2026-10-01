@@ -49,13 +49,24 @@ The implementation lives in
 | `ZoneSnapshot` | Canonical RRsets, IXFR lineage, name/class indexes, denial-order indexes, and cached shape metadata. Also supplies the semantic lookup used by dirty overlay queries. |
 | `ZoneImage` | Immutable lookup arrays, pre-encoded wire, and compiled relationships for a compact generation. |
 | `ZoneStoreEntry` | Keeps the current snapshot, compact base, overlay state, and lifecycle metadata together. |
-| `ZoneDirectory` | Origin and suffix indexes, each divided into 256 copy-on-write map shards. |
+| `ZoneDirectory` | Origin and suffix indexes, each divided into 256 copy-on-write map shards by default. |
 | `PublishedZone` / `PublishedZoneRef` | Owned or borrowed access to one published entry during query work. |
 | `TransferZoneSnapshot` / `CatalogZoneView` / `ZoneMetadata` | Restricted views for transfer, catalog, and control work. |
 
 `ZoneStore` publishes directories through `ArcSwap`. Writers serialize the
 final replacement with `publish_lock`; readers do not take that lock. A
 directory update clones affected map shards rather than every zone entry.
+
+The off-by-default `experimental-directory-shards` feature uses 4,096 maps per
+index, grouped under 64 copy-on-write owners. It reduces unrelated keys copied
+on publication, at the cost of an extra pointer lookup for indexed queries.
+See the [measured tradeoff](gx10-knot-multi-zone-2026-09.md#smaller-publication-shards);
+this is not the released/default layout.
+
+Directories with at most four entries use a small most-specific-first lookup.
+Larger directories skip suffix hash probes for key lengths that are absent
+from a publication-local bitmap. Removal can leave conservative bits set; that
+only permits extra probes and never hides a matching parent or child zone.
 
 Transfer and restoration preparation compile replacements outside the publication lock.
 The final commit checks that it still replaces the entry seen during
@@ -72,8 +83,11 @@ reclamation layer.
 The compiler and lookup planner live in
 [`zone_image.rs`](../crates/borondns-core/src/zone_image.rs).
 The image has separate arrays for name nodes, child edges, RRsets, records,
-relationships, and denial indexes. Byte arenas hold labels, full names, RDATA,
-and pre-encoded RRset wire.
+relationships, and denial indexes. Each 16-byte child edge stores labels up to
+eight bytes inline; longer labels use a byte arena. Other arenas hold full
+names, RDATA and pre-encoded RRset wire. `ZoneImageStats.label_bytes` counts only
+the separate label arena; inline labels are already included in edge storage
+under `hot_bytes`.
 
 Arena offsets and `BlobRange` lengths are `u64`. Node and RRset handles remain
 `u32`; an RRset's record count is also `u32`. Individual RDATA lengths remain
@@ -130,6 +144,69 @@ There is no configurable rollback to the historical snapshot-only server.
 `offline_oracle()` still supports differential tests and benchmarks. Separately,
 the current incremental overlay deliberately uses snapshot lookup for responses
 that cannot safely reuse the compact base.
+
+### Experimental fused-answer storage
+
+The off-by-default `experimental-fused-serving` feature adds a publication-built
+exact-answer index for eligible leaf authorities. Full canonical keys, keyed
+hashing and immutable directory ownership protect the lookup; configured
+descendants, expired/hidden zones and dirty overlays prevent unsafe shortcuts.
+The ordinary resolver handles unsupported answers. This is not a response cache.
+
+`experimental-dense-answers`, also off by default, changes only that index's
+answer storage. Bodies up to 64 bytes remain inline; 65–128-byte bodies use
+shared immutable storage. Answers beyond 128 bytes retain the existing fallback.
+This reduces the key/value size bound from 216 to 160 bytes without narrowing
+eligibility. It does not guarantee cache-line alignment or an equivalent drop
+in total process memory. Longer bodies gain an extra pointer read and reference
+counting when a shard is cloned, so their query and publication costs must be
+measured before enabling the feature. Single-record RRsets use the existing
+records path rather than these fused templates.
+
+The initial [100k-zone comparison](gx10-knot-multi-zone-2026-09.md) reduced
+cycles/query by 1.52%, short of its 5% advancement threshold. It did not establish
+longer-answer, publication-cost or capacity acceptance; the feature stays off.
+
+`experimental-direct-buckets` is a separate off-by-default lookup experiment.
+Each shard uses a power-of-two, at-most-half-full slot vector with four probes
+and an exact overflow map. First-candidate digest reads are staged across the
+query batch before full-key resolution. Removal leaves holes, but lookup never
+stops at a hole. Keyed hashing, full-key comparison, publication ownership and
+answer eligibility are unchanged. More empty slots trade memory for fewer
+dependent reads. Its first 100k-zone comparison reduced cycles/query by 2.09%
+while increasing anonymous memory by 3.22%, also missing the 5% advancement
+threshold. It is not a promoted replacement for the standard map.
+
+`experimental-query-preparation` leaves the index unchanged. An all-hit batch
+retains its pinned directory and answer descriptors without building fallback
+selection/index vectors. Custom-provider and response-size fallback still use
+that pinned directory. The UDP handler can also reuse a completed parse of the
+exact packet to prove that an ordinary query has no TSIG: only zero additional
+records or one validated OPT record qualify. Partial/error results, other
+additional records, signed packets and NOTIFY retain normal processing. This
+proof establishes absence of TSIG, never authentication or a policy exemption;
+cookies, RRL, metrics and response rules still apply. The feature is off by default.
+
+`experimental-static-redirect` supplies immutable listener settings to the
+eBPF loader, allowing the kernel to remove unreachable redirect paths. It is
+off by default in both the server and standalone eBPF crate. Old objects and
+old loaders keep the mutable configuration-map path. Privileged, wire-free
+packet fixtures verify both compatibility directions and frozen-map independence;
+the smaller generated code did not pass the 24M service-QPS advancement gate.
+The feature remains disabled. See the
+[current GX10 investigation](gx10-knot-multi-zone-2026-09.md).
+
+`experimental-xdp-conditional-wakeup` is a separate, off-by-default transport
+prototype. It maps only the kernel's TX/FILL header flags through the public
+AF_XDP ABI, with bounded/aligned offsets, read-only mappings and ordered
+volatile flag reads. The xdp crate retains all descriptor and UMEM ownership.
+Fresh TX publication uses the flag to decide whether to wake the driver; FILL
+also rechecks after zero admission to avoid stranding already published buffers.
+Previous failed wakes still force explicit bounded recovery. Unsupported flag
+layouts fail adapter initialization instead of silently omitting wakeups.
+The prototype reduces TX syscalls but has not established reliable 24M QPS in
+the GX10 comparison; it is not a promoted default or a replacement for stall,
+error and shutdown handling.
 
 ## DNSSEC denial lookup
 
@@ -247,6 +324,61 @@ these tokens and can read preserved legacy caches: downgrade only with a reviewe
 or clean member-cache state. A remove/re-add performed entirely while BoronDNS
 is offline, leaving the same final member identity, cannot be distinguished from
 an unchanged catalog snapshot.
+
+### Experimental freshness group commit
+
+The off-by-default `experimental-freshness-batching` feature changes only the
+durable freshness evidence for unchanged, authenticated SOA confirmations.
+The default still writes a per-zone `.fresh` file. The experiment uses one
+writer per cache handle family, a 256-request queue with asynchronous
+backpressure, and batches of at most 256 records. The writer waits 2 ms to
+collect a batch, checks each zone's cache lineage, then appends and synchronizes
+one checksummed batch. It acknowledges successful requests only after sync.
+The existing current-plan, secret and snapshot checks still run after that wait.
+This does not batch or relax AXFR/IXFR content publication.
+
+[`freshness_batch.rs`](../crates/borondns-server/src/zone_persistence/freshness_batch.rs)
+binds each observation to the existing cache namespace, serial and exact active
+checkpoint/journal checksum. The observation time is captured before queuing,
+not when disk work eventually completes. Recovery ignores an incomplete final
+batch; a complete corrupt batch rejects the freshness journal. Either case
+can conservatively shorten restart freshness, never synthesize a newer proof.
+The legacy `.fresh` files remain readable. Builds without the feature ignore
+the new journal and can therefore expire a cached zone earlier on downgrade.
+
+The journal has a 512 MiB byte limit and a two-million-identity limit. Atomic
+compaction retains the latest proof per identity, using bounded write buffers.
+Retired identities are not garbage-collected in this prototype: hitting the
+identity cap rejects new proofs rather than growing without bound. A disk/sync
+failure poisons the writer until restart; an exclusive filesystem lock prevents
+competing writers, and symlink/non-regular/multiply-linked files are rejected.
+Shutdown drains accepted requests and joins the writer; disk stalls can delay
+shutdown. These are experimental limits, not a new supported cache format or
+a measured QPS improvement. Active-refresh A/B measurements and lifecycle
+reclamation are required before considering default enablement.
+
+### Experimental scheduled-refresh admission
+
+By default, the one-second scheduler admits at most the available capacity of
+the 1,024-slot external refresh channel on each tick. That can limit admission
+to 1,024 zones/second even when transfer workers could finish more work.
+
+The off-by-default `experimental-refresh-pull` feature moves scheduled admission
+into the transfer dispatcher. When the external queue is empty and there is no
+ready internal request, it pulls up to 64 due zones into available resident-task
+and pending-queue slots. Follow-ups blocked on an already-running zone do not
+prevent unrelated due zones from using free slots. A
+completion can therefore admit more work immediately. A one-second pulse still
+discovers newly due work in an otherwise idle dispatcher; expiry and loading
+warnings remain in the separate periodic task. This does not increase channel,
+resident-task or network-transfer limits, or mark the entire due population
+in progress. Queued NOTIFY, catalog and operator requests take precedence.
+
+This prototype removes an admission-rate ceiling, not the cost of doing the
+additional transfers. It can raise background CPU/I/O demand, so QPS must be
+measured together with achieved refresh cadence. Sustained external-request
+traffic can still postpone scheduled work; this is not a hard deadline or
+fair-service guarantee under overload. The feature is not enabled by default.
 
 ## Packet I/O
 

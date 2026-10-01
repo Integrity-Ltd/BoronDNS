@@ -565,7 +565,7 @@ if ! docker run -d --name "$bind_container" \
 fi
 
 for _ in {1..120}; do
-    if python3 - "$bind_port" <<'PY' >/dev/null 2>&1; then
+    if python3 - "$bind_port" <<'PY' >/dev/null 2>&1
 import socket
 import struct
 import sys
@@ -583,12 +583,13 @@ response = sock.recv(length)
 if struct.pack("!I", 2026052601) not in response:
     raise SystemExit(1)
 PY
+    then
         break
     fi
     sleep 0.25
 done
 
-if ! python3 - "$bind_port" <<'PY' >"$workdir/bind-ready-soa.txt"; then
+if ! python3 - "$bind_port" <<'PY' >"$workdir/bind-ready-soa.txt"
 import socket
 import struct
 import sys
@@ -607,6 +608,7 @@ print(response.hex())
 if struct.pack("!I", 2026052601) not in response:
     raise SystemExit(1)
 PY
+then
     echo "BIND packet torture primary did not serve expected SOA" >&2
     cat "$workdir/bind-ready-soa.txt" >&2
     exit 1

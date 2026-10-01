@@ -218,7 +218,7 @@ if [[ "$mode" == "ssh" ]]; then
         echo "SSH performance mode requires a concrete non-loopback client bind address" >&2
         exit 64
     fi
-    if ! python3 - "$server_address" "$client_bind_address" <<'PY'; then
+    if ! python3 - "$server_address" "$client_bind_address" <<'PY'
 import ipaddress
 import sys
 
@@ -230,6 +230,7 @@ for label, value in (("server", sys.argv[1]), ("client bind", sys.argv[2])):
     if address.is_loopback or address.is_unspecified:
         raise SystemExit(f"{label} address must be concrete and non-loopback")
 PY
+    then
         exit 64
     fi
 fi

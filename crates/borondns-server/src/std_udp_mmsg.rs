@@ -349,8 +349,9 @@ impl StdUdpMmsg {
             self.names[index] = name;
             // sendmsg does not mutate the response buffer; libc iovec uses a
             // mutable pointer for the shared send/receive ABI.
-            self.iovecs[index].iov_base = packet.response.as_ptr().cast_mut().cast();
-            self.iovecs[index].iov_len = packet.response.len();
+            let response = packet.response.owned()?;
+            self.iovecs[index].iov_base = response.as_ptr().cast_mut().cast();
+            self.iovecs[index].iov_len = response.len();
             self.messages[index].msg_len = 0;
             // SAFETY: zeroed is valid for msghdr; all pointer and length
             // fields used by sendmmsg are set immediately below.
@@ -638,14 +639,14 @@ mod tests {
 
         let outbound = vec![
             UdpOutbound {
-                response: b"one".to_vec(),
+                response: b"one".to_vec().into(),
                 target: UdpPacketTarget::Socket(client_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]
                 benchmark_fixed_response: false,
             },
             UdpOutbound {
-                response: b"two".to_vec(),
+                response: b"two".to_vec().into(),
                 target: UdpPacketTarget::Socket(client_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]
@@ -678,14 +679,14 @@ mod tests {
         let receiver_addr = receiver.local_addr().expect("receiver address");
         let outbound = vec![
             UdpOutbound {
-                response: b"one".to_vec(),
+                response: b"one".to_vec().into(),
                 target: UdpPacketTarget::Socket(receiver_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]
                 benchmark_fixed_response: false,
             },
             UdpOutbound {
-                response: b"two".to_vec(),
+                response: b"two".to_vec().into(),
                 target: UdpPacketTarget::Socket(receiver_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]
@@ -748,14 +749,14 @@ mod tests {
         let receiver_addr = receiver.local_addr().expect("receiver address");
         let outbound = vec![
             UdpOutbound {
-                response: b"one".to_vec(),
+                response: b"one".to_vec().into(),
                 target: UdpPacketTarget::Socket(receiver_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]
                 benchmark_fixed_response: false,
             },
             UdpOutbound {
-                response: b"two".to_vec(),
+                response: b"two".to_vec().into(),
                 target: UdpPacketTarget::Socket(receiver_addr),
                 query_metrics: None,
                 #[cfg(feature = "af-xdp")]

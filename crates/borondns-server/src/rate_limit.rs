@@ -128,16 +128,26 @@ impl RrlLimiter {
     }
 
     pub(crate) fn apply(&self, source: IpAddr, response: Vec<u8>) -> RrlDecision {
+        match self.decide(source, &response) {
+            RrlDisposition::Send => RrlDecision::Send(response),
+            RrlDisposition::Slip => RrlDecision::Send(rrl_truncated_response(&response)),
+            RrlDisposition::Drop => RrlDecision::Drop,
+        }
+    }
+
+    /// Classify/account exactly once without requiring ownership of the bytes.
+    /// Callers must implement Slip or Drop before admitting a reply to TX.
+    pub(crate) fn decide(&self, source: IpAddr, response: &[u8]) -> RrlDisposition {
         // Configuration is immutable. Exempt peers need neither response
         // categorisation nor the shared mutable accounting state.
         if !self.enabled || self.allowlist.iter().any(|prefix| prefix.contains(source)) {
-            return RrlDecision::Send(response);
+            return RrlDisposition::Send;
         }
-        let Some(category) = response_category(&response) else {
-            return RrlDecision::Send(response);
+        let Some(category) = response_category(response) else {
+            return RrlDisposition::Send;
         };
         let mut state = self.inner.lock().expect("RRL state lock poisoned");
-        state.apply(source, category, response, &self.metrics)
+        state.decide(source, category, &self.metrics)
     }
 
     pub(crate) fn rate_limited_key_count(&self) -> u64 {
@@ -155,6 +165,48 @@ impl RrlLimiter {
 #[cfg(test)]
 mod allowlist_fast_path_tests {
     use super::*;
+
+    #[test]
+    fn response_writer_borrowed_rrl_preserves_drop_slip_and_accounting() {
+        let config = RrlConfig {
+            enabled: true,
+            positive_per_second: 1,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let owned_metrics = RuntimeMetrics::new();
+        let borrowed_metrics = RuntimeMetrics::new();
+        let owned = RrlLimiter::from_config(&config, owned_metrics.clone());
+        let borrowed = RrlLimiter::from_config(&config, borrowed_metrics.clone());
+        let response = vec![
+            0, 1, 0x84, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4,
+            192, 0, 2, 1,
+        ];
+        let source = "198.51.100.9".parse().unwrap();
+        for expected in [
+            RrlDisposition::Send,
+            RrlDisposition::Drop,
+            RrlDisposition::Slip,
+        ] {
+            assert_eq!(borrowed.decide(source, &response), expected);
+            match (owned.apply(source, response.clone()), expected) {
+                (RrlDecision::Send(bytes), RrlDisposition::Send) => assert_eq!(bytes, response),
+                (RrlDecision::Send(bytes), RrlDisposition::Slip) => {
+                    assert_eq!(bytes, rrl_truncated_response(&response))
+                }
+                (RrlDecision::Drop, RrlDisposition::Drop) => {}
+                other => panic!("different RRL result: {other:?}"),
+            }
+        }
+        let a = owned_metrics.snapshot();
+        let b = borrowed_metrics.snapshot();
+        assert_eq!(a.rrl_dropped, b.rrl_dropped);
+        assert_eq!(a.rrl_truncated, b.rrl_truncated);
+        assert_eq!(
+            owned.rate_limited_key_count(),
+            borrowed.rate_limited_key_count()
+        );
+    }
 
     #[test]
     fn allowlisted_response_does_not_wait_for_accounting_lock() {
@@ -175,8 +227,10 @@ mod allowlist_fast_path_tests {
         let worker_limiter = limiter.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
+            let disposition = worker_limiter.decide("192.0.2.99".parse().unwrap(), &response);
             let result = worker_limiter.apply("192.0.2.99".parse().unwrap(), response);
-            tx.send(matches!(result, RrlDecision::Send(_))).unwrap();
+            tx.send(disposition == RrlDisposition::Send && matches!(result, RrlDecision::Send(_)))
+                .unwrap();
         });
         let result = rx.recv_timeout(Duration::from_secs(2));
         drop(held);
@@ -188,6 +242,13 @@ mod allowlist_fast_path_tests {
 #[derive(Debug)]
 pub(crate) enum RrlDecision {
     Send(Vec<u8>),
+    Drop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RrlDisposition {
+    Send,
+    Slip,
     Drop,
 }
 
@@ -223,13 +284,12 @@ impl RrlState {
         }
     }
 
-    fn apply(
+    fn decide(
         &mut self,
         source: IpAddr,
         category: RrlCategory,
-        response: Vec<u8>,
         metrics: &RuntimeMetrics,
-    ) -> RrlDecision {
+    ) -> RrlDisposition {
         metrics.record_rrl_subject();
         let key = RrlKey::new(source, self.prefix_len(source), category);
         let rate = self.rates.for_category(category);
@@ -250,7 +310,7 @@ impl RrlState {
         };
         bucket.touch(order);
         if bucket.take_token(rate) {
-            return RrlDecision::Send(response);
+            return RrlDisposition::Send;
         }
 
         if bucket.limited_count == 0 {
@@ -264,10 +324,10 @@ impl RrlState {
         bucket.limited_count = bucket.limited_count.saturating_add(1);
         if self.slip > 0 && bucket.limited_count.is_multiple_of(u64::from(self.slip)) {
             metrics.record_rrl_truncated();
-            RrlDecision::Send(rrl_truncated_response(&response))
+            RrlDisposition::Slip
         } else {
             metrics.record_rrl_dropped();
-            RrlDecision::Drop
+            RrlDisposition::Drop
         }
     }
 

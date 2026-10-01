@@ -1082,7 +1082,7 @@ write_summary() {
     local staged
     validate_scenario_results "$scenario_list_for_validation" || return 1
     staged="$(mktemp "$evidence_dir/.soak-summary.XXXXXX")" || return 1
-    if ! python3 - "$evidence_dir/scenario-results.tsv" >"$staged" <<'PY'; then
+    if ! python3 - "$evidence_dir/scenario-results.tsv" >"$staged" <<'PY'
 import csv
 import sys
 from collections import Counter
@@ -1107,6 +1107,7 @@ print(f"failed_count={len(failed)}")
 if failed:
     print("failed_first=" + failed[0]["scenario_artifact_dir"])
 PY
+    then
         rm -f "$staged"
         return 1
     fi

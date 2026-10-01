@@ -404,6 +404,8 @@ struct QueryConfig {
     #[serde(default)]
     list_file: Option<PathBuf>,
     #[serde(default)]
+    schedule_file: Option<PathBuf>,
+    #[serde(default)]
     qname_template: Option<String>,
     #[serde(default)]
     qname_count: Option<usize>,
@@ -422,6 +424,7 @@ impl Default for QueryConfig {
             qtype: DEFAULT_QTYPE.to_owned(),
             payload_hex: None,
             list_file: None,
+            schedule_file: None,
             qname_template: None,
             qname_count: None,
             select: QuerySelect::default(),
@@ -445,6 +448,8 @@ struct RunConfig {
     max_packets: u64,
     duration_seconds: Option<f64>,
     seed: u64,
+    #[serde(default)]
+    warmup_seconds: f64,
 }
 
 impl Default for RunConfig {
@@ -453,6 +458,7 @@ impl Default for RunConfig {
             max_packets: DEFAULT_MAX_PACKETS,
             duration_seconds: None,
             seed: 1,
+            warmup_seconds: 0.0,
         }
     }
 }
@@ -765,6 +771,7 @@ struct QueryTemplate {
 struct QueryPool {
     templates: Vec<QueryTemplate>,
     select: QuerySelect,
+    schedule: Vec<u32>,
 }
 
 impl QueryPool {
@@ -777,6 +784,9 @@ impl QueryPool {
     }
 
     fn select_index(&self, rng: &mut XorShift64, index: u64) -> usize {
+        if !self.schedule.is_empty() {
+            return self.schedule[(index % self.schedule.len() as u64) as usize] as usize;
+        }
         match self.select {
             QuerySelect::Sequential => index as usize % self.templates.len(),
             QuerySelect::Random => rng.next_index(self.templates.len()),
@@ -1236,6 +1246,20 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
 }
 
 fn validate_config(config: &FileConfig) -> Result<()> {
+    if !config.run.warmup_seconds.is_finite()
+        || config.run.warmup_seconds < 0.0
+        || config.run.warmup_seconds > 3600.0
+    {
+        bail!("run.warmup_seconds must be finite and in 0..=3600");
+    }
+    if config.run.warmup_seconds > 0.0 && config.backend.kind != Backend::Xdp {
+        bail!("run.warmup_seconds currently requires the XDP backend");
+    }
+    if config.run.warmup_seconds > 0.0 && config.xdp.reply_tracking == XdpReplyTracking::Latency {
+        // Warmup does not yet share cross-queue inflight state. Reject it rather
+        // than emit misleading per-worker latency/unmatched-response records.
+        bail!("run.warmup_seconds currently requires count or packet-count reply tracking");
+    }
     if config.run.max_packets == 0 && config.run.duration_seconds.is_none() {
         bail!("run.max_packets must be non-zero unless run.duration_seconds is configured");
     }
@@ -1947,10 +1971,62 @@ fn query_pool(config: &FileConfig) -> Result<QueryPool> {
     } else {
         templates.push(query_template(config)?);
     }
+    if templates.is_empty() {
+        bail!("query pool must not be empty");
+    }
+    let schedule = match &config.query.schedule_file {
+        Some(path) => {
+            if config.query.select != QuerySelect::Sequential {
+                bail!("query.schedule_file requires query.select = sequential");
+            }
+            read_query_schedule(path, templates.len())?
+        }
+        None => Vec::new(),
+    };
     Ok(QueryPool {
         templates,
         select: config.query.select,
+        schedule,
     })
+}
+
+// Compact, little-endian index table. Bound allocation before trusting its header.
+fn read_query_schedule(path: &std::path::Path, query_count: usize) -> Result<Vec<u32>> {
+    use std::io::Read;
+    const MAX_ENTRIES: u64 = 1 << 26;
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("failed to open query schedule {}", path.display()))?;
+    let mut header = [0_u8; 16];
+    file.read_exact(&mut header)
+        .context("truncated query schedule header")?;
+    if &header[..8] != b"BGQS0001" {
+        bail!("invalid query schedule magic/version");
+    }
+    let count = u64::from_le_bytes(header[8..].try_into().expect("eight-byte count"));
+    if count == 0 || count > MAX_ENTRIES {
+        bail!("query schedule entry count must be in 1..={MAX_ENTRIES}");
+    }
+    if file.metadata()?.len() != 16 + count * 4 {
+        bail!("query schedule length does not match its entry count");
+    }
+    let mut schedule = Vec::with_capacity(count as usize);
+    let mut reader = std::io::BufReader::new(file);
+    for _ in 0..count {
+        let mut bytes = [0_u8; 4];
+        reader
+            .read_exact(&mut bytes)
+            .context("truncated query schedule entry")?;
+        let index = u32::from_le_bytes(bytes);
+        if index as usize >= query_count {
+            bail!("query schedule index {index} exceeds query pool size {query_count}");
+        }
+        schedule.push(index);
+    }
+    let mut extra = [0_u8; 1];
+    if reader.read(&mut extra)? != 0 {
+        bail!("query schedule has trailing data");
+    }
+    Ok(schedule)
 }
 
 fn template_from_parts(qname: &str, qtype: &str, config: &QueryConfig) -> Result<QueryTemplate> {
@@ -2346,6 +2422,95 @@ mod tests {
         assert_eq!(pool.select(&mut rng, 1).qname, "mail.example.test.");
         assert_eq!(pool.select(&mut rng, 2).qname, "www.example.test.");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn query_schedule_validates_and_repeats_compact_indices() {
+        let directory =
+            std::env::temp_dir().join(format!("boron-gun-schedule-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let list = directory.join("queries.txt");
+        let schedule = directory.join("schedule.bin");
+        std::fs::write(&list, "www.example.test. A\napi.example.test. A\n").unwrap();
+        let text = format!(
+            "{}\nlist_file = {:?}\nschedule_file = {:?}\n",
+            toml::to_string(&QueryConfig::default()).unwrap(),
+            list,
+            schedule
+        );
+        let text = format!("[query]\n{text}");
+        let config: FileConfig = toml::from_str(&text).expect("compact schedule config");
+        let mut bytes = b"BGQS0001".to_vec();
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        for index in [1u32, 0, 1] {
+            bytes.extend_from_slice(&index.to_le_bytes());
+        }
+        std::fs::write(&schedule, &bytes).unwrap();
+        let pool = query_pool(&config).unwrap();
+        let mut rng = XorShift64::new(1);
+        let indices = (0..7)
+            .map(|i| pool.select_index(&mut rng, i))
+            .collect::<Vec<_>>();
+        assert_eq!(indices, [1, 0, 1, 1, 0, 1, 1]);
+        assert_eq!(pool.len(), 2, "schedule does not duplicate templates");
+        let mut random_config = config.clone();
+        random_config.query.select = QuerySelect::Random;
+        assert!(query_pool(&random_config).is_err());
+        let valid_bytes = bytes.clone();
+        bytes[0] = b'X';
+        std::fs::write(&schedule, &bytes).unwrap();
+        assert!(query_pool(&config).is_err(), "reject bad magic");
+        bytes = valid_bytes;
+        bytes[16..20].copy_from_slice(&2u32.to_le_bytes());
+        std::fs::write(&schedule, &bytes).unwrap();
+        assert!(query_pool(&config).is_err(), "reject out-of-pool index");
+        bytes.pop();
+        std::fs::write(&schedule, &bytes).unwrap();
+        assert!(query_pool(&config).is_err(), "reject truncated file");
+        std::fs::write(&schedule, b"BGQS0001\0\0\0\0\0\0\0\0").unwrap();
+        assert!(query_pool(&config).is_err(), "reject empty schedule");
+        let mut oversized = b"BGQS0001".to_vec();
+        oversized.extend_from_slice(&((1u64 << 26) + 1).to_le_bytes());
+        std::fs::write(&schedule, &oversized).unwrap();
+        assert!(
+            query_pool(&config).is_err(),
+            "bound allocation before reading entries"
+        );
+        std::fs::remove_file(list).unwrap();
+        std::fs::remove_file(schedule).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn warmup_validation_rejects_invalid_or_non_xdp_runs() {
+        let mut config = FileConfig::default();
+        for value in [-1.0, f64::INFINITY, f64::NAN, 3601.0, 1.0] {
+            config.run.warmup_seconds = value;
+            assert!(validate_config(&config).is_err());
+        }
+        config.run.warmup_seconds = 0.0;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn warmup_rejects_latency_tracking_until_shared_warmup_state_is_supported() {
+        let mut config = FileConfig::default();
+        config.backend.kind = Backend::Xdp;
+        config.interface.nic = Some("veth0".to_owned());
+        config.interface.queue_count = 2;
+        config.source.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 1]));
+        config.target.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 2]));
+        config.run.warmup_seconds = 1.0;
+
+        let error = validate_config(&config).expect_err("latency warmup is not supported");
+        assert!(error.to_string().contains("count or packet-count"));
+        for tracking in [XdpReplyTracking::Count, XdpReplyTracking::PacketCount] {
+            config.xdp.reply_tracking = tracking;
+            validate_config(&config).expect("counting warmup is supported");
+        }
+        config.run.warmup_seconds = 0.0;
+        config.xdp.reply_tracking = XdpReplyTracking::Latency;
+        validate_config(&config).expect("existing latency runs remain supported");
     }
 
     #[test]

@@ -505,6 +505,52 @@ fn zone_image_serving_matches_snapshot_positive_response() {
 }
 
 #[test]
+#[cfg(feature = "experimental-compact-serving")]
+fn compact_wire_response_and_metrics_match_general_direct_builder() {
+    let owner = DomainName::from_absolute_str("www.example.test.").unwrap();
+    // Single-record RRsets intentionally use the existing records-based path;
+    // the compact serving index only includes precompiled body templates.
+    for record_count in [2, 40] {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(owner.clone(), 1, 1, 300,
+                (0..record_count).map(|i| vec![192, 0, 2, i]).collect())],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot);
+        for edns in [false, true] {
+            let mut packet = query(b"\x03WWW\x07example\x04test\0", 1, 1);
+            if edns {
+                append_opt(&mut packet, 1232, 0, &edns_option(EDNS_NSID_OPTION, &[]));
+            }
+            for transport in [Transport::Udp, Transport::Tcp, Transport::Tls] {
+                for max_udp_payload in [512, 1232] {
+                    let options = AnswerOptions { transport, max_udp_payload, nsid: b"compact-test", ..AnswerOptions::default() };
+                    let header = Header::parse(&packet).unwrap();
+                    let question = Question::parse(&packet).unwrap();
+                    let metadata = RequestMetadata::parse(&header, &packet, &question).unwrap();
+                    let sizing = zone_image_response_sizing(&question, metadata.udp_ceiling(options), &metadata, options);
+                    let plan = image.lookup_direct_answer_plan(&question.qname, 1, 1).unwrap();
+                    let wire = image.lookup_compact_direct(&question.qname, 1, 1, false).unwrap();
+                    let expected = build_direct_zone_image_answer_response(&header, &question, &image, &plan, metadata, options, sizing);
+                    let actual = build_compact_zone_image_answer_response(&header, &question, wire.template_answer().unwrap(), metadata, options, sizing);
+                    assert_eq!(actual, expected);
+                    let observed = std::cell::Cell::new(None);
+                    let observer = LookupMetricsObserver { callback: |metrics| observed.set(Some(metrics)) };
+                    observer.observe_compact_direct_answer();
+                    assert_eq!(observed.get(), Some(LookupMetrics::from_zone_image_plan(&plan, true)));
+                    if let Some(expected) = expected {
+                        assert_eq!(store_response_with_options(&packet, &store, options), expected);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn zone_image_direct_answer_fast_path_handles_edns_positive_rrset() {
     let snapshot = ZoneSnapshot::active(
         DomainName::from_absolute_str("example.test.").unwrap(),
@@ -744,6 +790,43 @@ fn direct_answer_body_uses_compiled_record_metadata() {
     assert_eq!(direct_answer_wire.len(), 32);
     assert_eq!(&direct_answer_wire[..2], &0xc00cu16.to_be_bytes());
     assert_eq!(&direct_answer_wire[16..18], &0xc00cu16.to_be_bytes());
+}
+
+#[test]
+#[cfg(feature = "experimental-compact-serving")]
+fn detached_template_response_matches_reference_edns_and_size_limits() {
+    let owner = DomainName::from_absolute_str("www.example.test.").unwrap();
+    for count in [2u8, 40] {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(), Some(1),
+            vec![Rrset::new(owner.clone(), 1, 1, 300,
+                (0..count).map(|i| vec![192, 0, 2, i]).collect())],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let template = image.lookup_compact_direct(&owner, 1, 1, true).unwrap().template_answer().unwrap();
+        for edns in [None, Some(512), Some(1232)] {
+            let mut packet = query(b"\x03WWW\x07Example\x04Test\x00", 1, 1);
+            if let Some(size) = edns { append_opt(&mut packet, size, 0, &[]); }
+            let header = Header::parse(&packet).unwrap();
+            let question = Question::parse(&packet).unwrap();
+            let metadata = RequestMetadata::parse(&header, &packet, &question).unwrap();
+            for options in [AnswerOptions::udp(1232), AnswerOptions::tcp()] {
+                let sizing = zone_image_response_sizing(&question, metadata.udp_ceiling(options), &metadata, options);
+                // No image argument can be passed to this serializer. The
+                // image-backed reference remains separate, including a None
+                // result when the caller must use truncation fallback.
+                let actual = build_compact_zone_image_answer_response(&header, &question, template, metadata, options, sizing);
+                assert_eq!(actual, direct_zone_image_response_for_packet(&packet, &image, options));
+                if count == 40 && edns != Some(1232) && options.transport == Transport::Udp {
+                    assert!(actual.is_none());
+                } else {
+                    let response = actual.unwrap();
+                    assert_eq!(&response[12..12+question.qname.wire_len()], question.qname.to_wire());
+                    assert_eq!(u16::from_be_bytes([response[6], response[7]]), u16::from(count));
+                }
+            }
+        }
+    }
 }
 
 #[test]

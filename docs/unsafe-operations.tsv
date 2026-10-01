@@ -30,6 +30,14 @@ UNSAFE-BORONDNS-SERVER-AF-XDP-008	crates/borondns-server/src/af_xdp.rs	let send_
 UNSAFE-BORONDNS-SERVER-AF-XDP-009	crates/borondns-server/src/af_xdp.rs	let send_result = unsafe { self.tx_ring.send(&mut self.tx_slab, false) };
 UNSAFE-BORONDNS-SERVER-AF-XDP-010	crates/borondns-server/src/af_xdp.rs	unsafe {
 UNSAFE-BORONDNS-SERVER-AF-XDP-011	crates/borondns-server/src/af_xdp.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-012	crates/borondns-server/src/af_xdp.rs	let result = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-013	crates/borondns-server/src/af_xdp.rs	let mapping = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-014	crates/borondns-server/src/af_xdp.rs	let flags = unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-015	crates/borondns-server/src/af_xdp.rs	unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-016	crates/borondns-server/src/af_xdp.rs	let received = unsafe { io.rx_ring.recv(&io.umem, &mut io.recv_slab) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-017	crates/borondns-server/src/af_xdp.rs	let result = unsafe { io.tx_ring.send(&mut io.tx_slab, false) };
+UNSAFE-BORONDNS-SERVER-AF-XDP-018	crates/borondns-server/src/af_xdp.rs	enqueue_fill_frames(io.fill_ring_size, |requested| unsafe {
+UNSAFE-BORONDNS-SERVER-AF-XDP-019	crates/borondns-server/src/af_xdp.rs	let result = unsafe {
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-001	crates/borondns-server/src/privilege.rs	unsafe { std::mem::zeroed() }
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-002	crates/borondns-server/src/privilege.rs	unsafe {
 UNSAFE-BORONDNS-SERVER-PRIVILEGE-003	crates/borondns-server/src/privilege.rs	errno_result(unsafe { libc::initgroups(name.as_ptr(), gid) })
@@ -90,3 +98,4 @@ UNSAFE-BORONDNS-SERVER-EBPF-LIB-004	crates/borondns-server-ebpf/src/lib.rs	unsaf
 UNSAFE-BORONDNS-SERVER-EBPF-LIB-005	crates/borondns-server-ebpf/src/lib.rs	unsafe impl PacketPod for UdpHdr {}
 UNSAFE-BORONDNS-SERVER-EBPF-LIB-006	crates/borondns-server-ebpf/src/lib.rs	Ok(unsafe { ptr::read_unaligned(ptr) })
 UNSAFE-BORONDNS-SERVER-EBPF-LIB-007	crates/borondns-server-ebpf/src/lib.rs	unsafe { (*ctx.ctx).rx_queue_index }
+UNSAFE-BORONDNS-SERVER-EBPF-LIB-008	crates/borondns-server-ebpf/src/lib.rs	unsafe { ptr::read_volatile(field) }

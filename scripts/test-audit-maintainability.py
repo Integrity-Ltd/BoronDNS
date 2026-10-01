@@ -31,6 +31,9 @@ def test_test_only_include_directories_are_not_production(audit) -> None:
         write(root / "crates/example/src/lib.rs")
         write(root / "crates/example/src/contest.rs")
         write(root / "crates/example/src/tests.rs")
+        write(root / "crates/example/src/adapter/redirect_tests.rs")
+        write(root / "crates/example/src/adapter/response_writer_tests.rs")
+        write(root / "crates/example/src/adapter/tests_support.rs")
         write(root / "crates/example/src/tests/case.rs")
         write(root / "crates/example/src/config_tests/case.rs")
         write(root / "crates/example/src/dns_tests/case.rs")
@@ -46,6 +49,7 @@ def test_test_only_include_directories_are_not_production(audit) -> None:
             "crates/example/build.rs",
             "crates/example/src/contest.rs",
             "crates/example/src/lib.rs",
+            "crates/example/src/adapter/tests_support.rs",
         }
 
 

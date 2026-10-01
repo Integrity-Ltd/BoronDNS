@@ -18,6 +18,7 @@ runtime_files = sorted(
     if "crates/boron-gun/" not in path.relative_to(repo_root).as_posix()
     and "crates/boron-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
     and not path.relative_to(repo_root).as_posix().endswith("/src/tests.rs")
+    and not path.name.endswith("_tests.rs")
     and "/src/tests/" not in path.relative_to(repo_root).as_posix()
     and "/src/config_tests/" not in path.relative_to(repo_root).as_posix()
     and "/src/dns_tests/" not in path.relative_to(repo_root).as_posix()
@@ -91,8 +92,16 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             re.compile(r"\bOpenOptions\b"),
         ],
         [
-            Path("crates/borondns-core/src/dns.rs"),
-            Path("crates/borondns-core/src/zone.rs"),
+            path for path in runtime_sources
+            if path.as_posix() in {
+                "crates/borondns-core/src/dns.rs",
+                "crates/borondns-core/src/zone.rs",
+                "crates/borondns-core/src/zone_image.rs",
+            } or any(path.as_posix().startswith(prefix) for prefix in (
+                "crates/borondns-core/src/dns/",
+                "crates/borondns-core/src/zone/",
+                "crates/borondns-core/src/zone_image/",
+            ))
         ],
     ),
     (
@@ -115,6 +124,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             if path not in {
                 Path("crates/borondns-server/src/zone_persistence.rs"),
                 Path("crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs"),
+                Path("crates/borondns-server/src/zone_persistence/freshness_batch.rs"),
             }
         ],
     ),
@@ -1547,7 +1557,50 @@ else:
     print("status=passed")
     print("evidence=The explicitly allowed lifecycle module uses bounded 32-byte token reads, private exclusive temporary files, synchronized atomic token replacement and digest-derived names. Runtime fault-injection and restart tests complement these structural checks.")
 
+print()
+print("check=freshness journal boundary")
+freshness_text = runtime_sources.get(
+    Path("crates/borondns-server/src/zone_persistence/freshness_batch.rs"), ""
+)
+freshness_failures = []
+for required in (
+    "const MAX_BATCH: usize = 256;",
+    "const MAX_KEYS: usize = 2_000_000;",
+    "const MAX_BYTES: u64 = 512 * 1024 * 1024;",
+    "if length > MAX_BYTES",
+    "count == 0 || count > MAX_BATCH",
+    "index.len() == MAX_KEYS",
+    "if self.index.len() + additions > MAX_KEYS",
+    "if self.bytes + encoded.len() as u64 > MAX_BYTES",
+    "libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC",
+    "file.metadata()?.is_file()",
+    "file.metadata()?.nlink() != 1",
+    "options.create_new(true)",
+    ".mode(0o600)",
+    "rustix::fs::FlockOperation::NonBlockingLockExclusive",
+    "Sha256::digest(&bytes[..end]).as_slice() != &bytes[end..]",
+    "request.persistence.active_cache_checksum(&request.origin)",
+    "record.serial == serial && &record.checksum == checksum",
+    "file.sync_all()?;", "File::open(&self.directory)?.sync_all()",
+    "self.poisoned = true", "mpsc::channel::<Request>(MAX_BATCH)",
+    "worker.join()",
+):
+    if required not in freshness_text:
+        freshness_failures.append(f"missing {required}")
+if not re.search(
+    r"sync\(&self\.file\)\?;.*?for record in records\s*\{\s*apply\(&mut self\.index, \*record\)",
+    freshness_text, flags=re.DOTALL,
+):
+    freshness_failures.append("freshness index acknowledgement precedes durable sync")
+if freshness_failures:
+    print("status=failed")
+    failures.append("freshness journal boundary: " + ", ".join(freshness_failures))
+else:
+    print("status=passed")
+    print("evidence=The explicitly reviewed experimental freshness module bounds bytes, keys and batches; checks regular no-follow single-link files; locks its journal; binds records to content and serial; acknowledges after sync; and poisons writes after failure. Runtime crash/replay tests remain separate evidence.")
+
 zone_text = runtime_sources[Path("crates/borondns-core/src/zone.rs")]
+shards_text = runtime_sources[Path("crates/borondns-core/src/zone/directory_shards.rs")]
 dns_text = runtime_sources[Path("crates/borondns-core/src/dns.rs")]
 axfr_text = runtime_sources[Path("crates/borondns-core/src/axfr.rs")]
 catalog_text = runtime_sources[Path("crates/borondns-core/src/catalog.rs")]
@@ -1578,9 +1631,12 @@ required_fragments = [
     ("ZoneStore ArcSwap", "ArcSwap<ZoneDirectory>", zone_text),
     (
         "ZoneDirectory sharded suffix index",
-        "suffix_index: [Arc<HashMap<Vec<u8>, Arc<ZoneStoreEntry>>>; ZONE_DIRECTORY_SHARD_COUNT]",
+        "suffix_index: DirectoryShards<ZoneSuffixKey, ZoneSuffixEntry>",
         zone_text,
     ),
+    ("baseline directory shard ownership", "[Arc<HashMap<K, V>>; super::ZONE_DIRECTORY_SHARD_COUNT]", shards_text),
+    ("grouped directory shard ownership", "groups: [Arc<Group<K, V>>; ROOT_OWNER_COUNT]", shards_text),
+    ("grouped directory copy-on-write", "Arc::make_mut(&mut self.groups[index / GROUP_SIZE])", shards_text),
     ("suffix-index lookup", "fn find_best_match", zone_text),
     ("writer publish lock", "publish_lock: Arc<Mutex<()>>", zone_text),
     ("published zone handle", "pub struct PublishedZone", zone_text),
@@ -4805,6 +4861,14 @@ if (
     not in dns_text
     and "with_published_zone_for_query_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
     not in dns_text
+    and not (
+        "let select_query = ZoneStore::with_published_zone_for_query_with_ascii_lowercase_hint;" in dns_text
+        and "let select_query = ZoneStore::with_selected_query_zone;" in dns_text
+        and len(re.findall(
+            r"select_query\(\s*zone_store,\s*&question\.qname,\s*question\.qname_ascii_lowercase\(\),",
+            dns_text,
+        )) == 2
+    )
 ):
     zone_store_api_failures.append("query serving does not pass the parser-carried lowercase QNAME fact into zone suffix lookup")
 if "SmallVec::<[usize; 8]>::new()" not in zone_text:

@@ -74,6 +74,19 @@ A scrape returns Prometheus text with
 `Content-Encoding: gzip` and `Vary: accept-encoding`; `gzip;q=0` leaves the
 body uncompressed.
 
+For large zone populations, scrape `/metrics?scope=global` for aggregate and
+worker counters without enumerating catalog members, zone status, scheduler
+state, zone shapes, or per-zone query counters. This avoids constructing a
+potentially very large per-zone response. Zone totals, packet I/O, transfer,
+security, and build metrics keep the same names and values. Bounded DNS Cookie
+source-prefix metrics are also included; “global” does not mean label-free.
+
+The default `/metrics` (or `?scope=all`) still includes all per-zone detail.
+Both scopes share the same source rate limit and gzip support. An invalid or
+repeated `scope` returns HTTP 400. The global view is not a replacement for
+per-zone freshness monitoring: scrape the full view less frequently or use
+targeted observability requests and external DNS probes where appropriate.
+
 Start with these metric families:
 
 | What to monitor | Metrics |

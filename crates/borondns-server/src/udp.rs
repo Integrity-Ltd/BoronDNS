@@ -79,6 +79,12 @@ pub(crate) enum BoundUdpListener {
         worker_id: usize,
         worker_count: usize,
     },
+    #[cfg(feature = "experimental-xdp-group-loop")]
+    AfXdpGroup {
+        packet_ios: Vec<af_xdp::AfXdpPacketIo>,
+        worker_id: usize,
+        worker_count: usize,
+    },
     #[cfg(feature = "af-xdp")]
     AfXdpKernelFallback {
         socket: Arc<UdpSocket>,
@@ -91,6 +97,20 @@ pub(crate) enum BoundUdpListener {
 impl BoundUdpListener {
     pub(crate) fn reregister_xdp_runtime(self) -> Result<Self, RuntimeError> {
         match self {
+            #[cfg(feature = "experimental-xdp-group-loop")]
+            Self::AfXdpGroup {
+                packet_ios,
+                worker_id,
+                worker_count,
+            } => Ok(Self::AfXdpGroup {
+                packet_ios: packet_ios
+                    .into_iter()
+                    .map(|io| io.reregister_runtime())
+                    .collect::<std::io::Result<_>>()
+                    .map_err(RuntimeError::Udp)?,
+                worker_id,
+                worker_count,
+            }),
             Self::AfXdp {
                 packet_io,
                 worker_id,
@@ -216,7 +236,7 @@ fn bind_af_xdp_udp_listeners(
 ) -> Result<Vec<BoundUdpListener>, RuntimeError> {
     let worker_count = worker_count.max(1);
     af_xdp::AfXdpPacketIo::bind_queues(socket, xdp, worker_count)
-        .map(|packet_ios| {
+        .and_then(|packet_ios| {
             let xsk_worker_count = packet_ios.len();
             let worker_count = xsk_worker_count.saturating_add(1);
             let fallback_socket = packet_ios
@@ -237,9 +257,59 @@ fn bind_af_xdp_udp_listeners(
                 worker_id: xsk_worker_count,
                 worker_count,
             });
-            listeners
+            #[cfg(feature = "experimental-xdp-group-loop")]
+            let listeners = group_xdp_listeners(listeners, xdp.worker_cpu_groups.len())?;
+            Ok(listeners)
         })
         .map_err(RuntimeError::Udp)
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+fn group_xdp_listeners(
+    mut listeners: Vec<BoundUdpListener>,
+    groups: usize,
+) -> std::io::Result<Vec<BoundUdpListener>> {
+    if groups == 0 {
+        return Ok(listeners);
+    }
+    let queues = listeners.len().saturating_sub(1);
+    if queues == 0 || !queues.is_multiple_of(groups) {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "AF_XDP queue groups require equal nonempty partitions",
+        ));
+    }
+    let fallback = listeners.pop().expect("bound AF_XDP fallback");
+    let mut source = listeners.into_iter();
+    let width = queues / groups;
+    let mut result = Vec::with_capacity(groups + 1);
+    for first in (0..queues).step_by(width) {
+        let mut packet_ios = Vec::with_capacity(width);
+        for expected in first..first + width {
+            match source.next() {
+                Some(BoundUdpListener::AfXdp {
+                    packet_io,
+                    worker_id,
+                    worker_count,
+                }) if worker_id == expected && worker_count == queues + 1 => {
+                    packet_ios.push(packet_io)
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "AF_XDP queue order changed during grouping",
+                    ));
+                }
+            }
+        }
+        result.push(BoundUdpListener::AfXdpGroup {
+            packet_ios,
+            worker_id: first,
+            worker_count: queues + 1,
+        });
+    }
+    result.push(fallback);
+    Ok(result)
 }
 
 pub(crate) async fn serve_bound_udp_until<S>(
@@ -253,6 +323,23 @@ where
     S: Future<Output = tokio::time::Instant>,
 {
     match listener {
+        #[cfg(feature = "experimental-xdp-group-loop")]
+        BoundUdpListener::AfXdpGroup {
+            packet_ios,
+            worker_id,
+            worker_count,
+        } => {
+            af_xdp::group::serve_until(
+                packet_ios,
+                worker_id,
+                worker_count,
+                zones,
+                settings,
+                admission_open,
+                shutdown,
+            )
+            .await
+        }
         BoundUdpListener::Std {
             socket,
             worker_id,
@@ -405,6 +492,8 @@ where
     info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
     let mut outbound = Vec::with_capacity(bounded_udp_batch_size(settings.udp_batch_size));
     let is_af_xdp = packet_io.is_af_xdp();
+    #[cfg(feature = "experimental-response-writer")]
+    let reply_buffers_available = packet_io.supports_reply_buffers();
 
     loop {
         if !admission_open.load(Ordering::Acquire) {
@@ -486,6 +575,38 @@ where
             outbound.clear();
 
             let cookie_batch = UdpCookieBatch::new(&settings);
+            #[cfg(all(
+                feature = "experimental-staged-serving",
+                not(feature = "experimental-response-writer")
+            ))]
+            handle_staged_udp_batch(inbound, &zones, &settings, &cookie_batch, &mut outbound);
+            #[cfg(feature = "experimental-response-writer")]
+            if reply_buffers_available {
+                // The receive slice is no longer used on this branch. Reborrow
+                // disjoint input/frame fields through a synchronous callback.
+                packet_io
+                    .with_reply_buffers(|inbound, replies| {
+                        handle_staged_udp_batch(
+                            inbound,
+                            &zones,
+                            &settings,
+                            &cookie_batch,
+                            &mut outbound,
+                            Some(replies),
+                        );
+                    })
+                    .map_err(RuntimeError::Udp)?;
+            } else {
+                handle_staged_udp_batch(
+                    inbound,
+                    &zones,
+                    &settings,
+                    &cookie_batch,
+                    &mut outbound,
+                    None,
+                );
+            }
+            #[cfg(not(feature = "experimental-staged-serving"))]
             for packet in inbound {
                 if !udp_inbound_has_reply_port(packet) {
                     continue;
@@ -1090,7 +1211,10 @@ fn send_std_udp_batch_with_backoff(
             if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
                 record_query_send_metric(
                     query_metrics,
-                    &packet.response,
+                    packet
+                        .response
+                        .owned()
+                        .expect("standard adapter admitted owned response"),
                     metrics,
                     started.elapsed(),
                 );
@@ -1142,8 +1266,12 @@ pub(crate) fn send_std_udp_batch_fallback_with_successes(
             }
         };
         let mut send_ok = false;
+        let response = packet
+            .response
+            .owned()
+            .map_err(|error| std_udp_mmsg::StdUdpMmsgSendError::new(error, sent_indices.clone()))?;
         for _ in 0..64 {
-            match socket.send_to(&packet.response, peer) {
+            match socket.send_to(response, peer) {
                 Ok(_) => {
                     send_ok = true;
                     break;
@@ -1198,6 +1326,22 @@ pub(crate) trait PacketIo {
         false
     }
 
+    #[cfg(feature = "experimental-response-writer")]
+    fn supports_reply_buffers(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "experimental-response-writer")]
+    fn with_reply_buffers<T>(
+        &mut self,
+        _visit: impl FnOnce(&[UdpInbound], &mut dyn UdpReplyBuffers) -> T,
+    ) -> std::io::Result<T> {
+        Err(std::io::Error::new(
+            ErrorKind::Unsupported,
+            "backend has no reply buffers",
+        ))
+    }
+
     /// Services send-side work that must complete before the backend can
     /// safely block for another receive batch.
     ///
@@ -1220,6 +1364,17 @@ pub(crate) trait PacketIo {
         metrics: &RuntimeMetrics,
         worker_id: usize,
     ) -> Result<usize, PacketIoSendError>;
+}
+
+#[cfg(feature = "experimental-response-writer")]
+pub(crate) trait UdpReplyBuffers {
+    fn buffer(&mut self, frame_index: usize) -> Option<&mut [u8]>;
+    fn seal(
+        &mut self,
+        frame_index: usize,
+        len: usize,
+        send_category: Option<QueryLatencyCategory>,
+    ) -> Option<af_xdp::PreparedReply>;
 }
 
 #[derive(Debug)]
@@ -1254,11 +1409,45 @@ pub(crate) struct UdpInbound {
 }
 
 pub(crate) struct UdpOutbound {
-    pub(crate) response: Vec<u8>,
+    pub(crate) response: UdpResponse,
     pub(crate) target: UdpPacketTarget,
     pub(crate) query_metrics: Option<QueryMetricObservation>,
     #[cfg(feature = "af-xdp")]
     pub(crate) benchmark_fixed_response: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UdpResponse {
+    Owned(Vec<u8>),
+    #[cfg(feature = "experimental-response-writer")]
+    Prepared(af_xdp::PreparedReply),
+}
+
+impl From<Vec<u8>> for UdpResponse {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Owned(bytes)
+    }
+}
+
+impl UdpResponse {
+    pub(crate) fn owned(&self) -> std::io::Result<&[u8]> {
+        match self {
+            Self::Owned(bytes) => Ok(bytes),
+            #[cfg(feature = "experimental-response-writer")]
+            Self::Prepared(_) => Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "prepared AF_XDP reply has no owned bytes",
+            )),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn into_owned(self) -> Vec<u8> {
+        match self {
+            Self::Owned(bytes) => bytes,
+            #[cfg(feature = "experimental-response-writer")]
+            Self::Prepared(_) => panic!("test expected owned response"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1391,7 +1580,11 @@ impl PacketIo for StdUdpBatchIo {
                     sent,
                 ));
             }
-            match self.socket.send_to(&packet.response, peer).await {
+            let response = packet
+                .response
+                .owned()
+                .map_err(|error| PacketIoSendError::new(error, sent))?;
+            match self.socket.send_to(response, peer).await {
                 Ok(_) => {
                     sent += 1;
                     if let (Some(query_metrics), Some(started)) =
@@ -1399,7 +1592,7 @@ impl PacketIo for StdUdpBatchIo {
                     {
                         record_query_send_metric(
                             query_metrics,
-                            &packet.response,
+                            response,
                             metrics,
                             started.elapsed(),
                         );
@@ -1516,6 +1709,164 @@ impl<'a> UdpCookieBatch<'a> {
     }
 }
 
+#[cfg(feature = "experimental-staged-serving")]
+fn handle_staged_udp_batch(
+    inbound: &[UdpInbound],
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+    cookie_batch: &UdpCookieBatch<'_>,
+    outbound: &mut Vec<UdpOutbound>,
+    #[cfg(feature = "experimental-response-writer")] mut replies: Option<&mut dyn UdpReplyBuffers>,
+) {
+    use borondns_core::dns::{DNS_SERVING_BATCH_SIZE, with_prepared_dns_batch};
+    // Tiny directories are already cache-resident and have a dedicated lookup
+    // shortcut. Keep the established single-zone path, including its recycler.
+    // Per-query pipeline timers cannot attribute shared stage work honestly.
+    // Keep their established timing semantics on the serial diagnostic path.
+    if should_serve_udp_batch_serially(
+        inbound,
+        zones.len(),
+        settings.metrics.pipeline_timing_enabled(),
+    ) {
+        for packet in inbound {
+            if udp_inbound_has_reply_port(packet)
+                && let Some(response) = handle_udp_datagram(
+                    packet.payload(),
+                    packet.peer,
+                    zones,
+                    settings,
+                    cookie_batch,
+                )
+            {
+                outbound.push(response.with_target(packet.target()));
+            }
+        }
+        return;
+    }
+    for packets in inbound.chunks(DNS_SERVING_BATCH_SIZE) {
+        let requests: [_; DNS_SERVING_BATCH_SIZE] = std::array::from_fn(|i| {
+            ParsedDnsRequest::new(
+                packets
+                    .get(i)
+                    .filter(|p| udp_inbound_has_reply_port(p))
+                    .map_or(&[], |p| p.payload()),
+            )
+        });
+        with_prepared_dns_batch(&requests[..packets.len()], zones, |batch| {
+            for (packet, query) in packets.iter().zip(batch) {
+                #[cfg(feature = "experimental-response-writer")]
+                let reply = match (replies.as_deref_mut(), packet.target()) {
+                    (Some(buffers), UdpPacketTarget::AfXdp { frame_index }) => {
+                        Some(UdpReplyTarget {
+                            buffers,
+                            frame_index,
+                        })
+                    }
+                    _ => None,
+                };
+                if udp_inbound_has_reply_port(packet)
+                    && let Some(response) = handle_udp_datagram_with_optional_prepared_hook(
+                        packet.payload(),
+                        packet.peer,
+                        zones,
+                        settings,
+                        cookie_batch,
+                        None,
+                        Some(query),
+                        #[cfg(feature = "experimental-response-writer")]
+                        reply,
+                    )
+                {
+                    outbound.push(response.with_target(packet.target()));
+                }
+            }
+        });
+    }
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+pub(crate) fn prepare_group_udp_batch(
+    io: &mut af_xdp::AfXdpPacketIo,
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+    worker: usize,
+    outbound: &mut Vec<UdpOutbound>,
+) -> std::io::Result<()> {
+    outbound.clear();
+    let cookies = UdpCookieBatch::new(settings);
+    io.with_reply_buffers(|inbound, replies| {
+        settings.metrics.record_udp_receive_batch(inbound.len());
+        settings
+            .metrics
+            .record_af_xdp_worker_receive_batch(worker, inbound.len());
+        record_udp_worker_source_ports(&settings.metrics, worker, inbound);
+        handle_staged_udp_batch(inbound, zones, settings, &cookies, outbound, Some(replies));
+    })
+}
+
+#[cfg(feature = "experimental-staged-serving")]
+fn should_serve_udp_batch_serially(
+    inbound: &[UdpInbound],
+    zone_count: usize,
+    pipeline_timing_enabled: bool,
+) -> bool {
+    inbound.len() < 2 || zone_count <= 4 || pipeline_timing_enabled
+}
+
+#[cfg(all(test, feature = "experimental-staged-serving"))]
+#[test]
+fn repeated_queries_use_staged_batch_when_available() {
+    let packet = |id: u8| UdpInbound {
+        buffer: vec![0, id, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        len: 12,
+        peer: "192.0.2.1:53000".parse().unwrap(),
+        target: UdpPacketTarget::Socket("192.0.2.1:53000".parse().unwrap()),
+    };
+    let packets = [packet(1), packet(2)];
+    assert!(!should_serve_udp_batch_serially(&packets, 5, false));
+    assert!(should_serve_udp_batch_serially(&packets[..1], 5, false));
+    assert!(should_serve_udp_batch_serially(&packets, 4, false));
+    assert!(should_serve_udp_batch_serially(&packets, 5, true));
+}
+
+#[cfg(all(test, feature = "experimental-staged-serving"))]
+pub(crate) fn test_staged_udp_batch(
+    inbound: &[UdpInbound],
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+) -> Vec<UdpOutbound> {
+    let mut outbound = Vec::new();
+    handle_staged_udp_batch(
+        inbound,
+        zones,
+        settings,
+        &UdpCookieBatch::new(settings),
+        &mut outbound,
+        #[cfg(feature = "experimental-response-writer")]
+        None,
+    );
+    outbound
+}
+
+#[cfg(all(test, feature = "experimental-response-writer"))]
+pub(crate) fn test_staged_udp_batch_with_replies(
+    inbound: &[UdpInbound],
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+    replies: &mut dyn UdpReplyBuffers,
+) -> Vec<UdpOutbound> {
+    let mut outbound = Vec::new();
+    handle_staged_udp_batch(
+        inbound,
+        zones,
+        settings,
+        &UdpCookieBatch::new(settings),
+        &mut outbound,
+        Some(replies),
+    );
+    outbound
+}
+
 fn handle_udp_datagram(
     packet: &[u8],
     peer: SocketAddr,
@@ -1529,6 +1880,10 @@ fn handle_udp_datagram(
         zones,
         settings,
         cookie_batch,
+        None,
+        #[cfg(feature = "experimental-staged-serving")]
+        None,
+        #[cfg(feature = "experimental-response-writer")]
         None,
     )
 }
@@ -1548,9 +1903,30 @@ pub(crate) fn handle_udp_datagram_with_prepared_hook(
         settings,
         &UdpCookieBatch::new(settings),
         Some(prepared_hook),
+        #[cfg(feature = "experimental-staged-serving")]
+        None,
+        #[cfg(feature = "experimental-response-writer")]
+        None,
     )
 }
 
+#[cfg(feature = "experimental-response-writer")]
+struct UdpReplyTarget<'a> {
+    buffers: &'a mut dyn UdpReplyBuffers,
+    frame_index: usize,
+}
+
+#[cfg(all(test, feature = "experimental-query-preparation"))]
+thread_local! {
+    static UNSIGNED_PROOF_REUSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, feature = "experimental-query-preparation"))]
+pub(crate) fn test_take_unsigned_proof_reuses() -> usize {
+    UNSIGNED_PROOF_REUSES.with(|count| count.replace(0))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn handle_udp_datagram_with_optional_prepared_hook(
     packet: &[u8],
     peer: SocketAddr,
@@ -1558,16 +1934,40 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     settings: &UdpServerSettings,
     cookie_batch: &UdpCookieBatch<'_>,
     prepared_hook: Option<&dyn Fn()>,
+    #[cfg(feature = "experimental-staged-serving")] staged: Option<
+        &borondns_core::dns::PreparedDnsBatchQuery<'_, '_>,
+    >,
+    #[cfg(feature = "experimental-response-writer")] mut reply: Option<UdpReplyTarget<'_>>,
 ) -> Option<UdpOutbound> {
     let peer_ip = peer.ip();
     let parse_started = settings.metrics.start_pipeline_timer();
-    let Some(prepared) = prepare_notify_packet_with_metrics(
-        packet,
-        &settings.notify_authority,
-        peer_ip,
-        &settings.metrics,
-        &settings.notify_log_limiter,
-    ) else {
+    #[cfg(feature = "experimental-query-preparation")]
+    let cached_unsigned =
+        staged.is_some_and(|query| query.request().validated_unsigned_query_for(packet));
+    #[cfg(not(feature = "experimental-query-preparation"))]
+    let cached_unsigned = false;
+    let prepared = if cached_unsigned {
+        #[cfg(all(test, feature = "experimental-query-preparation"))]
+        UNSIGNED_PROOF_REUSES.with(|count| count.set(count.get() + 1));
+        // This proves absence of TSIG, not authentication. Ordinary query
+        // policies, cookies, RRL, metrics and response sizing still run below.
+        Some(crate::PreparedDnsMessage {
+            packet: std::borrow::Cow::Borrowed(packet),
+            response_tsig: None,
+            immediate_response: None,
+            tsig_authenticated: false,
+            notify_policy_token: None,
+        })
+    } else {
+        prepare_notify_packet_with_metrics(
+            packet,
+            &settings.notify_authority,
+            peer_ip,
+            &settings.metrics,
+            &settings.notify_log_limiter,
+        )
+    };
+    let Some(prepared) = prepared else {
         debug!(
             peer_ip = %peer.ip(),
             peer_port = peer.port(),
@@ -1577,7 +1977,24 @@ fn handle_udp_datagram_with_optional_prepared_hook(
         );
         return None;
     };
-    let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
+    let prepared = if cached_unsigned {
+        prepared
+    } else {
+        prepare_query_tsig_packet(prepared, &settings.notify_authority)
+    };
+    #[cfg(feature = "experimental-staged-serving")]
+    let staged = staged.filter(|query| query.matches_packet(&prepared.packet));
+    #[cfg(feature = "experimental-staged-serving")]
+    let local_request;
+    #[cfg(feature = "experimental-staged-serving")]
+    let request = match staged {
+        Some(query) => query.request(),
+        None => {
+            local_request = ParsedDnsRequest::new(&prepared.packet);
+            &local_request
+        }
+    };
+    #[cfg(not(feature = "experimental-staged-serving"))]
     let request = ParsedDnsRequest::new(&prepared.packet);
     // Normal answers already enforce the client's EDNS limit in the core.
     // Only immediate errors and TSIG signing need a separate ceiling here.
@@ -1648,7 +2065,7 @@ fn handle_udp_datagram_with_optional_prepared_hook(
             query_cache_ineligible,
         );
         return Some(UdpOutbound {
-            response,
+            response: response.into(),
             target: UdpPacketTarget::Socket(peer),
             query_metrics: query_metrics.is_query.then_some(query_metrics),
             #[cfg(feature = "af-xdp")]
@@ -1704,14 +2121,124 @@ fn handle_udp_datagram_with_optional_prepared_hook(
     let lookup_observed = |lookup_metrics| {
         record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
     };
-    let action = request.answer_with_hooks(
-        zones,
-        answer_options,
-        notify_authorized,
-        notify_accepted,
-        lookup_observed,
-        &default_zone_image_provider as ZoneImageProvider<'_>,
-    );
+    let record_completed_response = |observation: &QueryMetricObservation, response: &[u8]| {
+        record_dns_cookie_badcookie_if_emitted(
+            dns_cookie_metrics,
+            response,
+            &settings.metrics,
+            peer_ip,
+            settings.cookie_prefix_metrics,
+        );
+        record_query_response_metric(observation, response, &settings.metrics);
+        record_response_cache_metric(
+            observation,
+            response,
+            &settings.metrics,
+            query_cache_ineligible,
+        );
+    };
+    let serial_answer = || {
+        request.answer_with_hooks(
+            zones,
+            answer_options,
+            notify_authorized,
+            notify_accepted,
+            lookup_observed,
+            &default_zone_image_provider as ZoneImageProvider<'_>,
+        )
+    };
+    #[cfg(feature = "experimental-response-writer")]
+    let mut rrl_accounted = false;
+    #[cfg(not(feature = "experimental-response-writer"))]
+    let rrl_accounted = false;
+    #[cfg(feature = "experimental-staged-serving")]
+    let action = match staged {
+        Some(query) => {
+            #[cfg(feature = "experimental-response-writer")]
+            let buffered = if let Some(target) =
+                reply.as_mut().filter(|_| prepared.response_tsig.is_none())
+                && let Some(destination) = target.buffers.buffer(target.frame_index)
+            {
+                use crate::rate_limit::RrlDisposition;
+                use borondns_core::dns::BufferedDatagramAction;
+                match query.answer_with_default_hooks_into(
+                    zones,
+                    answer_options,
+                    notify_authorized,
+                    notify_accepted,
+                    lookup_observed,
+                    destination,
+                ) {
+                    BufferedDatagramAction::Owned(action) => Some(action),
+                    BufferedDatagramAction::Written(len) => {
+                        let response = &destination[..len];
+                        let decision = if prepared.tsig_authenticated || cookie_validated {
+                            RrlDisposition::Send
+                        } else {
+                            settings.rrl.decide(peer_ip, response)
+                        };
+                        match decision {
+                            RrlDisposition::Drop => return None,
+                            RrlDisposition::Slip => {
+                                // Accounted already; the owned truncation must
+                                // not consume another token or change the slip.
+                                rrl_accounted = true;
+                                Some(DatagramAction::Respond(rrl_truncated_response(response)))
+                            }
+                            RrlDisposition::Send => {
+                                let mut observation = query_metrics;
+                                observation.compose_duration =
+                                    compose_started.map(|started| started.elapsed());
+                                record_chaos_query_if_observed(
+                                    chaos_observation.as_ref(),
+                                    response,
+                                    &settings.metrics,
+                                    peer_ip,
+                                    "udp",
+                                );
+                                record_completed_response(&observation, response);
+                                let category = if observation.is_query
+                                    && settings.metrics.pipeline_timing_enabled()
+                                {
+                                    Header::parse(response).ok().map(|header| {
+                                        query_latency_category(&observation, response, &header)
+                                    })
+                                } else {
+                                    None
+                                };
+                                let completed =
+                                    target.buffers.seal(target.frame_index, len, category)?;
+                                return Some(UdpOutbound {
+                                    response: UdpResponse::Prepared(completed),
+                                    target: UdpPacketTarget::AfXdp {
+                                        frame_index: target.frame_index,
+                                    },
+                                    query_metrics: observation.is_query.then_some(observation),
+                                    benchmark_fixed_response: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            #[cfg(not(feature = "experimental-response-writer"))]
+            let buffered: Option<DatagramAction> = None;
+            buffered.unwrap_or_else(|| {
+                query.answer_with_default_hooks(
+                    zones,
+                    answer_options,
+                    notify_authorized,
+                    notify_accepted,
+                    lookup_observed,
+                )
+            })
+        }
+        None => serial_answer(),
+    };
+    #[cfg(not(feature = "experimental-staged-serving"))]
+    let action = serial_answer();
     let mut query_metrics = query_metrics;
     query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
     match action {
@@ -1747,29 +2274,16 @@ fn handle_udp_datagram_with_optional_prepared_hook(
                         return None;
                     }
                 };
-            let rrl_decision = if prepared.tsig_authenticated || cookie_validated {
+            let rrl_decision = if rrl_accounted || prepared.tsig_authenticated || cookie_validated {
                 RrlDecision::Send(response)
             } else {
                 settings.rrl.apply(peer_ip, response)
             };
             match rrl_decision {
                 RrlDecision::Send(response) => {
-                    record_dns_cookie_badcookie_if_emitted(
-                        dns_cookie_metrics,
-                        &response,
-                        &settings.metrics,
-                        peer_ip,
-                        settings.cookie_prefix_metrics,
-                    );
-                    record_query_response_metric(&query_metrics, &response, &settings.metrics);
-                    record_response_cache_metric(
-                        &query_metrics,
-                        &response,
-                        &settings.metrics,
-                        query_cache_ineligible,
-                    );
+                    record_completed_response(&query_metrics, &response);
                     Some(UdpOutbound {
-                        response,
+                        response: response.into(),
                         target: UdpPacketTarget::Socket(peer),
                         query_metrics: query_metrics.is_query.then_some(query_metrics),
                         #[cfg(feature = "af-xdp")]

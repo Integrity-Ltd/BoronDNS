@@ -130,7 +130,7 @@ bootstrap_trusted_stat() {
         mode="$("$candidate" -L -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
-        ((!(mode & 0022))) || continue
+        ((! (mode & 0022))) || continue
         TRUSTED_STAT="$candidate"
         TRUSTED_STAT_APPLET=""
         return 0
@@ -144,7 +144,7 @@ bootstrap_trusted_stat() {
         mode="$("$candidate" --coreutils-prog=stat -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
-        ((!(mode & 0022))) || continue
+        ((! (mode & 0022))) || continue
         TRUSTED_STAT="$candidate"
         TRUSTED_STAT_APPLET=stat
         return 0
@@ -163,7 +163,7 @@ bootstrap_trusted_realpath() {
         mode="$(trusted_stat_bootstrap -L -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
-        ((!(mode & 0022))) || continue
+        ((! (mode & 0022))) || continue
         TRUSTED_REALPATH="$candidate"
         TRUSTED_REALPATH_APPLET=""
         return 0
@@ -174,7 +174,7 @@ bootstrap_trusted_realpath() {
         mode="$(trusted_stat_bootstrap -c '%a' -- "$candidate" 2>/dev/null)" || continue
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || continue
         mode=$((8#$mode))
-        ((!(mode & 0022))) || continue
+        ((! (mode & 0022))) || continue
         [[ "$("$candidate" --coreutils-prog=realpath -e -- "$candidate" 2>/dev/null)" == "$candidate" ]] ||
             continue
         TRUSTED_REALPATH="$candidate"
@@ -204,7 +204,7 @@ trusted_tool_directory_is_safe() {
         mode="$(trusted_stat_bootstrap -c '%a' -- "$current")" || return 1
         [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || return 1
         mode=$((8#$mode))
-        ((!(mode & 0022))) || return 1
+        ((! (mode & 0022))) || return 1
     done
 }
 
@@ -221,7 +221,7 @@ trusted_tool_path_is_safe() {
     mode="$(trusted_stat_bootstrap -c '%a' -- "$real")" || return 1
     [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || return 1
     mode=$((8#$mode))
-    ((!(mode & 0022))) || return 1
+    ((! (mode & 0022))) || return 1
     target_basename="${real##*/}"
     [[ "$target_basename" != busybox ]] || return 1
     if [[ "$target_basename" == coreutils ]]; then
@@ -625,7 +625,7 @@ validate_existing_directory_chain() {
                 die "cannot inspect mode of $label component: $current"
             mode=$((8#$mode))
             if ((mode & 0022)); then
-                if [[ "$current" == "$path" ]] || ((!(mode & 01000))); then
+                if [[ "$current" == "$path" ]] || ((! (mode & 01000))); then
                     die "$label directory chain contains an unsafe writable component: $current"
                 fi
             fi
@@ -658,7 +658,7 @@ installer_payload_file_identity() {
     mode="$(stat -c '%a' -- "$path")" || return 1
     [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || return 1
     mode_value=$((8#$mode))
-    ((!(mode_value & 0022))) || return 1
+    ((! (mode_value & 0022))) || return 1
     stat -c '%d:%i:%u' -- "$path"
 }
 

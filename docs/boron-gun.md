@@ -54,6 +54,31 @@ payload size, the DO bit, and RD. By default EDNS is enabled with a 1232-byte
 payload, DO is clear, and RD is clear. Run `boron-gun --help` for the complete
 option list.
 
+For pre-sampled distributions such as Zipf, set `query.schedule_file` in TOML
+alongside a unique query list and `select = "sequential"`. The binary format is
+the eight bytes `BGQS0001`, a little-endian `u64` entry count, then that many
+little-endian `u32` indices into the query pool. Counts must be between 1 and
+2^26; malformed lengths and out-of-range indices are rejected. The schedule
+repeats. AF_XDP workers share the query pool and encoded DNS messages, and start
+at evenly spaced schedule offsets independent of source ports and queue IDs.
+Per-worker packet templates may still consume additional memory.
+
+AF_XDP also accepts `run.warmup_seconds` (default zero, maximum 3600). Workers
+warm up and drain replies before coordinating the measured phase, keeping the
+same sockets and process. Warm-up queue records go to stderr; the normal summary
+excludes their packets and send time. `send_duration_seconds`, rather than total
+process duration, is the denominator for measured QPS. This setting is rejected
+by the standard socket backend and currently requires `xdp.reply_tracking =
+"count"` or `"packet-count"`. Latency tracking must leave warm-up at zero until
+cross-queue warm-up tracking is supported.
+
+Per-queue records include DNS response-class, unmatched and truncated counts
+for both phases. In `count` mode, a positive-only benchmark should check the warm-up counters
+too: zero `errors_total` does not mean every reply was positive. Negative replies
+are legitimate in other workloads, so they do not make BoronGun abort.
+`packet-count` mode does not classify DNS replies; its counters cannot establish
+answer correctness.
+
 ## Run AF_XDP on a lab interface
 
 Build the userspace binary and the separate eBPF object:

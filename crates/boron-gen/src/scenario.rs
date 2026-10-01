@@ -8,12 +8,45 @@ use thiserror::Error;
 const DNS_CLASS_IN: u16 = 1;
 const DEFAULT_TTL: u32 = 300;
 
+// Four-round Feistel permutation: deterministic, reversible, collision-free
+// over u32. This is corpus randomisation, not a cryptographic primitive.
+fn portfolio_permute(value: u32, seed: u64, inverse: bool) -> u32 {
+    let (mut left, mut right) = (value >> 16, value & 0xffff);
+    for step in 0..4 {
+        let round = if inverse { 3 - step } else { step };
+        let input = if inverse { left } else { right };
+        let mut mixed = u64::from(input) ^ seed.rotate_left(round * 13);
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d049bb133111eb);
+        let function = ((mixed ^ (mixed >> 31)) & 0xffff) as u32;
+        (left, right) = if inverse {
+            (right ^ function, left)
+        } else {
+            (right, left ^ function)
+        };
+    }
+    (left << 16) | right
+}
+
+fn portfolio_origin(config: &ScenarioConfig, index: u64) -> String {
+    let nested = index % 100 == 99;
+    let parent = if nested { index - 1 } else { index };
+    let encoded = portfolio_permute(parent as u32, config.seed, false);
+    format!(
+        "{}z{encoded:08x}.s{}.{}",
+        if nested { "c." } else { "" },
+        encoded % 4,
+        config.origin.to_ascii_lowercase()
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContentProfile {
     RegistryNsec3,
     Mixed,
     LargeRrset,
+    Portfolio,
 }
 
 impl fmt::Display for ContentProfile {
@@ -22,6 +55,7 @@ impl fmt::Display for ContentProfile {
             Self::RegistryNsec3 => formatter.write_str("registry-nsec3"),
             Self::Mixed => formatter.write_str("mixed"),
             Self::LargeRrset => formatter.write_str("large-rrset"),
+            Self::Portfolio => formatter.write_str("portfolio"),
         }
     }
 }
@@ -34,6 +68,7 @@ impl std::str::FromStr for ContentProfile {
             "registry-nsec3" => Ok(Self::RegistryNsec3),
             "mixed" => Ok(Self::Mixed),
             "large-rrset" => Ok(Self::LargeRrset),
+            "portfolio" => Ok(Self::Portfolio),
             _ => Err(ScenarioError::InvalidProfile(value.to_owned())),
         }
     }
@@ -86,6 +121,12 @@ impl Default for ScenarioConfig {
 
 #[derive(Debug, Error)]
 pub enum ScenarioError {
+    #[error(
+        "portfolio requires <= u32::MAX zones, three hosts, four A records and no structural signatures"
+    )]
+    InvalidPortfolio,
+    #[error("zone index is outside the configured zone count")]
+    InvalidZoneIndex,
     #[error("unsupported content profile {0}")]
     InvalidProfile(String),
     #[error("{field} must be an absolute DNS name: {value}")]
@@ -208,6 +249,14 @@ impl Scenario {
         }
 
         let origin = parse_name("origin", &config.origin)?;
+        if config.profile == ContentProfile::Portfolio
+            && (config.zones > u64::from(u32::MAX)
+                || config.names_per_zone != 3
+                || config.records_per_name != 4
+                || config.structural_rrsigs)
+        {
+            return Err(ScenarioError::InvalidPortfolio);
+        }
         let catalog_origin = parse_name("catalog_origin", &config.catalog_origin)?;
         let origin_key = origin.canonical_key();
         let catalog_key = catalog_origin.canonical_key();
@@ -289,6 +338,12 @@ impl Scenario {
     }
 
     pub fn zone_origin(&self, index: u64) -> Result<DomainName, ScenarioError> {
+        if index >= self.config.zones {
+            return Err(ScenarioError::InvalidZoneIndex);
+        }
+        if self.config.profile == ContentProfile::Portfolio {
+            return parse_generated_name(portfolio_origin(&self.config, index));
+        }
         if self.config.zones == 1 {
             return Ok(self.origin.clone());
         }
@@ -299,6 +354,23 @@ impl Scenario {
         let key = name.canonical_key();
         if key == self.catalog_key {
             return Some(ZoneKind::Catalog);
+        }
+        if self.config.profile == ContentProfile::Portfolio {
+            let prefix = key.strip_suffix(&self.origin_key)?;
+            let encoded = prefix
+                .strip_prefix("c.")
+                .unwrap_or(prefix)
+                .split('.')
+                .next()?;
+            let value = u32::from_str_radix(encoded.strip_prefix('z')?, 16).ok()?;
+            let parent = u64::from(portfolio_permute(value, self.config.seed, true));
+            let index = if prefix.starts_with("c.") {
+                parent.checked_add(1)?
+            } else {
+                parent
+            };
+            return (index < self.config.zones && portfolio_origin(&self.config, index) == key)
+                .then_some(ZoneKind::Member(index));
         }
         if self.config.zones == 1 {
             return (key == self.origin_key).then_some(ZoneKind::Member(0));
@@ -582,6 +654,9 @@ impl<'a> ZoneRecordIter<'a> {
     }
 
     fn next_member(&mut self, zone_index: u64) -> Option<Result<GeneratedRecord, ScenarioError>> {
+        if self.scenario.config.profile == ContentProfile::Portfolio {
+            return self.next_portfolio_record(zone_index);
+        }
         loop {
             match self.stage {
                 0 => {
@@ -733,7 +808,83 @@ impl<'a> ZoneRecordIter<'a> {
             ContentProfile::RegistryNsec3 => self.next_registry_record(zone_index),
             ContentProfile::Mixed => self.next_mixed_record(zone_index),
             ContentProfile::LargeRrset => self.next_large_rrset_record(zone_index),
+            ContentProfile::Portfolio => unreachable!("portfolio has a separate record iterator"),
         }
+    }
+
+    fn next_portfolio_record(
+        &mut self,
+        zone_index: u64,
+    ) -> Option<Result<GeneratedRecord, ScenarioError>> {
+        let slot = self.stage;
+        if slot >= 24 {
+            return None;
+        }
+        // Preserve the frozen portfolio host records and stream optional churn
+        // owners before the closing SOA. The u64 cursor, not the stage byte,
+        // counts them; neither a zone snapshot nor a journal is retained.
+        if slot == 23 && self.owner_index < self.scenario.config.ixfr_delta_rrsets {
+            let index = self.owner_index;
+            self.owner_index += 1;
+            return Some(ixfr_churn_record(
+                &self.origin,
+                self.scenario.config.ttl,
+                self.scenario.config.seed,
+                zone_index,
+                index,
+                self.serial,
+            ));
+        }
+        self.stage += 1;
+        let ttl = self.scenario.config.ttl;
+        let seed = self.scenario.config.seed;
+        Some((|| {
+            if slot == 0 || slot == 23 {
+                return self.scenario.soa_at_serial(self.kind, self.serial);
+            }
+            if slot <= 4 {
+                let ns = child_name(if slot % 2 == 1 { "ns1" } else { "ns2" }, &self.origin)?;
+                return Ok(if slot <= 2 {
+                    record(
+                        self.origin.clone(),
+                        RecordType::Ns as u16,
+                        ttl,
+                        ns.to_wire(),
+                    )
+                } else {
+                    record(
+                        ns,
+                        RecordType::A as u16,
+                        ttl,
+                        ipv4_glue_rdata(seed, zone_index, 0, u64::from(slot)),
+                    )
+                });
+            }
+            let host = (slot - 5) / 6;
+            let part = (slot - 5) % 6;
+            let labels = if zone_index % 100 == 99 {
+                ["www", "api", "app"]
+            } else {
+                ["wwwxx", "apixx", "appxx"]
+            };
+            let owner = child_name(labels[usize::from(host)], &self.origin)?;
+            Ok(match part {
+                0..=3 => record(owner, RecordType::A as u16, ttl, {
+                    // Four distinct addresses even when the truncated hash collides.
+                    // Otherwise deduplication would change the response size.
+                    let value =
+                        mix64(seed ^ zone_index.rotate_left(11) ^ u64::from(host).rotate_left(37));
+                    vec![198, 18, (value >> 8) as u8, (value as u8 & !3) | part]
+                }),
+                4 => record(owner, RecordType::Aaaa as u16, ttl, vec![0; 16]),
+                _ => record(
+                    owner,
+                    RecordType::Txt as u16,
+                    ttl,
+                    vec![3, b'l', b'a', b'b'],
+                ),
+            })
+        })())
     }
 
     fn next_registry_record(
@@ -959,8 +1110,18 @@ fn validate_generated_names(
     catalog: &DomainName,
 ) -> Result<(), ScenarioError> {
     let origin_key = origin.canonical_key();
+    if config.profile == ContentProfile::Portfolio {
+        // Include a nested name even when this particular set has <100 zones.
+        let longest = portfolio_origin(config, 99);
+        parse_generated_name(format!("hostmaster.{longest}"))?;
+        parse_generated_name(format!("wwwxx.{longest}"))?;
+    }
     let catalog_key = catalog.canonical_key();
-    let zone_key = if config.zones > 1 {
+    let zone_key = if config.profile == ContentProfile::Portfolio {
+        // Nested portfolio origins have a different shape from numbered
+        // synthetic zones. Validate the actual longest shape for churn too.
+        portfolio_origin(config, 99)
+    } else if config.zones > 1 {
         let key = format!("z{:016x}.{origin_key}", config.zones - 1);
         parse_generated_name(key.clone())?;
         key
@@ -990,6 +1151,11 @@ fn validate_generated_names(
 }
 
 fn member_snapshot_record_count(config: &ScenarioConfig) -> Result<u64, ScenarioError> {
+    if config.profile == ContentProfile::Portfolio {
+        return 23u64
+            .checked_add(config.ixfr_delta_rrsets)
+            .ok_or(ScenarioError::RecordCountOverflow);
+    }
     let apex = 3u64
         .checked_add(u64::from(config.profile == ContentProfile::RegistryNsec3))
         .and_then(|value| {
@@ -1044,6 +1210,7 @@ fn member_snapshot_record_count(config: &ScenarioConfig) -> Result<u64, Scenario
                 .checked_mul(per_name)
                 .ok_or(ScenarioError::RecordCountOverflow)?
         }
+        ContentProfile::Portfolio => unreachable!("portfolio count is fixed"),
     };
     let nsec3 = if config.profile == ContentProfile::RegistryNsec3 {
         config

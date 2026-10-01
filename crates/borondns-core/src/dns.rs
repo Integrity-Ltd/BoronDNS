@@ -22,7 +22,22 @@ use crate::{
 #[cfg(test)]
 use crate::zone_image::zone_image_record_fixed_fields;
 
+#[cfg(feature = "experimental-compact-serving")]
+use crate::zone_image::ZoneImageTemplateAnswer;
+
 pub(crate) type InlineNameWire = SmallVec<[u8; 64]>;
+
+#[cfg(feature = "experimental-staged-serving")]
+mod batch_serving;
+#[cfg(feature = "experimental-staged-serving")]
+pub use batch_serving::{DNS_SERVING_BATCH_SIZE, PreparedDnsBatchQuery, with_prepared_dns_batch};
+
+mod response_writer;
+#[cfg(feature = "experimental-response-writer")]
+pub use response_writer::BufferedDatagramAction;
+#[cfg(not(feature = "experimental-response-writer"))]
+use response_writer::BufferedDatagramAction;
+use response_writer::DnsWireWrite;
 
 const MAX_COMPRESSED_NAME_POINTERS: usize = 128;
 
@@ -1071,12 +1086,16 @@ pub struct ParsedDnsRequest<'a> {
     metadata: OnceCell<Result<RequestMetadata, EdnsError>>,
 }
 
-// At most eight label buffers of at most 64 bytes, plus eight Vec headers,
-// per OS thread. Taking ownership before parsing makes nested requests safe;
+// One query's buffers per OS thread normally; at most eight queries under the
+// experimental staged path. Each query retains at most eight 64-byte label
+// buffers plus Vec headers. Taking ownership keeps nested/live requests disjoint;
 // stored zone names never use this recycler.
 const QUERY_LABEL_CACHE_LIMIT: usize = 8;
 thread_local! {
+    #[cfg(not(feature = "experimental-staged-serving"))]
     static QUERY_LABEL_CACHE: RefCell<Option<Vec<Vec<u8>>>> = const { RefCell::new(None) };
+    #[cfg(feature = "experimental-staged-serving")]
+    static QUERY_LABEL_CACHE: RefCell<[Option<Vec<Vec<u8>>>; DNS_SERVING_BATCH_SIZE]> = const { RefCell::new([const { None }; DNS_SERVING_BATCH_SIZE]) };
 }
 
 impl Drop for ParsedDnsRequest<'_> {
@@ -1093,8 +1112,13 @@ impl Drop for ParsedDnsRequest<'_> {
         // TLS may already be tearing down. Failure simply frees the buffers.
         let _ = QUERY_LABEL_CACHE.try_with(|cache| {
             let mut cache = cache.borrow_mut();
+            #[cfg(not(feature = "experimental-staged-serving"))]
             if cache.is_none() {
                 *cache = Some(labels);
+            }
+            #[cfg(feature = "experimental-staged-serving")]
+            if let Some(slot) = cache.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(labels);
             }
         });
     }
@@ -1124,7 +1148,16 @@ impl<'a> ParsedDnsRequest<'a> {
         self.question
             .get_or_init(|| {
                 let labels = QUERY_LABEL_CACHE
-                    .try_with(|cache| cache.borrow_mut().take())
+                    .try_with(|cache| {
+                        #[cfg(not(feature = "experimental-staged-serving"))]
+                        {
+                            cache.borrow_mut().take()
+                        }
+                        #[cfg(feature = "experimental-staged-serving")]
+                        {
+                            cache.borrow_mut().iter_mut().find_map(Option::take)
+                        }
+                    })
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -1156,6 +1189,34 @@ impl<'a> ParsedDnsRequest<'a> {
         let metadata = self.metadata().ok()?;
         let client_payload = metadata.edns.map_or(512, |edns| edns.payload_size);
         Some(usize::from(client_payload.min(max_udp_payload)))
+    }
+
+    /// Reuse a completed parse to prove that this exact packet is an unsigned
+    /// ordinary query. This neither authenticates it nor exempts any policy.
+    /// Only an empty additional section or a sole validated OPT is eligible;
+    /// all other shapes must retain the transport's ordinary TSIG processing.
+    #[cfg(feature = "experimental-query-preparation")]
+    pub fn validated_unsigned_query_for(&self, packet: &[u8]) -> bool {
+        if !std::ptr::eq(self.packet, packet) {
+            return false;
+        }
+        let Some(header) = self.header() else {
+            return false;
+        };
+        if header.is_response()
+            || header.opcode() != Some(Opcode::Query)
+            || header.qdcount != 1
+            || header.ancount != 0
+            || header.nscount != 0
+            || header.arcount > 1
+        {
+            return false;
+        }
+        // Do not initiate another parse or infer absence from a partial/error
+        // result. Successful metadata parsing checked every byte, including
+        // the question, record boundaries, EDNS options and trailing data.
+        matches!(self.metadata.get(), Some(Ok(metadata))
+            if header.arcount == 0 || metadata.edns.is_some())
     }
 
     pub fn cookie_status(
@@ -1190,7 +1251,12 @@ impl<'a> ParsedDnsRequest<'a> {
             notify_accepted,
             &observer,
             zone_image_provider,
+            #[cfg(feature = "experimental-staged-serving")]
+            None,
+            #[cfg(feature = "experimental-response-writer")]
+            None,
         )
+        .into_owned()
     }
 }
 
@@ -1203,16 +1269,20 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>) -> bool,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
-) -> DatagramAction {
+    #[cfg(feature = "experimental-staged-serving")] batch_query: Option<
+        &PreparedDnsBatchQuery<'_, '_>,
+    >,
+    #[cfg(feature = "experimental-response-writer")] destination: Option<&mut [u8]>,
+) -> BufferedDatagramAction {
     let packet = request.packet;
     let header = match request.header.as_ref() {
         Ok(header) => header.clone(),
-        Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
-        Err(DnsParseError::FormErr) => return DatagramAction::Discard,
+        Err(DnsParseError::ShortHeader) => return DatagramAction::Discard.into(),
+        Err(DnsParseError::FormErr) => return DatagramAction::Discard.into(),
     };
 
     if header.is_response() {
-        return DatagramAction::Discard;
+        return DatagramAction::Discard.into();
     }
 
     match header.opcode() {
@@ -1225,7 +1295,8 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
                 options,
                 &notify_authorized,
                 &notify_accepted,
-            );
+            )
+            .into();
         }
         None => {
             let question = parse_echoable_question(&header, packet);
@@ -1239,7 +1310,8 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
                 &[],
                 RequestMetadata::empty(),
                 options,
-            ));
+            ))
+            .into();
         }
     }
 
@@ -1250,10 +1322,16 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
         options,
         query_observer,
         zone_image_provider,
+        #[cfg(feature = "experimental-staged-serving")]
+        batch_query,
+        #[cfg(feature = "experimental-response-writer")]
+        destination,
     )
 }
 
 trait AnswerQueryObserver {
+    #[cfg(feature = "experimental-compact-serving")]
+    fn observe_compact_direct_answer(&self);
     fn observe_zone_image_plan(&self, plan: &ZoneImageLookupPlan, direct_answer: bool);
     fn observe_zone_image_failure(&self, reason: ZoneImageServeFailureReason);
     fn observe_snapshot_lookup(&self, lookup: &LookupResult);
@@ -1267,6 +1345,17 @@ impl<F> AnswerQueryObserver for LookupMetricsObserver<F>
 where
     F: Fn(LookupMetrics),
 {
+    #[cfg(feature = "experimental-compact-serving")]
+    fn observe_compact_direct_answer(&self) {
+        (self.callback)(LookupMetrics {
+            termination: None,
+            nsec3_iterations_exceeded: false,
+            zone_image_used: true,
+            zone_image_direct_answer: true,
+            zone_image_failure_reason: None,
+        });
+    }
+
     fn observe_zone_image_plan(&self, plan: &ZoneImageLookupPlan, direct_answer: bool) {
         (self.callback)(LookupMetrics::from_zone_image_plan(plan, direct_answer));
     }
@@ -1280,6 +1369,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn answer_query_message(
     header: &Header,
     request: &ParsedDnsRequest<'_>,
@@ -1287,9 +1377,15 @@ fn answer_query_message(
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
-) -> DatagramAction {
+    #[cfg(feature = "experimental-staged-serving")] batch_query: Option<
+        &PreparedDnsBatchQuery<'_, '_>,
+    >,
+    #[cfg(feature = "experimental-response-writer")] destination: Option<&mut [u8]>,
+) -> BufferedDatagramAction {
+    #[cfg(feature = "experimental-staged-serving")]
+    let batch_query = batch_query.filter(|batch| std::ptr::eq(batch.request(), request));
     if header.qdcount == 0 {
-        return answer_empty_question_cookie_query(header, request, options);
+        return answer_empty_question_cookie_query(header, request, options).into();
     }
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -1302,12 +1398,13 @@ fn answer_query_message(
             &[],
             RequestMetadata::empty(),
             options,
-        ));
+        ))
+        .into();
     }
 
     let question = match request.question_result() {
         Ok(question) => question,
-        Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
+        Err(DnsParseError::ShortHeader) => return DatagramAction::Discard.into(),
         Err(DnsParseError::FormErr) => {
             return DatagramAction::Respond(build_response(
                 header,
@@ -1319,7 +1416,8 @@ fn answer_query_message(
                 &[],
                 RequestMetadata::empty(),
                 options,
-            ));
+            ))
+            .into();
         }
     };
 
@@ -1336,7 +1434,8 @@ fn answer_query_message(
                 &[],
                 RequestMetadata::empty(),
                 options,
-            ));
+            ))
+            .into();
         }
         Err(EdnsError::FormErrWithMetadata(metadata)) => {
             return DatagramAction::Respond(build_response(
@@ -1349,7 +1448,8 @@ fn answer_query_message(
                 &[],
                 metadata,
                 options,
-            ));
+            ))
+            .into();
         }
         Err(EdnsError::BadVers(metadata)) => {
             return DatagramAction::Respond(build_response(
@@ -1362,7 +1462,8 @@ fn answer_query_message(
                 &[],
                 metadata.with_extended_rcode(16),
                 options,
-            ));
+            ))
+            .into();
         }
     };
 
@@ -1377,7 +1478,8 @@ fn answer_query_message(
             &[],
             metadata,
             options,
-        ));
+        ))
+        .into();
     }
 
     if dns_cookie_requires_badcookie(metadata, options) {
@@ -1391,11 +1493,12 @@ fn answer_query_message(
             &[],
             metadata.with_extended_rcode(Rcode::BadCookie as u16),
             options,
-        ));
+        ))
+        .into();
     }
 
     if question.qclass == DNS_CLASS_CH {
-        return answer_chaos_query(header, question, metadata, options);
+        return answer_chaos_query(header, question, metadata, options).into();
     }
 
     if let Some(response_code) = rejected_qtype(question.qtype) {
@@ -1409,7 +1512,8 @@ fn answer_query_message(
             &[],
             metadata,
             options,
-        ));
+        ))
+        .into();
     }
 
     if question.qclass != DNS_CLASS_IN && question.qclass != DNS_CLASS_ANY {
@@ -1423,40 +1527,66 @@ fn answer_query_message(
             &[],
             metadata,
             options,
-        ));
+        ))
+        .into();
     }
 
-    let Some(action) = zone_store.with_published_zone_for_query_with_ascii_lowercase_hint(
-        &question.qname,
-        question.qname_ascii_lowercase(),
-        question.qtype == RecordType::Ds as u16,
-        |published_zone| {
-            if published_zone.state() != ZoneState::Active {
-                return DatagramAction::Respond(build_response(
-                    header,
-                    Rcode::ServFail,
-                    false,
-                    Some(question),
-                    &[],
-                    &[],
-                    &[],
-                    metadata.with_extended_dns_error(ExtendedDnsError::NotReady),
-                    options,
-                ));
-            }
-            if published_zone.has_incremental_overlay() {
-                return answer_with_incremental_overlay(
-                    header,
-                    question,
-                    metadata,
-                    options,
-                    query_observer,
-                    zone_store,
-                    zone_image_provider,
-                    &published_zone,
-                );
-            }
-            match try_answer_with_zone_image(
+    // Fused presence is a publication-bound proof of a direct positive answer.
+    // Only the explicit default-provider API may use it. Policy checks above
+    // still precede serialization; a sizing miss uses the same frozen directory.
+    #[cfg(feature = "experimental-fused-serving")]
+    if let Some(batch) = batch_query.filter(|batch| batch.default_provider)
+        && let Some(answer) = batch.lookup.as_ref().and_then(|lookup| lookup.fused)
+        && let Some(template) = answer.template_answer()
+    {
+        let sizing =
+            zone_image_response_sizing(question, metadata.udp_ceiling(options), &metadata, options);
+        #[cfg(feature = "experimental-response-writer")]
+        if let Some(destination) = destination
+            && let Some(len) = response_writer::write_compact_answer_into(
+                header,
+                question,
+                template,
+                metadata,
+                options,
+                sizing,
+                destination,
+            )
+        {
+            query_observer.observe_compact_direct_answer();
+            return BufferedDatagramAction::Written(len);
+        }
+        if let Some(response) = build_compact_zone_image_answer_response(
+            header, question, template, metadata, options, sizing,
+        ) {
+            query_observer.observe_compact_direct_answer();
+            return DatagramAction::Respond(response).into();
+        }
+    }
+
+    #[cfg(feature = "experimental-selected-query")]
+    let select_query = ZoneStore::with_selected_query_zone;
+    #[cfg(not(feature = "experimental-selected-query"))]
+    let select_query = ZoneStore::with_published_zone_for_query_with_ascii_lowercase_hint;
+    let visit_zone = |published_zone: crate::zone::PublishedZoneRef<'_>,
+                      #[cfg(feature = "experimental-selected-query")] selected_query: Option<
+        crate::zone::SelectedZoneQuery<'_>,
+    >| {
+        if published_zone.state() != ZoneState::Active {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::ServFail,
+                false,
+                Some(question),
+                &[],
+                &[],
+                &[],
+                metadata.with_extended_dns_error(ExtendedDnsError::NotReady),
+                options,
+            ));
+        }
+        if published_zone.has_incremental_overlay() {
+            return answer_with_incremental_overlay(
                 header,
                 question,
                 metadata,
@@ -1465,17 +1595,72 @@ fn answer_query_message(
                 zone_store,
                 zone_image_provider,
                 &published_zone,
-            ) {
-                ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
-                ZoneImageAnswerAttempt::Failure(reason) => {
-                    query_observer.observe_zone_image_failure(reason);
-                    DatagramAction::Respond(build_zone_image_failure_response(
-                        header, question, metadata, options,
-                    ))
-                }
+            );
+        }
+        match try_answer_with_zone_image(
+            header,
+            question,
+            metadata,
+            options,
+            query_observer,
+            zone_store,
+            zone_image_provider,
+            &published_zone,
+            #[cfg(feature = "experimental-selected-query")]
+            selected_query,
+            #[cfg(feature = "experimental-staged-serving")]
+            batch_query,
+        ) {
+            ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
+            ZoneImageAnswerAttempt::Failure(reason) => {
+                query_observer.observe_zone_image_failure(reason);
+                DatagramAction::Respond(build_zone_image_failure_response(
+                    header, question, metadata, options,
+                ))
             }
-        },
-    ) else {
+        }
+    };
+    #[cfg(feature = "experimental-staged-serving")]
+    let cached = batch_query
+        .filter(|b| std::ptr::eq(b.request(), request))
+        .and_then(|b| b.lookup.as_ref());
+    #[cfg(feature = "experimental-staged-serving")]
+    let action = if let Some(cached) = cached {
+        #[cfg(feature = "experimental-fused-serving")]
+        if cached.fused.is_some() {
+            // Custom providers and response-size fallback must not use the new
+            // directory if a publication happened after batch preparation.
+            return batch_query
+                .expect("cached batch")
+                .selector
+                .select(
+                    &question.qname,
+                    question.qname_ascii_lowercase(),
+                    question.qtype == RecordType::Ds as u16,
+                )
+                .map(|(zone, selected)| visit_zone(zone, selected))
+                .expect("a fused proof has an authority in its own publication")
+                .into();
+        }
+        cached.zone.map(|zone| visit_zone(zone, cached.selected))
+    } else {
+        select_query(
+            zone_store,
+            &question.qname,
+            question.qname_ascii_lowercase(),
+            question.qtype == RecordType::Ds as u16,
+            visit_zone,
+        )
+    };
+    #[cfg(not(feature = "experimental-staged-serving"))]
+    let action = select_query(
+        zone_store,
+        &question.qname,
+        question.qname_ascii_lowercase(),
+        question.qtype == RecordType::Ds as u16,
+        visit_zone,
+    );
+    let Some(action) = action else {
         return DatagramAction::Respond(build_response(
             header,
             Rcode::Refused,
@@ -1486,9 +1671,10 @@ fn answer_query_message(
             &[],
             metadata,
             options,
-        ));
+        ))
+        .into();
     };
-    action
+    action.into()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1774,6 +1960,12 @@ fn try_answer_with_zone_image(
     zone_store: &ZoneStore,
     zone_image_provider: ZoneImageProvider<'_>,
     published_zone: &dyn PublishedZoneView,
+    #[cfg(feature = "experimental-selected-query")] selected_query: Option<
+        crate::zone::SelectedZoneQuery<'_>,
+    >,
+    #[cfg(feature = "experimental-staged-serving")] batch_query: Option<
+        &PreparedDnsBatchQuery<'_, '_>,
+    >,
 ) -> ZoneImageAnswerAttempt {
     let image = zone_image_provider(published_zone);
     let dnssec_requested = metadata.dnssec_requested();
@@ -1782,6 +1974,60 @@ fn try_answer_with_zone_image(
         .then(|| zone_image_response_sizing(question, udp_ceiling, &metadata, options));
     let mut direct_plan_rejected = false;
     let mut rejected_direct_plan = None;
+    #[cfg(feature = "experimental-compact-serving")]
+    if !dnssec_requested
+        && let Some(wire) = {
+            let checked_lookup = || {
+                image.lookup_compact_direct(
+                    &question.qname,
+                    question.qtype,
+                    question.qclass,
+                    question.qname_ascii_lowercase(),
+                )
+            };
+            let selected_lookup = || {
+                #[cfg(feature = "experimental-selected-query")]
+                {
+                    match selected_query.as_ref() {
+                        Some(selected) => selected.lookup_compact_or_else(
+                            image,
+                            question.qtype,
+                            question.qclass,
+                            question.qname_ascii_lowercase(),
+                            checked_lookup,
+                        ),
+                        None => checked_lookup(),
+                    }
+                }
+                #[cfg(not(feature = "experimental-selected-query"))]
+                {
+                    checked_lookup()
+                }
+            };
+            #[cfg(feature = "experimental-staged-serving")]
+            {
+                batch_query
+                    .and_then(|b| b.compact_for(image))
+                    .unwrap_or_else(selected_lookup)
+            }
+            #[cfg(not(feature = "experimental-staged-serving"))]
+            {
+                selected_lookup()
+            }
+        }
+        && let Some(template) = wire.template_answer()
+        && let Some(response) = build_compact_zone_image_answer_response(
+            header,
+            question,
+            template,
+            metadata,
+            options,
+            direct_response_sizing.expect("compact direct answers exclude DNSSEC requests"),
+        )
+    {
+        query_observer.observe_compact_direct_answer();
+        return ZoneImageAnswerAttempt::Respond(response);
+    }
     if !dnssec_requested
         && let Some(plan) = image.lookup_direct_answer_plan_with_ascii_lowercase_hint(
             &question.qname,
@@ -3117,7 +3363,7 @@ fn zone_image_edns_sizing(
 }
 
 fn append_zone_image_response_edns(
-    response: &mut Vec<u8>,
+    response: &mut impl DnsWireWrite,
     metadata: &RequestMetadata,
     options: AnswerOptions,
     udp_ceiling: usize,
@@ -3327,6 +3573,67 @@ fn build_direct_zone_image_answer_response(
         return None;
     }
     Some(response)
+}
+
+/// The serving descriptor already proves eligibility. Keep this path free of
+/// the general resolver plan and leave the feature-off builder unchanged.
+#[cfg(feature = "experimental-compact-serving")]
+fn build_compact_zone_image_answer_response(
+    header: &Header,
+    question: &Question,
+    answer: ZoneImageTemplateAnswer<'_>,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+    response_sizing: ZoneImageResponseSizing,
+) -> Option<Vec<u8>> {
+    debug_assert!(!metadata.dnssec_requested());
+    let response_capacity =
+        zone_image_response_capacity_hint(response_sizing, answer.body_wire_len(), false);
+    let mut response = Vec::with_capacity(response_capacity);
+    append_compact_zone_image_answer(
+        header,
+        question,
+        answer,
+        metadata,
+        options,
+        response_sizing,
+        &mut response,
+    );
+    if options.transport == Transport::Udp && response.len() > response_sizing.udp_ceiling {
+        return None;
+    }
+    Some(response)
+}
+
+#[cfg(feature = "experimental-compact-serving")]
+fn append_compact_zone_image_answer(
+    header: &Header,
+    question: &Question,
+    answer: ZoneImageTemplateAnswer<'_>,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+    response_sizing: ZoneImageResponseSizing,
+    response: &mut impl DnsWireWrite,
+) {
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags_from_plan_bits(Rcode::NoError.response_flag_bits(true), false)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(
+        &answer.section_count_header_bytes(response_sizing.edns.additional_count != 0),
+    );
+    encode_question(question, response);
+    answer.append_body(|bytes| response.extend_from_slice(bytes));
+    append_zone_image_response_edns(
+        response,
+        &metadata,
+        options,
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3862,12 +4169,12 @@ fn wire_suffix_is_ascii_lowercase(wire_suffix: &[u8]) -> bool {
     true
 }
 
-fn encode_question(question: &Question, response: &mut Vec<u8>) {
+fn encode_question(question: &Question, response: &mut impl DnsWireWrite) {
     encode_name_labels(question.qname.labels(), response);
     response.extend_from_slice(&question.qtype_qclass_wire);
 }
 
-fn encode_name_labels(labels: &[Vec<u8>], response: &mut Vec<u8>) {
+fn encode_name_labels(labels: &[Vec<u8>], response: &mut impl DnsWireWrite) {
     for label in labels {
         response.push(label.len() as u8);
         response.extend_from_slice(label);
@@ -4056,7 +4363,7 @@ fn encode_opt_record_with_base_shape(
     options: AnswerOptions,
     udp_ceiling: usize,
     base_shape: EdnsResponseBaseShape,
-    response: &mut Vec<u8>,
+    response: &mut impl DnsWireWrite,
 ) {
     debug_assert_eq!(
         base_shape.extended_dns_error,
@@ -4170,7 +4477,7 @@ fn append_edns_response_options(
     edns: EdnsMetadata,
     options: AnswerOptions,
     shape: EdnsResponseOptionsShape,
-    response: &mut Vec<u8>,
+    response: &mut impl DnsWireWrite,
 ) {
     if shape.tcp_keepalive_response {
         let timeout_units = options
@@ -4211,7 +4518,7 @@ fn append_edns_response_options(
     }
 }
 
-fn append_edns_padding(response: &mut Vec<u8>, padding_len: usize) {
+fn append_edns_padding(response: &mut impl DnsWireWrite, padding_len: usize) {
     response.extend_from_slice(&EDNS_PADDING_OPTION.to_be_bytes());
     response.extend_from_slice(&(padding_len as u16).to_be_bytes());
     response.resize(response.len() + padding_len, 0);
@@ -5037,4 +5344,6 @@ mod tests {
     include!("dns_tests/indirection_wildcard_delegation.rs");
     include!("dns_tests/additionals_referrals.rs");
     include!("dns_tests/edns_dnssec_cookie.rs");
+    #[cfg(feature = "experimental-staged-serving")]
+    include!("dns_tests/batch_serving.rs");
 }

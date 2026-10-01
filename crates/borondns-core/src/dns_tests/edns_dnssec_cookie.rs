@@ -1,7 +1,7 @@
     #[test]
     fn parsed_request_recycles_names_without_aliasing_live_questions() {
         QUERY_LABEL_CACHE.with(|cache| {
-            cache.borrow_mut().take();
+            *cache.borrow_mut() = Default::default();
         });
         let packet = query(&example_name(), RecordType::A as u16, 1);
         let request = ParsedDnsRequest::new(&packet);
@@ -34,7 +34,10 @@
         drop(short_request);
         QUERY_LABEL_CACHE.with(|cache| {
             let cache = cache.borrow();
+            #[cfg(not(feature = "experimental-staged-serving"))]
             let labels = cache.as_ref().unwrap();
+            #[cfg(feature = "experimental-staged-serving")]
+            let labels = cache.iter().find_map(Option::as_ref).unwrap();
             assert!(labels.capacity() <= QUERY_LABEL_CACHE_LIMIT);
             assert!(labels.iter().all(|label| label.capacity() <= 64));
         });
@@ -43,14 +46,19 @@
     #[test]
     fn parsed_request_name_recycler_does_not_retain_large_questions() {
         QUERY_LABEL_CACHE.with(|cache| {
-            cache.borrow_mut().take();
+            *cache.borrow_mut() = Default::default();
         });
         let name = DomainName::from_absolute_str("a.b.c.d.e.f.g.h.i.").unwrap();
         let packet = query(&name.to_wire(), RecordType::A as u16, 1);
         let request = ParsedDnsRequest::new(&packet);
         assert_eq!(request.question().unwrap().qname, name);
         drop(request);
-        QUERY_LABEL_CACHE.with(|cache| assert!(cache.borrow().is_none()));
+        QUERY_LABEL_CACHE.with(|cache| {
+            #[cfg(not(feature = "experimental-staged-serving"))]
+            assert!(cache.borrow().is_none());
+            #[cfg(feature = "experimental-staged-serving")]
+            assert!(cache.borrow().iter().all(Option::is_none));
+        });
     }
 
     #[test]

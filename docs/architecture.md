@@ -138,12 +138,21 @@ modules carry their principal functional requirement references
 | Module | Responsibility |
 | --- | --- |
 | `crates/borondns-core/src/dns.rs` | DNS wire parsing, EDNS handling, and authoritative response construction. |
+| `crates/borondns-core/src/dns/batch_serving.rs` | Bounded packet-bound query preparation and serving batches. |
+| `crates/borondns-core/src/dns/response_writer.rs` | Direct response writing with reference-path fallback. |
 | `crates/borondns-core/src/axfr.rs` | AXFR/IXFR query construction, transfer parsing, and zone publication validation. |
 | `crates/borondns-core/src/catalog.rs` | RFC 9432 catalog-zone schema and member parsing. |
 | `crates/borondns-core/src/config.rs` | static TOML configuration model and validation. |
 | `crates/borondns-core/src/tsig.rs` | TSIG signing, verification, and error response helpers. |
 | `crates/borondns-core/src/zone.rs` | memory-resident zone snapshots and lookup state. |
+| `crates/borondns-core/src/zone/batch_authority.rs` | Experimental bounded authority selection in independent probe waves. |
+| `crates/borondns-core/src/zone/directory_shards.rs` | Persistent directory maps and experimental grouped shards. |
+| `crates/borondns-core/src/zone/fused_serving.rs` | Experimental publication-built exact answers for leaf authorities. |
+| `crates/borondns-core/src/zone/fused_serving/direct_buckets.rs` | Experimental direct-answer bucket lookup. |
+| `crates/borondns-core/src/zone/serving_directory.rs` | Experimental publication-local serving metadata and inline suffix keys. |
 | `crates/borondns-core/src/zone_image.rs` | immutable zone image, semantic lookup plans, and wire-section response construction. |
+| `crates/borondns-core/src/zone_image/compact_direct.rs` | Experimental compact exact-answer metadata and lookup. |
+| `crates/borondns-core/src/zone_image/compact_direct/packed.rs` | Experimental checked co-allocation of answer descriptors and bodies. |
 | `crates/borondns-core/src/lib.rs` | core crate public API boundary. |
 | `crates/borondns-server/src/lib.rs` | runtime orchestration, catalog reconciliation, refresh scheduling, and NOTIFY/TSIG integration. |
 | `crates/borondns-server/src/udp.rs` | UDP listener and packet serving path. |
@@ -163,12 +172,13 @@ modules carry their principal functional requirement references
 | `crates/borondns-server/src/errors.rs` | runtime and transfer error types. |
 | `crates/borondns-server/src/build_info.rs` | build metadata constants. |
 | `crates/borondns-server/src/af_xdp.rs` | feature-gated server AF_XDP packet-I/O adapter. |
+| `crates/borondns-server/src/af_xdp/group.rs` | Experimental single-owner queue-group progress and bounded retry bookkeeping. |
+| `crates/borondns-server/src/af_xdp/response_writer.rs` | Experimental direct AF_XDP frame response writing. |
 | `crates/borondns-server/src/std_udp_mmsg.rs` | standard UDP recvmmsg/sendmmsg batch adapter. |
 | `crates/borondns-server/src/std_udp_socket.rs` | standard UDP socket creation, reuseport, and CPU affinity adapter. |
 | `crates/borondns-server/src/xdp_runtime.rs` | optional AF_XDP queue-runtime ownership, CPU affinity, and reactor migration. |
-| `crates/borondns-server/src/operator.rs` | local authenticated operator socket and commands. |
 | `crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs` | catalog cache lifecycle and authorization binding. |
-| `crates/borondns-cli/src/operator.rs` | operator command-line client and local control protocol. |
+| `crates/borondns-server/src/zone_persistence/freshness_batch.rs` | Experimental bounded group commit of authenticated refresh freshness. |
 | `crates/borondns-server/src/privilege.rs` | audited POSIX privilege-drop FFI boundary. |
 | `crates/borondns-server/src/process_hardening.rs` | audited POSIX process-hardening FFI boundary. |
 | `crates/borondns-server/src/process_signals.rs` | audited POSIX signal disposition FFI boundary. |

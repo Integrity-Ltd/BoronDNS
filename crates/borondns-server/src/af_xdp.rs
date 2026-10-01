@@ -279,6 +279,10 @@ pub(crate) struct AfXdpPacketIo {
     _redirect: Option<Arc<XdpRedirectGuard>>,
     rx_ring: xdp::RxRing,
     tx_ring: xdp::WakableTxRing,
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    tx_wakeup_flags: RingWakeupFlags,
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    fill_wakeup_flags: RingWakeupFlags,
     fill_ring: xdp::WakableFillRing,
     completion_ring: xdp::CompletionRing,
     umem: xdp::Umem,
@@ -289,17 +293,160 @@ pub(crate) struct AfXdpPacketIo {
     completion_ring_size: usize,
     inbound: Vec<UdpInbound>,
     active_inbound: usize,
+    #[cfg(feature = "experimental-response-writer")]
+    reply_epoch: u64,
     frames: Vec<Option<ReceivedFrame>>,
     recv_slab: ReceiveSlab,
     tx_slab: HeapSlab,
     tx_kick_pending: bool,
     fill_kick_pending: bool,
     pending_stats: AfXdpPacketIoStats,
+    #[cfg(feature = "experimental-xdp-time-turn")]
+    receive_time_turn: ReceiveTimeTurn,
 }
 
 struct ReceivedFrame {
     packet: xdp::Packet,
     frame: UdpIpFrame,
+    #[cfg(feature = "experimental-response-writer")]
+    prepared_len: Option<usize>,
+    #[cfg(feature = "experimental-response-writer")]
+    reply_epoch: u64,
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+pub(crate) mod group;
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+fn group_ring_io<T: AsRawFd>(
+    socket: &AsyncFd<T>,
+    interest: Interest,
+    mut operation: impl FnMut() -> io::Result<usize>,
+) -> io::Result<usize> {
+    let count = operation()?;
+    if count > 0 {
+        return Ok(count);
+    }
+    // The first empty observation predates this readiness token. Recheck the
+    // ring while holding it: a packet/slot may have arrived in between. Only
+    // that second empty observation can justify clearing the current edge.
+    let mut operation_error = None;
+    let result = socket.try_io(interest, |_| {
+        // AsyncFd normalizes WouldBlock and can discard its raw errno. Keep
+        // the actual ring error separately, including partial-admission errors.
+        let count = operation().map_err(|error| {
+            let kind = error.kind();
+            operation_error = Some(error);
+            io::Error::from(kind)
+        })?;
+        if count == 0 {
+            Err(io::Error::from(ErrorKind::WouldBlock))
+        } else {
+            Ok(count)
+        }
+    });
+    if let Some(error) = operation_error {
+        return Err(error);
+    }
+    match result {
+        Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(0),
+        // Preserve real operation errors, including WouldBlock following
+        // partial TX admission; the owner still accounts for those frames.
+        result => result,
+    }
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+fn group_receive_once(io: &mut AfXdpPacketIo) -> io::Result<usize> {
+    // SAFETY: the queue owner keeps UMEM and RX slab alive together. It drains
+    // any retained slab tail before calling this, and consumes/recycles every
+    // dequeued frame before reuse. No frame reference crosses a group turn.
+    group_ring_io(&io.socket, Interest::READABLE, || {
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-016
+        let received = unsafe { io.rx_ring.recv(&io.umem, &mut io.recv_slab) };
+        io.pending_stats.rx_recv_calls += 1;
+        io.pending_stats.rx_received_packets += received as u64;
+        if received == 0 {
+            io.pending_stats.rx_empty_recv_calls += 1;
+        }
+        Ok(received)
+    })
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+fn group_publish_once(io: &mut AfXdpPacketIo) -> (usize, io::Result<usize>) {
+    let pending = io.tx_slab.len();
+    // SAFETY: the slab contains only frames belonging to this queue's UMEM;
+    // TX consumes ownership from the slab, and completion alone returns it.
+    // The owner never recycles the consumed prefix, including on syscall error.
+    let result = group_ring_io(&io.socket, Interest::WRITABLE, || {
+        let before = io.tx_slab.len();
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-017
+        let result = unsafe { io.tx_ring.send(&mut io.tx_slab, false) };
+        let admitted = before - io.tx_slab.len();
+        io.pending_stats.tx_send_calls += 1;
+        io.pending_stats.tx_queued_packets += admitted as u64;
+        if admitted == 0 {
+            io.pending_stats.tx_empty_send_calls += 1;
+        }
+        result
+    });
+    (pending - io.tx_slab.len(), result)
+}
+
+#[cfg(feature = "experimental-xdp-group-loop")]
+fn group_fill_once(io: &mut AfXdpPacketIo) -> io::Result<usize> {
+    // SAFETY: enqueue allocates only free frames from this adapter's UMEM.
+    // Neither retained RX frames nor staged/admitted TX frames are free. The
+    // adapter owns the FILL ring and UMEM for the entire publication operation.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-018
+    enqueue_fill_frames(io.fill_ring_size, |requested| unsafe {
+        io.fill_ring.enqueue(&mut io.umem, requested, false)
+    })
+}
+
+#[cfg(feature = "experimental-response-writer")]
+mod response_writer;
+#[cfg(feature = "experimental-response-writer")]
+pub(crate) use response_writer::PreparedReply;
+
+/// Experimental soft queue-service deadline. This is checked between complete
+/// batches, never while changing descriptor ownership. Sampling once per eight
+/// batches amortizes the clock read; it is not a hard per-packet time limit.
+#[cfg(feature = "experimental-xdp-time-turn")]
+struct ReceiveTimeTurn {
+    started: std::time::Instant,
+    batches: u8,
+}
+
+#[cfg(feature = "experimental-xdp-time-turn")]
+impl ReceiveTimeTurn {
+    const LIMIT: Duration = Duration::from_millis(1);
+    const CLOCK_INTERVAL: u8 = 8;
+
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            batches: 0,
+        }
+    }
+
+    fn due(&mut self, now: impl FnOnce() -> std::time::Instant) -> bool {
+        self.batches += 1;
+        if self.batches < Self::CLOCK_INTERVAL {
+            return false;
+        }
+        self.batches = 0;
+        now().saturating_duration_since(self.started) >= Self::LIMIT
+    }
+
+    async fn checkpoint(&mut self) {
+        if self.due(std::time::Instant::now) {
+            tokio::task::yield_now().await;
+            // Do not charge another queue's run time to this queue's new turn.
+            self.started = std::time::Instant::now();
+        }
+    }
 }
 
 /// RX owns each packet before it enters this slab. Start bringing its first
@@ -392,6 +539,165 @@ fn mark_ring_kick_pending(pending: &mut bool, admitted: usize) {
     }
 }
 
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+fn mark_conditional_tx_kick(
+    pending: &mut bool,
+    admitted: usize,
+    needs_wakeup: impl FnOnce() -> bool,
+) {
+    // A prior unsuccessful syscall must still go through explicit recovery,
+    // even if the kernel subsequently clears the flag. Only fresh successful
+    // publications may rely on the needs-wakeup handshake.
+    if !*pending && admitted > 0 {
+        *pending = needs_wakeup();
+    }
+}
+
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+fn mark_conditional_fill_kick(
+    pending: &mut bool,
+    _admitted: usize,
+    needs_wakeup: impl FnOnce() -> bool,
+) {
+    // Unlike TX, RX can run out of hardware buffers and set the flag even
+    // when this attempt publishes no new FILL entries. Recheck every time;
+    // preserve an earlier failed wake independently of the current flag.
+    if !*pending {
+        *pending = needs_wakeup();
+    }
+}
+
+/// Read-only second mapping of a producer ring header, using Linux's public ABI.
+/// xdp 0.7.3 owns descriptor publication but does not expose this flag. This
+/// view never reads/writes descriptors or producer/consumer indices.
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+struct RingWakeupFlags {
+    mapping: *mut libc::c_void,
+    length: usize,
+    flag_offset: usize,
+}
+
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+fn tx_wakeup_mapping_length(flag_offset: u64, offsets_length: usize) -> io::Result<usize> {
+    // Refuse the legacy ABI without flags and impossible/misaligned headers.
+    // A bounded header view suffices; do not map the descriptor array again.
+    if offsets_length != std::mem::size_of::<libc::xdp_mmap_offsets>()
+        || flag_offset > 4092
+        || !flag_offset.is_multiple_of(std::mem::align_of::<u32>() as u64)
+    {
+        return Err(io::Error::new(
+            ErrorKind::Unsupported,
+            "unsupported AF_XDP TX flag layout",
+        ));
+    }
+    Ok(flag_offset as usize + std::mem::size_of::<u32>())
+}
+
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+impl RingWakeupFlags {
+    fn map(socket_fd: RawFd, kind: RingKickKind) -> io::Result<Self> {
+        let empty = libc::xdp_ring_offset {
+            producer: 0,
+            consumer: 0,
+            desc: 0,
+            flags: 0,
+        };
+        let mut offsets = libc::xdp_mmap_offsets {
+            rx: empty,
+            tx: empty,
+            fr: empty,
+            cr: empty,
+        };
+        let mut offsets_length = std::mem::size_of_val(&offsets) as libc::socklen_t;
+        // SAFETY: the output and length point to live, correctly sized ABI
+        // objects. The syscall validates the descriptor and never retains them.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-012
+        let result = unsafe {
+            libc::getsockopt(
+                socket_fd,
+                libc::SOL_XDP,
+                libc::XDP_MMAP_OFFSETS,
+                (&mut offsets as *mut libc::xdp_mmap_offsets).cast(),
+                &mut offsets_length,
+            )
+        };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let (flag_offset, page_offset) = match kind {
+            RingKickKind::Tx => (offsets.tx.flags, libc::XDP_PGOFF_TX_RING),
+            RingKickKind::Fill => (
+                offsets.fr.flags,
+                libc::off_t::try_from(libc::XDP_UMEM_PGOFF_FILL_RING).map_err(|_| {
+                    io::Error::new(
+                        ErrorKind::Unsupported,
+                        "AF_XDP FILL mapping offset does not fit off_t",
+                    )
+                })?,
+            ),
+        };
+        let length = tx_wakeup_mapping_length(flag_offset, offsets_length as usize)?;
+        // SAFETY: the socket's producer ring is initialized. Linux permits a
+        // second shared header mapping; length is bounded and nonzero. No fixed
+        // address is requested and this mapping cannot mutate the ring.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-013
+        let mapping = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                socket_fd,
+                page_offset,
+            )
+        };
+        if mapping == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            mapping,
+            length,
+            flag_offset: flag_offset as usize,
+        })
+    }
+
+    fn needs_wakeup(&self) -> bool {
+        use std::sync::atomic::{Ordering, fence};
+        // Descriptor publication precedes the flag observation, including on
+        // weakly ordered CPUs. The driver sets the flag then rechecks ring work;
+        // a cleared flag therefore delegates progress to the active driver.
+        fence(Ordering::SeqCst);
+        // SAFETY: map() validated alignment and bounds of the kernel's u32
+        // flag; mmap is page-aligned and remains live until Drop. The kernel
+        // owns updates outside Rust's memory model. Like the kernel ABI's
+        // READ_ONCE helper, read one aligned u32 without creating a reference.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-014
+        let flags = unsafe {
+            std::ptr::read_volatile(
+                self.mapping
+                    .cast::<u8>()
+                    .add(self.flag_offset)
+                    .cast::<u32>(),
+            )
+        };
+        fence(Ordering::Acquire);
+        flags & libc::XDP_RING_NEED_WAKEUP != 0
+    }
+}
+
+#[cfg(feature = "experimental-xdp-conditional-wakeup")]
+impl Drop for RingWakeupFlags {
+    fn drop(&mut self) {
+        // SAFETY: this object uniquely owns the successful mmap view and its
+        // original length; no flag reference escapes needs_wakeup(). Unmapping
+        // this view does not alter the xdp crate's separately owned mappings.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-015
+        unsafe {
+            libc::munmap(self.mapping, self.length);
+        }
+    }
+}
+
 fn enqueue_fill_frames(
     mut requested: usize,
     mut enqueue: impl FnMut(usize) -> io::Result<usize>,
@@ -443,6 +749,67 @@ fn kick_af_xdp_ring(socket_fd: RawFd, kind: RingKickKind) -> io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(feature = "experimental-xdp-busy-poll")]
+fn xdp_busy_poll_socket_options() -> [(libc::c_int, libc::c_int); 3] {
+    [
+        (libc::SO_PREFER_BUSY_POLL, 1),
+        (libc::SO_BUSY_POLL, 20),
+        (libc::SO_BUSY_POLL_BUDGET, 64),
+    ]
+}
+
+#[cfg(feature = "experimental-xdp-busy-poll")]
+fn set_xdp_socket_int_option(
+    socket_fd: RawFd,
+    option: libc::c_int,
+    value: libc::c_int,
+) -> io::Result<()> {
+    // SAFETY: `socket_fd` is a live AF_XDP socket; SOL_SOCKET options consume
+    // one initialized c_int synchronously and retain no userspace pointer.
+    // SAFETY-ID: UNSAFE-BORONDNS-SERVER-AF-XDP-019
+    let result = unsafe {
+        libc::setsockopt(
+            socket_fd,
+            libc::SOL_SOCKET,
+            option,
+            std::ptr::from_ref(&value).cast(),
+            std::mem::size_of_val(&value) as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = io::Error::last_os_error();
+        Err(io::Error::new(
+            error.kind(),
+            format!(
+                "failed to configure experimental AF_XDP busy-poll socket option {option}: {error}"
+            ),
+        ))
+    }
+}
+
+#[cfg(feature = "experimental-xdp-busy-poll")]
+fn configure_xdp_busy_poll(socket_fd: RawFd) -> io::Result<()> {
+    for (option, value) in xdp_busy_poll_socket_options() {
+        set_xdp_socket_int_option(socket_fd, option, value)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "experimental-xdp-busy-poll"))]
+#[test]
+fn experimental_busy_poll_socket_options_match_irq_mitigation_contract() {
+    assert_eq!(
+        xdp_busy_poll_socket_options(),
+        [
+            (libc::SO_PREFER_BUSY_POLL, 1),
+            (libc::SO_BUSY_POLL, 20),
+            (libc::SO_BUSY_POLL_BUDGET, 64),
+        ]
+    );
 }
 
 /// Completes a ring wake that may have failed after ownership was transferred
@@ -721,6 +1088,23 @@ struct XdpRedirectGuard {
     _bpf: Ebpf,
 }
 
+fn load_redirect_object(bytes: &[u8], local_addr: SocketAddr) -> Result<Ebpf, aya::EbpfError> {
+    #[cfg(feature = "experimental-static-redirect")]
+    {
+        let config = RedirectConfig::for_listener(local_addr);
+        // Old objects lack this global and keep using REDIRECT_CONFIG below.
+        // Aya initializes and freezes read-only globals before program load.
+        aya::EbpfLoader::new()
+            .set_global("STATIC_REDIRECT_CONFIG", &config, false)
+            .load(bytes)
+    }
+    #[cfg(not(feature = "experimental-static-redirect"))]
+    {
+        let _ = local_addr;
+        Ebpf::load(bytes)
+    }
+}
+
 impl XdpRedirectGuard {
     fn attach(
         object: &Path,
@@ -730,7 +1114,7 @@ impl XdpRedirectGuard {
         xsk_entries: &[(u32, RawFd)],
     ) -> io::Result<Self> {
         let object_bytes = read_trusted_xdp_object(object)?;
-        let mut bpf = Ebpf::load(&object_bytes).map_err(|error| {
+        let mut bpf = load_redirect_object(&object_bytes, local_addr).map_err(|error| {
             io::Error::new(
                 ErrorKind::InvalidInput,
                 format!(
@@ -1008,6 +1392,12 @@ impl AfXdpPacketIo {
             .bind(nic, prepared.queue_id, bind_flags)
             .map_err(xdp_socket_error)?;
         let socket_fd = socket.raw_fd();
+        #[cfg(feature = "experimental-xdp-busy-poll")]
+        configure_xdp_busy_poll(socket_fd)?;
+        #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+        let tx_wakeup_flags = RingWakeupFlags::map(socket_fd, RingKickKind::Tx)?;
+        #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+        let fill_wakeup_flags = RingWakeupFlags::map(socket_fd, RingKickKind::Fill)?;
         let socket = AsyncFd::new(socket)?;
         let rx_ring = rings
             .rx_ring
@@ -1035,7 +1425,12 @@ impl AfXdpPacketIo {
                 })?
         };
         let mut fill_kick_pending = false;
+        #[cfg(not(feature = "experimental-xdp-conditional-wakeup"))]
         mark_ring_kick_pending(&mut fill_kick_pending, initially_filled);
+        #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+        mark_conditional_fill_kick(&mut fill_kick_pending, initially_filled, || {
+            fill_wakeup_flags.needs_wakeup()
+        });
         if fill_kick_pending {
             match kick_af_xdp_ring(socket_fd, RingKickKind::Fill) {
                 Ok(()) => fill_kick_pending = false,
@@ -1059,6 +1454,10 @@ impl AfXdpPacketIo {
                 _redirect: None,
                 rx_ring,
                 tx_ring,
+                #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+                tx_wakeup_flags,
+                #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+                fill_wakeup_flags,
                 fill_ring: rings.fill_ring,
                 completion_ring: rings.completion_ring,
                 umem,
@@ -1071,12 +1470,16 @@ impl AfXdpPacketIo {
                     .map(|_| UdpInbound::new_af_xdp())
                     .collect(),
                 active_inbound: 0,
+                #[cfg(feature = "experimental-response-writer")]
+                reply_epoch: 0,
                 frames: Vec::with_capacity(prepared.batch_size),
                 recv_slab: ReceiveSlab::with_capacity(prepared.batch_size),
                 tx_slab: HeapSlab::with_capacity(prepared.batch_size),
                 tx_kick_pending: false,
                 fill_kick_pending,
                 pending_stats: AfXdpPacketIoStats::default(),
+                #[cfg(feature = "experimental-xdp-time-turn")]
+                receive_time_turn: ReceiveTimeTurn::new(),
             },
             socket_fd,
         ))
@@ -1098,6 +1501,15 @@ impl AfXdpPacketIo {
             self.completion_ring_size,
             &mut self.pending_stats,
         );
+    }
+
+    fn mark_successful_tx_publication(&mut self, admitted: usize) {
+        #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+        mark_conditional_tx_kick(&mut self.tx_kick_pending, admitted, || {
+            self.tx_wakeup_flags.needs_wakeup()
+        });
+        #[cfg(not(feature = "experimental-xdp-conditional-wakeup"))]
+        mark_ring_kick_pending(&mut self.tx_kick_pending, admitted);
     }
 
     fn release_unsent_frames(&mut self) {
@@ -1201,7 +1613,12 @@ impl AfXdpPacketIo {
         let queued = enqueue_fill_frames(self.fill_ring_size, |requested| unsafe {
             self.fill_ring.enqueue(&mut self.umem, requested, false)
         })?;
+        #[cfg(not(feature = "experimental-xdp-conditional-wakeup"))]
         mark_ring_kick_pending(&mut self.fill_kick_pending, queued);
+        #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+        mark_conditional_fill_kick(&mut self.fill_kick_pending, queued, || {
+            self.fill_wakeup_flags.needs_wakeup()
+        });
         self.service_fill_kick(admission_open).await
     }
 
@@ -1221,6 +1638,9 @@ impl AfXdpPacketIo {
         let recv_slab = &mut self.recv_slab;
         let umem = &mut self.umem;
         let pending_stats = &mut self.pending_stats;
+
+        #[cfg(feature = "experimental-response-writer")]
+        let reply_epoch = self.reply_epoch;
 
         drain_receive_slab(recv_slab, received, |packet| {
             let frame = match parse_udp_ip_frame(&packet) {
@@ -1250,7 +1670,14 @@ impl AfXdpPacketIo {
             admitted.copy_af_xdp_payload(&packet[payload]);
             admitted.peer = peer;
             admitted.target = target_for_frame(frame_index);
-            frames.push(Some(ReceivedFrame { packet, frame }));
+            frames.push(Some(ReceivedFrame {
+                packet,
+                frame,
+                #[cfg(feature = "experimental-response-writer")]
+                prepared_len: None,
+                #[cfg(feature = "experimental-response-writer")]
+                reply_epoch,
+            }));
             *active_inbound += 1;
             *active_inbound == batch_size
         })
@@ -1287,6 +1714,26 @@ where
 }
 
 impl PacketIo for AfXdpPacketIo {
+    #[cfg(feature = "experimental-response-writer")]
+    fn supports_reply_buffers(&self) -> bool {
+        true
+    }
+
+    #[cfg(feature = "experimental-response-writer")]
+    fn with_reply_buffers<T>(
+        &mut self,
+        visit: impl FnOnce(&[UdpInbound], &mut dyn crate::udp::UdpReplyBuffers) -> T,
+    ) -> io::Result<T> {
+        // Disjoint adapter fields are borrowed only for this synchronous call.
+        // No frame reference survives into the asynchronous send operation.
+        Ok(visit(
+            &self.inbound[..self.active_inbound],
+            &mut response_writer::ReplyFrames {
+                frames: &mut self.frames,
+            },
+        ))
+    }
+
     fn local_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.local_addr)
     }
@@ -1308,10 +1755,19 @@ impl PacketIo for AfXdpPacketIo {
         &mut self,
         admission_open: &std::sync::atomic::AtomicBool,
     ) -> io::Result<&[UdpInbound]> {
+        #[cfg(feature = "experimental-xdp-time-turn")]
+        self.receive_time_turn.checkpoint().await;
         self.release_unsent_frames();
         self.drain_completions();
         self.replenish_fill_ring(Some(admission_open)).await?;
         self.active_inbound = 0;
+        #[cfg(feature = "experimental-response-writer")]
+        {
+            self.reply_epoch = self
+                .reply_epoch
+                .checked_add(1)
+                .expect("AF_XDP reply epoch exhausted");
+        }
         self.frames.clear();
         let mut receive_passes = 0usize;
 
@@ -1444,59 +1900,17 @@ impl PacketIo for AfXdpPacketIo {
             self.flush_pending_stats(metrics);
             return Err(PacketIoSendError::new(error, admitted_batch.total()));
         }
-        for (packet_index, packet) in outbound.iter().enumerate() {
-            let UdpPacketTarget::AfXdp { frame_index } = packet.target else {
-                return Err(PacketIoSendError::new(
-                    io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "AF_XDP backend cannot send standard UDP socket target",
-                    ),
-                    admitted_batch.total(),
-                ));
-            };
-            let Some(slot) = self.frames.get_mut(frame_index) else {
-                return Err(PacketIoSendError::new(
-                    io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "AF_XDP response referenced an unknown frame",
-                    ),
-                    admitted_batch.total(),
-                ));
-            };
-            let Some(mut frame) = slot.take() else {
-                continue;
-            };
-            let send_started = packet
-                .query_metrics
-                .as_ref()
-                .and_then(|_| metrics.start_pipeline_timer());
-            let write_result = if packet.benchmark_fixed_response {
-                write_benchmark_fixed_dns_response(&mut frame.packet, frame.frame)
-            } else {
-                write_udp_ip_response(&mut frame.packet, frame.frame, &packet.response)
-            };
-            if let Err(error) = write_result {
-                self.umem.free_packet(frame.packet);
-                self.drain_tx_slab_to_umem();
-                self.release_unsent_frames();
-                return Err(PacketIoSendError::new(
-                    io::Error::new(ErrorKind::InvalidData, error.to_string()),
-                    admitted_batch.total(),
-                ));
-            }
-            if let Some(overflow) = self.tx_slab.push_front(frame.packet) {
-                self.umem.free_packet(overflow);
-                self.drain_tx_slab_to_umem();
-                self.release_unsent_frames();
-                return Err(PacketIoSendError::new(
-                    io::Error::new(ErrorKind::OutOfMemory, "AF_XDP TX slab reached capacity"),
-                    admitted_batch.total(),
-                ));
-            }
-            pending_send_metrics.push_back((packet_index, send_started));
+        let umem = &mut self.umem;
+        if let Err(error) = prepare_tx_frames(
+            &mut self.frames,
+            &mut self.tx_slab,
+            &mut pending_send_metrics,
+            outbound,
+            metrics,
+            |packet| umem.free_packet(packet),
+        ) {
+            return Err(PacketIoSendError::new(error, admitted_batch.total()));
         }
-
-        self.release_unsent_frames();
         while !self.tx_slab.is_empty() {
             // SAFETY: all packets in `tx_slab` came from this adapter's UMEM,
             // and the UMEM outlives the socket and TX ring.
@@ -1511,7 +1925,7 @@ impl PacketIo for AfXdpPacketIo {
                     debug_assert_eq!(queued, admitted);
                     self.pending_stats.tx_send_calls += 1;
                     self.pending_stats.tx_queued_packets += queued as u64;
-                    mark_ring_kick_pending(&mut self.tx_kick_pending, admitted);
+                    self.mark_successful_tx_publication(admitted);
                     // The outer UDP shutdown deadline may drop the kick future.
                     // Commit ring admission before crossing that await while
                     // retaining descriptor ownership in `tx_kick_pending`.
@@ -1571,9 +1985,9 @@ impl PacketIo for AfXdpPacketIo {
                                 debug_assert_eq!(queued, admitted);
                                 self.pending_stats.tx_send_calls += 1;
                                 self.pending_stats.tx_queued_packets += queued as u64;
-                                mark_ring_kick_pending(&mut self.tx_kick_pending, admitted);
                                 debug_assert!(queued > 0);
                                 drop(readiness);
+                                self.mark_successful_tx_publication(admitted);
                                 self.flush_pending_stats(metrics);
                                 if let Err(error) = self.service_tx_kick(None, Some(metrics)).await
                                 {
@@ -1641,9 +2055,101 @@ fn record_admitted_send_metrics(
             .expect("TX ring cannot admit more packets than were staged");
         let packet = &outbound[packet_index];
         if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
-            record_query_send_metric(query_metrics, &packet.response, metrics, started.elapsed());
+            match &packet.response {
+                crate::udp::UdpResponse::Owned(bytes) => {
+                    record_query_send_metric(query_metrics, bytes, metrics, started.elapsed())
+                }
+                #[cfg(feature = "experimental-response-writer")]
+                crate::udp::UdpResponse::Prepared(reply) => {
+                    if let Some(category) = reply.send_category {
+                        metrics.record_query_pipeline_latency(
+                            crate::QueryPipelineStage::Send,
+                            category,
+                            started.elapsed(),
+                        );
+                    }
+                }
+            }
         }
     }
+}
+
+/// Prepare a complete local batch without publishing any TX descriptors. This
+/// boundary is shared with the queue-group owner so a blocked send can retain
+/// staged frames and metric indices across scheduling turns.
+fn prepare_tx_frames(
+    frames: &mut Vec<Option<ReceivedFrame>>,
+    slab: &mut HeapSlab,
+    pending: &mut VecDeque<(usize, Option<std::time::Instant>)>,
+    outbound: &[UdpOutbound],
+    metrics: &RuntimeMetrics,
+    mut recycle: impl FnMut(xdp::Packet),
+) -> io::Result<()> {
+    if !slab.is_empty() || !pending.is_empty() {
+        return Err(io::Error::new(
+            ErrorKind::AlreadyExists,
+            "previous TX batch is still staged",
+        ));
+    }
+    let result = (|| {
+        for (index, response) in outbound.iter().enumerate() {
+            let UdpPacketTarget::AfXdp { frame_index } = response.target else {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "AF_XDP backend cannot send standard UDP socket target",
+                ));
+            };
+            let slot = frames.get_mut(frame_index).ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "AF_XDP response referenced an unknown frame",
+                )
+            })?;
+            let Some(mut frame) = slot.take() else {
+                continue;
+            };
+            let started = response
+                .query_metrics
+                .as_ref()
+                .and_then(|_| metrics.start_pipeline_timer());
+            let written = if response.benchmark_fixed_response {
+                write_benchmark_fixed_dns_response(&mut frame.packet, frame.frame)
+            } else {
+                match &response.response {
+                    crate::udp::UdpResponse::Owned(bytes) => {
+                        write_udp_ip_response(&mut frame.packet, frame.frame, bytes)
+                    }
+                    #[cfg(feature = "experimental-response-writer")]
+                    crate::udp::UdpResponse::Prepared(reply) => {
+                        response_writer::finish(&mut frame, frame_index, *reply)
+                    }
+                }
+            };
+            if let Err(error) = written {
+                recycle(frame.packet);
+                return Err(io::Error::new(ErrorKind::InvalidData, error.to_string()));
+            }
+            if let Some(overflow) = slab.push_front(frame.packet) {
+                recycle(overflow);
+                return Err(io::Error::new(
+                    ErrorKind::OutOfMemory,
+                    "AF_XDP TX slab reached capacity",
+                ));
+            }
+            pending.push_back((index, started));
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        while let Some(packet) = slab.pop_back() {
+            recycle(packet);
+        }
+        pending.clear();
+    }
+    for frame in frames.drain(..).flatten() {
+        recycle(frame.packet);
+    }
+    result
 }
 
 fn validate_af_xdp_listener(local_addr: SocketAddr) -> io::Result<()> {
@@ -2169,7 +2675,223 @@ fn ipv6_addr_at(frame: &[u8], offset: usize) -> Ipv6Addr {
 }
 
 #[cfg(test)]
+mod redirect_tests;
+
+#[cfg(test)]
 mod tests {
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    #[test]
+    fn conditional_fill_wakeup_rechecks_idle_even_without_new_buffers() {
+        let mut pending = false;
+        super::mark_conditional_fill_kick(&mut pending, 64, || false);
+        assert!(
+            !pending,
+            "active receive driver needs no redundant FILL kick"
+        );
+        super::mark_conditional_fill_kick(&mut pending, 0, || true);
+        assert!(
+            pending,
+            "idle receive driver can need a wake with buffers already published"
+        );
+        super::mark_conditional_fill_kick(&mut pending, 0, || {
+            panic!("failed wake must remain pending")
+        });
+        assert!(pending);
+    }
+
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    #[test]
+    fn conditional_tx_wakeup_mapping_rejects_old_and_invalid_layouts() {
+        let size = std::mem::size_of::<libc::xdp_mmap_offsets>();
+        assert_eq!(super::tx_wakeup_mapping_length(196, size).unwrap(), 200);
+        for (offset, length) in [(196, size - 32), (3, size), (4096, size), (u64::MAX, size)] {
+            assert!(super::tx_wakeup_mapping_length(offset, length).is_err());
+        }
+        assert!(super::RingWakeupFlags::map(-1, super::RingKickKind::Tx).is_err());
+        assert!(super::RingWakeupFlags::map(-1, super::RingKickKind::Fill).is_err());
+    }
+
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    #[test]
+    fn conditional_tx_wakeup_skips_only_fresh_active_kernel_work() {
+        let mut pending = false;
+        super::mark_conditional_tx_kick(&mut pending, 64, || false);
+        assert!(!pending, "active kernel needs no redundant TX kick");
+        super::mark_conditional_tx_kick(&mut pending, 1, || true);
+        assert!(pending, "an isolated packet must wake an idle driver");
+    }
+
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    #[test]
+    fn conditional_tx_wakeup_preserves_failed_wake_and_zero_admission() {
+        let mut pending = true;
+        super::mark_conditional_tx_kick(&mut pending, 64, || {
+            panic!("an outstanding failed wake must not trust a cleared flag")
+        });
+        assert!(pending);
+        super::mark_conditional_tx_kick(&mut pending, 0, || panic!("no new work"));
+        assert!(pending);
+        pending = false;
+        super::mark_conditional_tx_kick(&mut pending, 0, || panic!("no new work"));
+        assert!(!pending);
+    }
+
+    #[cfg(feature = "experimental-xdp-conditional-wakeup")]
+    #[test]
+    fn conditional_tx_wakeup_observes_each_new_publication() {
+        let mut pending = false;
+        let mut calls = 0;
+        for needs_wakeup in [false, true, false, true] {
+            super::mark_conditional_tx_kick(&mut pending, 1, || {
+                calls += 1;
+                needs_wakeup
+            });
+            assert_eq!(pending, needs_wakeup);
+            pending = false; // Successful service; next batch is a new publication.
+        }
+        assert_eq!(calls, 4);
+    }
+
+    #[cfg(feature = "experimental-response-writer")]
+    include!("af_xdp/response_writer_tests.rs");
+
+    fn staged_response(index: usize, size: usize) -> UdpOutbound {
+        UdpOutbound {
+            response: crate::udp::UdpResponse::Owned(vec![0x53; size]),
+            target: target_for_frame(index),
+            query_metrics: None,
+            benchmark_fixed_response: false,
+        }
+    }
+
+    #[test]
+    fn group_staging_failure_returns_every_local_frame_once() {
+        for failure in 0..4 {
+            let mut buffers = [[0u8; 2048]; 3];
+            let mut expected = Vec::new();
+            let mut frames = buffers
+                .iter_mut()
+                .map(|buffer| {
+                    let mut packet = xdp::Packet::testing_new(buffer);
+                    packet
+                        .insert(0, &ipv4_udp_frame(&[1; 4])[..ipv4_udp_frame_len(4)])
+                        .unwrap();
+                    expected.push(packet.as_ptr() as usize);
+                    let frame = parse_udp_ip_frame(&packet).unwrap();
+                    Some(ReceivedFrame {
+                        packet,
+                        frame,
+                        #[cfg(feature = "experimental-response-writer")]
+                        prepared_len: None,
+                        #[cfg(feature = "experimental-response-writer")]
+                        reply_epoch: 1,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut outbound = vec![staged_response(0, 12), staged_response(1, 12)];
+            match failure {
+                0 => outbound[1].target = UdpPacketTarget::Socket("192.0.2.1:53".parse().unwrap()),
+                1 => outbound[1].target = target_for_frame(9),
+                2 => outbound[1] = staged_response(1, 3000),
+                _ => {}
+            }
+            let mut slab = HeapSlab::with_capacity(if failure == 3 { 1 } else { 3 });
+            let mut pending = VecDeque::with_capacity(3);
+            let mut reclaimed = Vec::new();
+            assert!(
+                prepare_tx_frames(
+                    &mut frames,
+                    &mut slab,
+                    &mut pending,
+                    &outbound,
+                    &RuntimeMetrics::new(),
+                    |packet| reclaimed.push(packet.as_ptr() as usize)
+                )
+                .is_err()
+            );
+            assert!(
+                slab.is_empty(),
+                "failed staging must reclaim earlier staged frames"
+            );
+            assert!(
+                pending.is_empty(),
+                "failed staging cannot retain stale metric indices"
+            );
+            assert!(frames.is_empty());
+            expected.sort_unstable();
+            reclaimed.sort_unstable();
+            assert_eq!(
+                reclaimed, expected,
+                "failure={failure}: exactly one owner per frame"
+            );
+        }
+    }
+
+    #[test]
+    fn group_staging_preserves_fifo_indices_and_pending_batch() {
+        let mut buffers = [[0u8; 2048]; 3];
+        let mut frames = buffers
+            .iter_mut()
+            .map(|buffer| {
+                let mut packet = xdp::Packet::testing_new(buffer);
+                packet
+                    .insert(0, &ipv4_udp_frame(&[1; 4])[..ipv4_udp_frame_len(4)])
+                    .unwrap();
+                let frame = parse_udp_ip_frame(&packet).unwrap();
+                Some(ReceivedFrame {
+                    packet,
+                    frame,
+                    #[cfg(feature = "experimental-response-writer")]
+                    prepared_len: None,
+                    #[cfg(feature = "experimental-response-writer")]
+                    reply_epoch: 1,
+                })
+            })
+            .collect::<Vec<_>>();
+        let outbound = [
+            staged_response(2, 12),
+            staged_response(0, 16),
+            staged_response(2, 20),
+        ];
+        let mut slab = HeapSlab::with_capacity(3);
+        let mut pending = VecDeque::with_capacity(3);
+        let mut recycled = 0;
+        prepare_tx_frames(
+            &mut frames,
+            &mut slab,
+            &mut pending,
+            &outbound,
+            &RuntimeMetrics::new(),
+            |_| recycled += 1,
+        )
+        .unwrap();
+        assert_eq!(recycled, 1, "unanswered frame returns to UMEM");
+        assert_eq!(pending.iter().map(|p| p.0).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(
+            slab.len(),
+            2,
+            "duplicate target cannot enqueue the same frame twice"
+        );
+        assert_eq!(
+            prepare_tx_frames(
+                &mut frames,
+                &mut slab,
+                &mut pending,
+                &[],
+                &RuntimeMetrics::new(),
+                |_| panic!("must not touch previous batch")
+            )
+            .unwrap_err()
+            .kind(),
+            ErrorKind::AlreadyExists
+        );
+        for length in [12, 16] {
+            let packet = slab.pop_back().unwrap();
+            let frame = parse_udp_ip_frame(&packet).unwrap();
+            assert_eq!(frame.payload().len(), length);
+        }
+        assert!(slab.is_empty());
+    }
     use std::{
         cell::Cell,
         fs,
@@ -2181,6 +2903,46 @@ mod tests {
     };
 
     use super::*;
+
+    #[cfg(feature = "experimental-xdp-time-turn")]
+    #[test]
+    fn receive_time_turn_uses_elapsed_time_not_a_fixed_batch_budget() {
+        let start = std::time::Instant::now();
+        let mut turn = ReceiveTimeTurn {
+            started: start,
+            batches: 0,
+        };
+        for _ in 0..100 {
+            for _ in 1..ReceiveTimeTurn::CLOCK_INTERVAL {
+                assert!(!turn.due(|| panic!("clock sampled too often")));
+            }
+            assert!(!turn.due(|| start + Duration::from_micros(999)));
+        }
+        for _ in 1..ReceiveTimeTurn::CLOCK_INTERVAL {
+            assert!(!turn.due(|| panic!("clock sampled too often")));
+        }
+        assert!(turn.due(|| start + ReceiveTimeTurn::LIMIT));
+    }
+
+    #[cfg(feature = "experimental-xdp-time-turn")]
+    #[test]
+    fn receive_time_turn_expired_checkpoint_yields_and_restarts_after_resume() {
+        let old_start = std::time::Instant::now() - Duration::from_secs(1);
+        let mut turn = ReceiveTimeTurn {
+            started: old_start,
+            batches: ReceiveTimeTurn::CLOCK_INTERVAL - 1,
+        };
+        let mut context = Context::from_waker(Waker::noop());
+        {
+            let mut checkpoint = std::pin::pin!(turn.checkpoint());
+            assert!(checkpoint.as_mut().poll(&mut context).is_pending());
+            assert!(checkpoint.as_mut().poll(&mut context).is_ready());
+        }
+        assert!(turn.started > old_start);
+        assert_eq!(turn.batches, 0);
+        let mut checkpoint = std::pin::pin!(turn.checkpoint());
+        assert!(checkpoint.as_mut().poll(&mut context).is_ready());
+    }
 
     #[test]
     fn af_xdp_payload_buffers_grow_within_bound_and_do_not_expose_stale_tails() {
@@ -3121,6 +3883,13 @@ mod tests {
             target_for_frame(7),
             UdpPacketTarget::AfXdp { frame_index: 7 }
         );
+    }
+
+    #[test]
+    fn redirect_loader_rejects_invalid_object_for_both_listener_families() {
+        for address in ["192.0.2.53:53", "[2001:db8::53]:53"] {
+            assert!(load_redirect_object(b"not an ELF object", address.parse().unwrap()).is_err());
+        }
     }
 
     #[test]

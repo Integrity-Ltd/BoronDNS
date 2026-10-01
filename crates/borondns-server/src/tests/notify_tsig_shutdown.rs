@@ -51,9 +51,8 @@ allow_non_rfc5936_cold_start = true
 
 #[test]
 fn udp_tsig_signing_honors_below_equal_and_above_ceiling_boundaries() {
-    let key = Arc::new(
-        TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap(),
-    );
+    let key =
+        Arc::new(TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap());
     let request = key
         .sign_request(
             &notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1),
@@ -89,8 +88,19 @@ fn udp_tsig_signing_honors_below_equal_and_above_ceiling_boundaries() {
         .unwrap();
     let header = Header::parse(&verified.message).unwrap();
     assert_ne!(header.flags & 0x0200, 0);
-    assert_eq!(response_rcode(&verified.message, &header), Rcode::NoError as u16);
-    assert_eq!((header.qdcount, header.ancount, header.nscount, header.arcount), (1, 0, 0, 0));
+    assert_eq!(
+        response_rcode(&verified.message, &header),
+        Rcode::NoError as u16
+    );
+    assert_eq!(
+        (
+            header.qdcount,
+            header.ancount,
+            header.nscount,
+            header.arcount
+        ),
+        (1, 0, 0, 0)
+    );
 }
 
 fn notify_response_with_unknown_answer_len(target_len: usize) -> Vec<u8> {
@@ -430,8 +440,9 @@ fn run_udp_notify_reload_case(
 
     assert_eq!(response.is_some(), expect_response);
     if let Some(response) = response {
-        Header::parse(&response.response).expect("valid UDP NOTIFY response header");
-        assert_eq!(response.response[3] & 0x0f, Rcode::NoError as u8);
+        let bytes = response.response.owned().unwrap();
+        Header::parse(bytes).expect("valid UDP NOTIFY response header");
+        assert_eq!(bytes[3] & 0x0f, Rcode::NoError as u8);
     }
     let _ = std::fs::remove_dir_all(root);
 }
@@ -825,12 +836,8 @@ fn failed_outer_reservation_hands_concurrent_follower_admission() {
         let result = follower_tracker.record_after_enqueue(&follower_zone, |token| {
             follower_refresh_tx
                 .try_send(
-                    RefreshRequest::new(
-                        follower_zone.clone(),
-                        Some(2),
-                        RefreshReason::Notify,
-                    )
-                    .with_notify_dedup_token(token),
+                    RefreshRequest::new(follower_zone.clone(), Some(2), RefreshReason::Notify)
+                        .with_notify_dedup_token(token),
                 )
                 .map_err(|_| ())
         });
@@ -894,10 +901,8 @@ fn notify_refresh_tracker_suppresses_an_active_refresh_until_it_finishes() {
     let attempt = registry
         .try_begin_attempt(&zone)
         .expect("zone refresh becomes active");
-    let tracker = NotifyRefreshTracker::with_refresh_registry(
-        std::time::Duration::from_secs(60),
-        registry,
-    );
+    let tracker =
+        NotifyRefreshTracker::with_refresh_registry(std::time::Duration::from_secs(60), registry);
 
     assert_eq!(
         tracker.record_after_enqueue(&zone, |_| -> Result<(), ()> {
@@ -971,10 +976,8 @@ fn notify_refresh_tracker_allows_newer_serial_immediately_after_completion() {
     let zone = metadata.origin.clone();
     let now = std::time::Instant::now();
     registry.record_success_at(&metadata, now);
-    let tracker = NotifyRefreshTracker::with_refresh_registry(
-        std::time::Duration::from_secs(60),
-        registry,
-    );
+    let tracker =
+        NotifyRefreshTracker::with_refresh_registry(std::time::Duration::from_secs(60), registry);
 
     assert_eq!(
         tracker.record_after_enqueue_serial_at(&zone, Some(21), now, |_| Ok::<(), ()>(())),
@@ -1047,10 +1050,8 @@ fn notify_refresh_tracker_suppresses_recent_failed_attempt_completion() {
         .try_begin_attempt(&zone)
         .expect("zone refresh becomes active");
     attempt.record_failure(None, Some("test failure".to_owned()));
-    let tracker = NotifyRefreshTracker::with_refresh_registry(
-        std::time::Duration::from_secs(60),
-        registry,
-    );
+    let tracker =
+        NotifyRefreshTracker::with_refresh_registry(std::time::Duration::from_secs(60), registry);
 
     assert_eq!(
         tracker.record_after_enqueue(&zone, |_| -> Result<(), ()> {
@@ -1291,7 +1292,9 @@ fn dropped_notify_does_not_commit_dedup_state() {
     let _ = refresh_rx.try_recv().expect("drain prefilled request");
     signal_notify_refresh(&tracker, &refresh_tx, &metrics, &zone, source, Some(2));
 
-    let admitted = refresh_rx.try_recv().expect("second NOTIFY must be admitted");
+    let admitted = refresh_rx
+        .try_recv()
+        .expect("second NOTIFY must be admitted");
     assert_eq!(admitted.zone, zone);
     assert_eq!(admitted.preferred_primary_ip, Some(source));
     let snapshot = metrics.snapshot();
@@ -1317,13 +1320,8 @@ fn failed_newer_outer_enqueue_restores_older_queued_notify_reservation() {
     let mut pending = std::collections::VecDeque::new();
     let mut pending_keys = HashSet::new();
     assert!(
-        enqueue_pending_refresh_request(
-            &mut pending,
-            &mut pending_keys,
-            &HashSet::new(),
-            older,
-        )
-        .is_none(),
+        enqueue_pending_refresh_request(&mut pending, &mut pending_keys, &HashSet::new(), older,)
+            .is_none(),
         "failed newer replacement must not invalidate older queued work"
     );
 
@@ -1353,7 +1351,10 @@ fn failed_newer_replacement_restores_exact_token_without_clobbering_later_commit
         Err(())
     );
     let older = older.expect("older token captured");
-    assert!(older.commit(), "failed replacement restores exact older token");
+    assert!(
+        older.commit(),
+        "failed replacement restores exact older token"
+    );
 
     let mut latest = None;
     assert_eq!(
@@ -1402,25 +1403,16 @@ fn rolled_back_older_outer_reservation_does_not_erase_newer_replacement() {
             .is_none()
         );
     }
-    let dropped = enqueue_pending_refresh_request(
-        &mut pending,
-        &mut pending_keys,
-        &active_keys,
-        admitted,
-    )
-    .expect("saturated internal queue drops the admitted NOTIFY");
+    let dropped =
+        enqueue_pending_refresh_request(&mut pending, &mut pending_keys, &active_keys, admitted)
+            .expect("saturated internal queue drops the admitted NOTIFY");
     dropped.rollback_notify_dedup_after_queue_drop();
 
     let admitted_filler = pending.pop_front().expect("saturated pending queue");
     pending_keys.remove(&admitted_filler.zone.canonical_key());
     assert!(
-        enqueue_pending_refresh_request(
-            &mut pending,
-            &mut pending_keys,
-            &active_keys,
-            newer,
-        )
-        .is_none()
+        enqueue_pending_refresh_request(&mut pending, &mut pending_keys, &active_keys, newer,)
+            .is_none()
     );
 
     signal_notify_refresh(&tracker, &refresh_tx, &metrics, &zone, source, Some(3));
@@ -1542,13 +1534,8 @@ fn evicted_coalesced_newer_notify_is_recovered_at_latest_serial() {
         );
     }
     assert!(
-        enqueue_pending_refresh_request(
-            &mut pending,
-            &mut pending_keys,
-            &active_keys,
-            reserved,
-        )
-        .is_none()
+        enqueue_pending_refresh_request(&mut pending, &mut pending_keys, &active_keys, reserved,)
+            .is_none()
     );
 
     signal_notify_refresh(&tracker, &refresh_tx, &metrics, &zone, source, Some(3));
@@ -1556,13 +1543,8 @@ fn evicted_coalesced_newer_notify_is_recovered_at_latest_serial() {
         .try_recv()
         .expect("provably newer NOTIFY reaches the coalescing queue");
     assert!(
-        enqueue_pending_refresh_request(
-            &mut pending,
-            &mut pending_keys,
-            &active_keys,
-            follower,
-        )
-        .is_none(),
+        enqueue_pending_refresh_request(&mut pending, &mut pending_keys, &active_keys, follower,)
+            .is_none(),
         "newer NOTIFY coalesces into the existing zone follow-up"
     );
     assert_eq!(pending.back().unwrap().requested_serial, Some(3));
@@ -1577,10 +1559,7 @@ fn evicted_coalesced_newer_notify_is_recovered_at_latest_serial() {
     )
     .expect("active-zone follow-up evicts the committed tail request");
     assert_eq!(dropped.zone, zone);
-    assert_eq!(
-        dropped.retry_after_queue_drop,
-        Some(RefreshReason::Notify)
-    );
+    assert_eq!(dropped.retry_after_queue_drop, Some(RefreshReason::Notify));
     dropped.rollback_notify_dedup_after_queue_drop();
     registry.defer_refresh_after_queue_drop(&dropped);
 

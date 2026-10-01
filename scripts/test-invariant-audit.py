@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = "crates/borondns-server/src/lib.rs"
 IMAGE = "crates/borondns-core/src/zone_image.rs"
 LIFECYCLE = "crates/borondns-server/src/zone_persistence/catalog_lifecycle.rs"
+FRESHNESS = "crates/borondns-server/src/zone_persistence/freshness_batch.rs"
 
 
 class InvariantAuditTests(unittest.TestCase):
@@ -52,6 +53,21 @@ class InvariantAuditTests(unittest.TestCase):
              "BDS-INV-002"),
             ("crates/borondns-server/src/zone_persistence/unreviewed.rs", None,
              'fn audit_probe() { std::fs::write("x", b"x"); }', "BDS-INV-004"),
+            ("crates/borondns-core/src/dns/response_writer.rs", None,
+             'fn audit_probe() { let _ = std::fs::read("x"); }', "BDS-INV-002"),
+            (FRESHNESS, "const MAX_BYTES: u64 = 512 * 1024 * 1024;",
+             "const MAX_BYTES: u64 = u64::MAX;", "freshness journal boundary"),
+            (FRESHNESS, "sync(&self.file)?;", "/* durability omitted */",
+             "freshness journal boundary"),
+            (FRESHNESS, "file.metadata()?.nlink() != 1", "false",
+             "freshness journal boundary"),
+            ("crates/borondns-core/src/zone/directory_shards.rs",
+             "Arc::make_mut(&mut self.groups[index / GROUP_SIZE])",
+             "self.groups[index / GROUP_SIZE]", "BDS-INV-003"),
+            ("crates/borondns-core/src/dns.rs",
+             "let select_query = ZoneStore::with_published_zone_for_query_with_ascii_lowercase_hint;",
+             "let select_query = ZoneStore::without_lowercase_hint;",
+             "query serving does not pass the parser-carried lowercase QNAME fact"),
             (LIFECYCLE, "open_bounded_regular(&path, 32, 32)",
              "open_bounded_regular(&path, 64, 64)", "catalog lifecycle token boundary"),
             (LIFECYCLE, "create_new(true)", "create(true)", "catalog lifecycle token boundary"),

@@ -28,9 +28,23 @@ profile for the behavior being measured:
 | `registry-nsec3` | Delegation-shaped NS, glue, sampled DS, and an ordered NSEC3 ring |
 | `mixed` | A, AAAA, TXT, and multi-record RRsets |
 | `large-rrset` | Configurable numbers of A records at each generated owner |
+| `portfolio` | Seeded, permuted zone names; three hosts with four distinct A records each, AAAA and TXT; 1% nested zones |
 
-All profiles have apex SOA and NS data and enable structural RRSIG records by
-default. `--structural-rrsigs false` disables those records.
+All profiles have apex SOA and NS data. The first three enable structural RRSIG
+records by default; `--structural-rrsigs false` disables them.
+
+For `portfolio`, use `--names-per-zone 3 --records-per-name 4
+--structural-rrsigs false`. By default each member has 23 snapshot records
+(24 records in AXFR, including the closing SOA). Optional `--ixfr-delta-rrsets N`
+adds N separate `ix<16-digit-hex-index>` A records whose RDATA changes with the
+serial; the original host records stay unchanged for query-load comparisons.
+The same churn options below generate changed IXFR without retaining a journal.
+Structural signatures are not supported. Zone names are derived from the seed
+without a per-zone lookup table.
+Every hundredth member is a child of the preceding member. Flat-zone host labels
+are padded so their complete question names have the same wire length as nested
+members' names. This profile measures zone-directory lookup locality, not DNSSEC
+validation or delegation behavior.
 
 BoronDNS requires authenticated catalog transfers. Supply a lab TSIG secret
 through the environment, with the matching key configured in BoronDNS:

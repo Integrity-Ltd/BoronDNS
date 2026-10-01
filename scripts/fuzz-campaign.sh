@@ -912,7 +912,7 @@ main() {
     record_versions "$evidence_dir/tool-versions.txt"
     write_summary_header
 
-    if ((!dry_run)); then
+    if ((! dry_run)); then
         verify_authenticated_rust_tools
         if [[ -n "$cargo_toolchain" ]]; then
             command -v rustup >/dev/null 2>&1 || die "rustup not found on PATH"

@@ -53,6 +53,34 @@ performance guarantee for the current release.
 - [Knot comparison](knot-comparison-benchmark.md): matched setup and retained results.
 - [GX10 AF_XDP tuning](gx10-af-xdp-benchmark-2026-09.md): dated hot-query results
   and host-specific limits.
+- [GX10 multi-zone scaling](gx10-multi-zone-benchmark-2026-09.md): 1k–1M zones,
+  Zipf/uniform throughput, profiles, loading and refresh costs.
+- [GX10 multi-zone Knot comparison](gx10-knot-multi-zone-2026-09.md): matched
+  throughput retention, experimental layouts and measurement limits;
+  the [October four-size matrix](gx10-knot-comparison-2026-10.csv) includes all
+  24 hot/Zipf/uniform pilot windows, the failed cold probe, memory and startup costs;
+  [accepted uniform windows](gx10-uniform-capacity-2026-09.csv) are available as CSV.
+  The [queue-group owner results](gx10-xdp-group-2026-10.csv) include the
+  matched 21M comparison, accepted 23M point and retained 24M failures.
+  The newer [million-zone uniform windows](gx10-million-uniform-2026-09.csv)
+  include current-candidate and Knot operating points, memory and recovery time.
+  The [active-refresh windows](gx10-active-refresh-2026-09.csv) retain loss outliers too.
+  The [freshness group-commit comparison](gx10-freshness-batching-2026-10.csv)
+  records fixed-rate delivery, write I/O and loading tradeoffs for the prototype.
+  The [dispatcher-pull comparison](gx10-refresh-pull-2026-10.csv) records achieved
+  refresh cadence alongside QPS for bounded, completion-driven admission.
+  The [dense-answer layout comparison](gx10-dense-answers-2026-10.csv) records
+  a prototype that fell short of its CPU-cost improvement threshold.
+  The [direct-bucket comparison](gx10-direct-buckets-2026-10.csv) records another
+  prototype with fewer cache misses but an insufficient CPU-cost gain.
+  The [query-preparation comparison](gx10-query-preparation-2026-10.csv) records
+  lower CPU cost, high-load failures and the remaining transport bottleneck.
+  The [conditional-wakeup comparison](gx10-conditional-wakeup-2026-10.csv)
+  records fewer TX syscalls without reliable 24M acceptance.
+  The [listener-specialized redirect comparison](gx10-static-redirect-2026-10.csv)
+  retains its failed 24M candidate runs despite a smaller generated program.
+  The [authority-batching windows](gx10-authority-batching-2026-09.csv) include
+  the 14M uniform comparison and the unresolved hot-guard failure.
 - [IXFR scaling](ixfr-scaling-2026-08.md): measured update costs and their limits.
 - [Fuzzing](../fuzz/README.md), [two-host campaigns](two-host-fuzz-soak-campaign.md),
   and [large-surface soaks](large-surface-soak.md): sustained testing.

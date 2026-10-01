@@ -131,6 +131,7 @@ enum ProfileArg {
     RegistryNsec3,
     Mixed,
     LargeRrset,
+    Portfolio,
 }
 
 impl From<ProfileArg> for ContentProfile {
@@ -139,6 +140,7 @@ impl From<ProfileArg> for ContentProfile {
             ProfileArg::RegistryNsec3 => Self::RegistryNsec3,
             ProfileArg::Mixed => Self::Mixed,
             ProfileArg::LargeRrset => Self::LargeRrset,
+            ProfileArg::Portfolio => Self::Portfolio,
         }
     }
 }

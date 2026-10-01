@@ -64,7 +64,20 @@
     }
 
     fn store_response(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
-        match answer_datagram(packet, store) {
+        store_response_with_options(packet, store, AnswerOptions::default())
+    }
+
+    #[cfg(feature = "experimental-staged-serving")]
+    fn staged_test_action(packet: &[u8], store: &ZoneStore, options: AnswerOptions,
+        provider: ZoneImageProvider<'_>) -> DatagramAction {
+        let requests = [ParsedDnsRequest::new(packet), ParsedDnsRequest::new(packet)];
+        with_prepared_dns_batch(&requests, store, |batch| {
+            batch[1].answer_with_hooks(store, options, |_, _| true, |_, _, _| true, |_| {}, provider)
+        })
+    }
+
+    fn response_from_action(action: DatagramAction) -> Vec<u8> {
+        match action {
             DatagramAction::Discard => panic!("expected response"),
             DatagramAction::Respond(response) => response,
         }
@@ -75,10 +88,11 @@
         store: &ZoneStore,
         options: AnswerOptions,
     ) -> Vec<u8> {
-        match answer_message(packet, store, options) {
-            DatagramAction::Discard => panic!("expected response"),
-            DatagramAction::Respond(response) => response,
-        }
+        #[cfg(feature = "experimental-staged-serving")]
+        let action = staged_test_action(packet, store, options, &default_zone_image_provider);
+        #[cfg(not(feature = "experimental-staged-serving"))]
+        let action = answer_message(packet, store, options);
+        response_from_action(action)
     }
 
     fn store_response_with_zone_image(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
@@ -96,7 +110,10 @@
         options: AnswerOptions,
         provider: ZoneImageProvider<'_>,
     ) -> Vec<u8> {
-        match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+        #[cfg(feature = "experimental-staged-serving")]
+        let action = staged_test_action(packet, store, options, provider);
+        #[cfg(not(feature = "experimental-staged-serving"))]
+        let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
             packet,
             store,
             options,
@@ -104,10 +121,8 @@
             |_, _, _| true,
             |_| {},
             provider,
-        ) {
-            DatagramAction::Discard => panic!("expected response"),
-            DatagramAction::Respond(response) => response,
-        }
+        );
+        response_from_action(action)
     }
 
     fn direct_zone_image_response_for_packet(

@@ -1,8 +1,24 @@
 #![deny(unsafe_code)]
 
+#[cfg(all(
+    feature = "experimental-packed-serving",
+    not(feature = "experimental-staged-serving")
+))]
+compile_error!("packed serving requires the server's staged packet path");
+#[cfg(all(
+    feature = "experimental-batch-authority",
+    not(feature = "experimental-packed-serving")
+))]
+compile_error!("batched authority requires the complete packed serving stack");
+#[cfg(all(
+    feature = "experimental-fused-serving",
+    not(feature = "experimental-batch-authority")
+))]
+compile_error!("fused serving requires the complete authority batching stack");
+
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex, Weak as StdWeak,
@@ -212,6 +228,10 @@ pub struct Runtime {
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
 const TRANSFER_TASK_BACKLOG_MULTIPLIER: usize = 4;
 const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
+#[cfg(test)]
+thread_local! {
+    static ZSM_STATUS_SCAN_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 const SOA_TIMER_NEAR_MAX_WARNING_PERCENT: u64 = 90;
 const RUNTIME_REGISTRY_PRUNE_INTERVAL: u64 = 256;
 const CONTROL_PLANE_OPERATION_LIMIT: usize = 20;
@@ -589,6 +609,10 @@ impl Runtime {
                 .iter()
                 .find_map(|listener| match listener {
                     udp::BoundUdpListener::AfXdp { worker_count, .. } => Some(worker_count - 1),
+                    #[cfg(feature = "experimental-xdp-group-loop")]
+                    udp::BoundUdpListener::AfXdpGroup { worker_count, .. } => {
+                        Some(worker_count - 1)
+                    }
                     _ => None,
                 })
                 .unwrap_or(0);
@@ -743,6 +767,10 @@ impl Runtime {
             #[cfg(feature = "af-xdp")]
             let queue_handle = match (&queue_runtimes, &udp_listener) {
                 (Some(groups), udp::BoundUdpListener::AfXdp { worker_id, .. }) => {
+                    Some(groups.handle(*worker_id).map_err(RuntimeError::Udp)?)
+                }
+                #[cfg(feature = "experimental-xdp-group-loop")]
+                (Some(groups), udp::BoundUdpListener::AfXdpGroup { worker_id, .. }) => {
                     Some(groups.handle(*worker_id).map_err(RuntimeError::Udp)?)
                 }
                 _ => None,
@@ -2274,10 +2302,93 @@ struct ZoneRefreshRegistry {
     initial_retry_max: Duration,
     loading_warning_threshold: Duration,
     jitter: Jitter,
-    statuses: Arc<Mutex<HashMap<String, ZoneRefreshStatus>>>,
+    statuses: Arc<Mutex<ZoneRefreshStatuses>>,
     ownerships: Arc<Mutex<HashMap<String, StdWeak<AsyncMutex<()>>>>>,
     ownership_insertions: Arc<AtomicU64>,
     next_generation: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Default)]
+struct ZoneRefreshStatuses {
+    entries: HashMap<String, ZoneRefreshStatus>,
+    refresh_deadlines: BTreeSet<(Instant, String)>,
+    warning_deadlines: BTreeSet<(Instant, String)>,
+    expiry_deadlines: BTreeSet<(Instant, String)>,
+    dirty: HashSet<String>,
+}
+
+impl std::ops::Deref for ZoneRefreshStatuses {
+    type Target = HashMap<String, ZoneRefreshStatus>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl ZoneRefreshStatuses {
+    // Remove old deadlines before handing out any mutable status reference.
+    // Reindex only changed keys before selection, under the same registry lock.
+    // There is deliberately no DerefMut: mutations cannot bypass this boundary.
+    fn mark_dirty(&mut self, key: &str) {
+        if let Some(status) = self.entries.get(key) {
+            if let Some(deadline) = status.next_refresh {
+                self.refresh_deadlines.remove(&(deadline, key.to_owned()));
+            }
+            if let Some(deadline) = status.next_loading_warning {
+                self.warning_deadlines.remove(&(deadline, key.to_owned()));
+            }
+            if let Some(deadline) = status.expire_at {
+                self.expiry_deadlines.remove(&(deadline, key.to_owned()));
+            }
+        }
+        self.dirty.insert(key.to_owned());
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut ZoneRefreshStatus> {
+        self.mark_dirty(key);
+        self.entries.get_mut(key)
+    }
+
+    fn entry(
+        &mut self,
+        key: String,
+    ) -> std::collections::hash_map::Entry<'_, String, ZoneRefreshStatus> {
+        self.mark_dirty(&key);
+        self.entries.entry(key)
+    }
+
+    fn insert(&mut self, key: String, status: ZoneRefreshStatus) -> Option<ZoneRefreshStatus> {
+        self.mark_dirty(&key);
+        self.entries.insert(key, status)
+    }
+
+    fn remove(&mut self, key: &str) -> Option<ZoneRefreshStatus> {
+        self.mark_dirty(key);
+        self.entries.remove(key)
+    }
+
+    fn sync_deadlines(&mut self) {
+        for key in self.dirty.drain() {
+            #[cfg(test)]
+            ZSM_STATUS_SCAN_VISITS.with(|visits| visits.set(visits.get() + 1));
+            let Some(status) = self.entries.get(&key) else {
+                continue;
+            };
+            if !status.in_progress
+                && let Some(deadline) = status.next_refresh
+            {
+                self.refresh_deadlines.insert((deadline, key.clone()));
+            }
+            if let Some(deadline) = status.next_loading_warning {
+                self.warning_deadlines.insert((deadline, key.clone()));
+            }
+            if !status.expired
+                && let Some(deadline) = status.expire_at
+            {
+                self.expiry_deadlines.insert((deadline, key));
+            }
+        }
+    }
 }
 
 struct ZoneRefreshAttempt {
@@ -2548,7 +2659,7 @@ impl ZoneRefreshRegistry {
             initial_retry_max,
             loading_warning_threshold,
             jitter: Jitter::new(jitter_seed()),
-            statuses: Arc::new(Mutex::new(HashMap::new())),
+            statuses: Arc::new(Mutex::new(ZoneRefreshStatuses::default())),
             ownerships: Arc::new(Mutex::new(HashMap::new())),
             ownership_insertions: Arc::new(AtomicU64::new(0)),
             next_generation: Arc::new(AtomicU64::new(1)),
@@ -2585,7 +2696,7 @@ impl ZoneRefreshRegistry {
             initial_retry_max,
             loading_warning_threshold,
             jitter: Jitter::none(),
-            statuses: Arc::new(Mutex::new(HashMap::new())),
+            statuses: Arc::new(Mutex::new(ZoneRefreshStatuses::default())),
             ownerships: Arc::new(Mutex::new(HashMap::new())),
             ownership_insertions: Arc::new(AtomicU64::new(0)),
             next_generation: Arc::new(AtomicU64::new(1)),
@@ -3059,9 +3170,18 @@ impl ZoneRefreshRegistry {
             .statuses
             .lock()
             .expect("zone refresh registry lock poisoned");
-        statuses
-            .values_mut()
-            .filter_map(|status| {
+        statuses.sync_deadlines();
+        let due = statuses
+            .warning_deadlines
+            .iter()
+            .take_while(|(deadline, _)| *deadline <= now)
+            .map(|(_, key)| key.clone())
+            .collect::<Vec<_>>();
+        due.into_iter()
+            .filter_map(|key| {
+                let status = statuses.get_mut(&key)?;
+                #[cfg(test)]
+                ZSM_STATUS_SCAN_VISITS.with(|visits| visits.set(visits.get() + 1));
                 if status
                     .next_loading_warning
                     .is_none_or(|warning_at| warning_at > now)
@@ -3091,21 +3211,40 @@ impl ZoneRefreshRegistry {
             .collect()
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
     fn start_due_refreshes(&self, now: Instant) -> Vec<DomainName> {
+        self.start_due_refreshes_bounded(now, usize::MAX)
+    }
+
+    fn start_due_refreshes_bounded(&self, now: Instant, limit: usize) -> Vec<DomainName> {
         let mut statuses = self
             .statuses
             .lock()
             .expect("zone refresh registry lock poisoned");
-        statuses
-            .values_mut()
-            .filter_map(|status| {
-                if status.in_progress || status.next_refresh.is_none_or(|next| next > now) {
-                    return None;
-                }
-                status.in_progress = true;
-                Some(status.origin.clone())
-            })
-            .collect()
+        statuses.sync_deadlines();
+        let mut due = Vec::new();
+        while due.len() < limit
+            && statuses
+                .refresh_deadlines
+                .first()
+                .is_some_and(|(deadline, _)| *deadline <= now)
+        {
+            let (_, key) = statuses
+                .refresh_deadlines
+                .pop_first()
+                .expect("due deadline exists");
+            // This changes only refresh eligibility; its index entry was just
+            // removed. Warning and expiry deadlines remain unchanged.
+            let status = statuses
+                .entries
+                .get_mut(&key)
+                .expect("indexed refresh status exists");
+            #[cfg(test)]
+            ZSM_STATUS_SCAN_VISITS.with(|visits| visits.set(visits.get() + 1));
+            status.in_progress = true;
+            due.push(status.origin.clone());
+        }
+        due
     }
 
     fn expire_due_zones(&self, zones: &ZoneStore, now: Instant) -> Vec<DomainName> {
@@ -3119,16 +3258,26 @@ impl ZoneRefreshRegistry {
         mut before_attempt: impl FnMut(&DomainName),
         mut before_publication: impl FnMut(&DomainName),
     ) -> Vec<DomainName> {
-        let candidates = self
-            .statuses
-            .lock()
-            .expect("zone refresh registry lock poisoned")
-            .values()
-            .filter(|status| {
-                !status.expired && status.expire_at.is_some_and(|expire_at| expire_at <= now)
-            })
-            .map(|status| (status.origin.clone(), status.generation))
-            .collect::<Vec<_>>();
+        let candidates = {
+            let mut statuses = self
+                .statuses
+                .lock()
+                .expect("zone refresh registry lock poisoned");
+            statuses.sync_deadlines();
+            statuses
+                .expiry_deadlines
+                .iter()
+                .take_while(|(deadline, _)| *deadline <= now)
+                .map(|(_, key)| {
+                    #[cfg(test)]
+                    ZSM_STATUS_SCAN_VISITS.with(|visits| visits.set(visits.get() + 1));
+                    // Keep the index entry until expiry is published. A missing
+                    // snapshot or concurrent refresh must not lose this retry.
+                    let status = &statuses.entries[key];
+                    (status.origin.clone(), status.generation)
+                })
+                .collect::<Vec<_>>()
+        };
         let mut expired = Vec::new();
         for (origin, generation) in candidates {
             before_attempt(&origin);
@@ -5413,6 +5562,12 @@ async fn serve_refresh_requests(
     let mut transfer_task_keys = HashMap::<TaskId, String>::new();
     let mut refresh_rx_open = true;
     let max_resident_transfer_tasks = settings.max_resident_transfer_tasks.max(1);
+    #[cfg(feature = "experimental-refresh-pull")]
+    let mut scheduled_pulse = {
+        let mut pulse = tokio::time::interval(ZSM_SCHEDULER_TICK);
+        pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        pulse
+    };
 
     loop {
         if !settings.admission.is_open() && refresh_rx_open {
@@ -5424,6 +5579,48 @@ async fn serve_refresh_requests(
             pending_keys.clear();
             while let Ok(request) = refresh_rx.try_recv() {
                 discard_refresh_after_admission_close(&catalog_runtime, request);
+            }
+        }
+
+        #[cfg(feature = "experimental-refresh-pull")]
+        if settings.admission.is_open()
+            && refresh_rx_open
+            && !refresh_rx.is_closed()
+            && refresh_rx.is_empty()
+            && pending_requests.len() < NOTIFY_REFRESH_QUEUE_CAPACITY
+            && pending_requests
+                .iter()
+                .all(|request| active_keys.contains(&request.zone.canonical_key()))
+            && transfers.len() < max_resident_transfer_tasks
+        {
+            // The dispatcher owns the actual task budget. Pull directly into
+            // its pending queue, not through the external NOTIFY channel.
+            // A completion re-enters this path immediately; the one-second
+            // pulse only discovers newly due work when there are no events.
+            // Ready external requests take precedence; a follow-up blocked on
+            // its active zone must not strand unrelated free slots. A bounded
+            // turn prevents a large due population monopolizing this runtime.
+            let available = (max_resident_transfer_tasks - transfers.len())
+                .min(NOTIFY_REFRESH_QUEUE_CAPACITY - pending_requests.len())
+                .min(64);
+            for zone in catalog_runtime
+                .refresh_registry
+                .start_due_refreshes_bounded(Instant::now(), available)
+            {
+                let key = zone.canonical_key();
+                if active_keys.contains(&key) || pending_keys.contains(&key) {
+                    catalog_runtime.refresh_registry.cancel_in_progress(&zone);
+                    continue;
+                }
+                let Some(plan) = catalog_runtime.transfer_plan.get(&zone) else {
+                    catalog_runtime.refresh_registry.cancel_in_progress(&zone);
+                    continue;
+                };
+                pending_keys.insert(key);
+                pending_requests.push_back(
+                    RefreshRequest::new(zone, None, RefreshReason::Scheduled)
+                        .with_plan_generation(&plan),
+                );
             }
         }
 
@@ -5607,7 +5804,14 @@ async fn serve_refresh_requests(
             break;
         }
 
+        #[cfg(feature = "experimental-refresh-pull")]
+        let scheduled_wakeup = async {
+            scheduled_pulse.tick().await;
+        };
+        #[cfg(not(feature = "experimental-refresh-pull"))]
+        let scheduled_wakeup = std::future::pending::<()>();
         tokio::select! {
+            _ = scheduled_wakeup, if refresh_rx_open && settings.admission.is_open() => {}
             () = settings.admission.closed(), if refresh_rx_open => {
                 // The next loop iteration closes and drains the outer channel
                 // before waiting only for work admitted before shutdown.
@@ -5915,12 +6119,21 @@ async fn renew_last_good_freshness(
     let Some(persistence) = persistence.clone() else {
         return Ok(());
     };
-    let origin = metadata.origin.clone();
-    let serial = metadata.serial;
-    tokio::task::spawn_blocking(move || persistence.renew_freshness(&origin, serial))
-        .await
-        .map_err(|error| format!("zone-cache freshness writer task failed: {error}"))?
-        .map_err(|error| error.to_string())
+    #[cfg(feature = "experimental-freshness-batching")]
+    {
+        persistence
+            .renew_freshness_batched(&metadata.origin, metadata.serial)
+            .await
+    }
+    #[cfg(not(feature = "experimental-freshness-batching"))]
+    {
+        let origin = metadata.origin.clone();
+        let serial = metadata.serial;
+        tokio::task::spawn_blocking(move || persistence.renew_freshness(&origin, serial))
+            .await
+            .map_err(|error| format!("zone-cache freshness writer task failed: {error}"))?
+            .map_err(|error| error.to_string())
+    }
 }
 
 enum CurrentZoneConfirmationError {
@@ -6307,6 +6520,8 @@ async fn serve_scheduled_refreshes(
     refresh_tx: mpsc::Sender<RefreshRequest>,
     tick: Duration,
 ) -> Result<(), RuntimeError> {
+    #[cfg(feature = "experimental-refresh-pull")]
+    let _ = transfer_plan;
     let mut interval = tokio::time::interval(tick);
     loop {
         interval.tick().await;
@@ -6316,7 +6531,11 @@ async fn serve_scheduled_refreshes(
             log_loading_warning(warning);
         }
 
-        for zone in refresh_registry.start_due_refreshes(now) {
+        // Do not mark the whole due population in-progress only to cancel and
+        // log almost all of it when the bounded channel fills. Earliest overdue
+        // deadlines win admission, including initial-load retries.
+        #[cfg(not(feature = "experimental-refresh-pull"))]
+        for zone in refresh_registry.start_due_refreshes_bounded(now, refresh_tx.capacity()) {
             let Some(plan) = transfer_plan.get(&zone) else {
                 refresh_registry.cancel_in_progress(&zone);
                 continue;
@@ -6336,6 +6555,10 @@ async fn serve_scheduled_refreshes(
                     return Ok(());
                 }
             }
+        }
+        #[cfg(feature = "experimental-refresh-pull")]
+        if refresh_tx.is_closed() {
+            return Ok(());
         }
     }
 }

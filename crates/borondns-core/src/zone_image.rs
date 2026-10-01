@@ -49,8 +49,22 @@ pub(crate) type ZoneImageRecordFixedFields = [u8; 8];
 // experimental immutable query data-plane image:
 // - BDS-FR-ZONE-001 BDS-FR-ZONE-002 BDS-FR-ZONE-003
 // - BDS-FR-QRY-001 BDS-FR-QRY-002 BDS-FR-QRY-003
+#[cfg(feature = "experimental-compact-serving")]
+mod compact_direct;
+#[cfg(feature = "experimental-fused-serving")]
+pub(crate) use compact_direct::FusedDirectAnswer;
+#[cfg(feature = "experimental-staged-serving")]
+pub(crate) use compact_direct::PreparedCompactLookup;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneImage {
+    #[cfg(all(
+        feature = "experimental-compact-serving",
+        not(feature = "experimental-packed-serving")
+    ))]
+    compact_direct: Box<[compact_direct::DirectAnswerEntry]>,
+    #[cfg(feature = "experimental-packed-serving")]
+    compact_direct: compact_direct::PackedDirectIndex,
     origin: DomainName,
     serial: Option<u32>,
     nodes: Box<[NameNode]>,
@@ -103,6 +117,8 @@ pub struct ZoneImageStats {
     pub max_rrsets_per_name: usize,
     pub max_depth: usize,
     pub average_depth_times_1000: usize,
+    /// Bytes in the separate label arena. Short inline labels are counted in
+    /// the edge storage included in `hot_bytes`, not again in this field.
     pub label_bytes: usize,
     pub name_bytes: usize,
     pub rdata_bytes: usize,
@@ -123,6 +139,7 @@ pub struct ZoneImageChildLookupProfile {
     pub labels: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct ZoneImageDirectRrset<'a> {
     pub body_wire_len: usize,
     section_count_header_bytes: [u8; 6],
@@ -130,7 +147,86 @@ pub(crate) struct ZoneImageDirectRrset<'a> {
     body: ZoneImageDirectRrsetBody<'a>,
 }
 
-impl ZoneImageDirectRrset<'_> {
+/// A complete answer body borrowed from the selected publication. Unlike the
+/// general direct RRset, serialization cannot consult a ZoneImage: no image
+/// argument or record-offset variant crosses this handoff.
+#[cfg(feature = "experimental-compact-serving")]
+#[derive(Clone, Copy)]
+pub(crate) struct ZoneImageTemplateAnswer<'a> {
+    body: ZoneImageTemplateAnswerBody<'a>,
+    counts: [[u8; 6]; 2],
+}
+
+#[cfg(feature = "experimental-compact-serving")]
+#[derive(Clone, Copy)]
+enum ZoneImageTemplateAnswerBody<'a> {
+    Wire(&'a [u8]),
+    #[cfg(feature = "experimental-compact-a-answers")]
+    CompactA {
+        ttl: [u8; 4],
+        addresses: &'a [u8],
+    },
+}
+
+#[cfg(feature = "experimental-compact-serving")]
+impl ZoneImageTemplateAnswer<'_> {
+    pub(crate) fn section_count_header_bytes(&self, edns: bool) -> [u8; 6] {
+        self.counts[usize::from(edns)]
+    }
+
+    pub(crate) fn body_wire_len(&self) -> usize {
+        match self.body {
+            ZoneImageTemplateAnswerBody::Wire(body) => body.len(),
+            #[cfg(feature = "experimental-compact-a-answers")]
+            ZoneImageTemplateAnswerBody::CompactA { addresses, .. } => addresses.len() * 4,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wire_body(&self) -> Option<&[u8]> {
+        match self.body {
+            ZoneImageTemplateAnswerBody::Wire(body) => Some(body),
+            #[cfg(feature = "experimental-compact-a-answers")]
+            ZoneImageTemplateAnswerBody::CompactA { .. } => None,
+        }
+    }
+
+    pub(crate) fn append_body(self, mut append: impl FnMut(&[u8])) {
+        match self.body {
+            ZoneImageTemplateAnswerBody::Wire(body) => append(body),
+            #[cfg(feature = "experimental-compact-a-answers")]
+            ZoneImageTemplateAnswerBody::CompactA { ttl, addresses } => {
+                let mut record = [0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0];
+                record[6..10].copy_from_slice(&ttl);
+                for address in addresses.as_chunks::<4>().0 {
+                    record[12..16].copy_from_slice(address);
+                    append(&record);
+                }
+            }
+        }
+    }
+}
+
+impl<'a> ZoneImageDirectRrset<'a> {
+    #[cfg(feature = "experimental-compact-serving")]
+    pub(crate) fn template_answer(self) -> Option<ZoneImageTemplateAnswer<'a>> {
+        let body = match self.body {
+            ZoneImageDirectRrsetBody::Template(body) => ZoneImageTemplateAnswerBody::Wire(body),
+            #[cfg(feature = "experimental-compact-a-answers")]
+            ZoneImageDirectRrsetBody::CompactA { ttl, addresses } => {
+                ZoneImageTemplateAnswerBody::CompactA { ttl, addresses }
+            }
+            ZoneImageDirectRrsetBody::Records { .. } => return None,
+        };
+        Some(ZoneImageTemplateAnswer {
+            body,
+            counts: [
+                self.section_count_header_bytes,
+                self.section_count_header_bytes_with_edns,
+            ],
+        })
+    }
+
     pub(crate) fn section_count_header_bytes(&self, edns: bool) -> [u8; 6] {
         if edns {
             self.section_count_header_bytes_with_edns
@@ -148,8 +244,14 @@ impl ZoneImageDirectRrset<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ZoneImageDirectRrsetBody<'a> {
     Template(&'a [u8]),
+    #[cfg(feature = "experimental-compact-a-answers")]
+    CompactA {
+        ttl: [u8; 4],
+        addresses: &'a [u8],
+    },
     Records {
         records: &'a [ImageRecord],
         record_prefix: [u8; 10],
@@ -359,8 +461,47 @@ struct NameNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NameEdge {
-    label: BlobRange,
+    // Labels up to eight bytes are stored here; longer labels use a full
+    // little-endian u64 offset into the label arena. DNS limits label length
+    // to 63 bytes, so one byte distinguishes the representations without
+    // narrowing arena offsets or enlarging each edge.
+    label_bytes_or_offset: [u8; 8],
     child: u32,
+    label_len: u8,
+}
+
+impl NameEdge {
+    fn new(label: &[u8], child: u32, arena: &mut Vec<u8>) -> Result<Self, ZoneImageBuildError> {
+        if label.is_empty() || label.len() > 63 {
+            return Err(ZoneImageBuildError::InvalidCompiledOwner);
+        }
+        let mut label_bytes_or_offset = [0; 8];
+        if label.len() <= label_bytes_or_offset.len() {
+            label_bytes_or_offset[..label.len()].copy_from_slice(label);
+        } else {
+            label_bytes_or_offset = push_blob(arena, label, "labels")?.offset.to_le_bytes();
+        }
+        Ok(Self {
+            label_bytes_or_offset,
+            child,
+            label_len: label.len() as u8,
+        })
+    }
+
+    fn label_arena_range(&self) -> Option<BlobRange> {
+        (usize::from(self.label_len) > self.label_bytes_or_offset.len()).then(|| BlobRange {
+            offset: u64::from_le_bytes(self.label_bytes_or_offset),
+            len: u64::from(self.label_len),
+        })
+    }
+
+    fn label<'a>(&'a self, arena: &'a [u8]) -> &'a [u8] {
+        if let Some(range) = self.label_arena_range() {
+            blob_from_arena(arena, range)
+        } else {
+            &self.label_bytes_or_offset[..usize::from(self.label_len)]
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -956,7 +1097,7 @@ impl ZoneImage {
             &self.edges[node.first_edge as usize..(node.first_edge + node.edge_count) as usize];
         let labels = edges
             .iter()
-            .map(|edge| self.blob(&self.labels, edge.label).to_vec())
+            .map(|edge| edge.label(&self.labels).to_vec())
             .collect::<Vec<_>>();
 
         Some(ZoneImageChildLookupProfile {
@@ -1452,6 +1593,11 @@ impl ZoneImage {
     ) {
         match &rrset.body {
             ZoneImageDirectRrsetBody::Template(body_wire) => out.extend_from_slice(body_wire),
+            #[cfg(feature = "experimental-compact-a-answers")]
+            ZoneImageDirectRrsetBody::CompactA { .. } => rrset
+                .template_answer()
+                .expect("compact A body is a template answer")
+                .append_body(|bytes| out.extend_from_slice(bytes)),
             ZoneImageDirectRrsetBody::Records {
                 records,
                 record_prefix,
@@ -4531,7 +4677,7 @@ impl ZoneImage {
             &self.edges[node.first_edge as usize..(node.first_edge + node.edge_count) as usize];
         if let [edge] = edges {
             return lowercase_stored_label_eq_with_ascii_lowercase_hint(
-                self.blob(&self.labels, edge.label),
+                edge.label(&self.labels),
                 label,
                 label_ascii_lowercase,
             )
@@ -4547,7 +4693,7 @@ impl ZoneImage {
         let mut right = edges.len();
         while left < right {
             let mid = left + (right - left) / 2;
-            let edge_label = self.blob(&self.labels, edges[mid].label);
+            let edge_label = edges[mid].label(&self.labels);
             match cmp_lowercase_label_with_ascii_lowercase_hint(
                 edge_label,
                 label,
@@ -4569,7 +4715,7 @@ impl ZoneImage {
     ) -> Option<u32> {
         edges.iter().find_map(|edge| {
             lowercase_stored_label_eq_with_ascii_lowercase_hint(
-                self.blob(&self.labels, edge.label),
+                edge.label(&self.labels),
                 label,
                 label_ascii_lowercase,
             )
@@ -4608,7 +4754,7 @@ impl ZoneImage {
             };
             let edge = edges[edge_offset as usize];
             if lowercase_stored_label_eq_with_ascii_lowercase_hint(
-                self.blob(&self.labels, edge.label),
+                edge.label(&self.labels),
                 label,
                 label_ascii_lowercase,
             ) {
@@ -5630,11 +5776,7 @@ impl ZoneImageBuilder {
                 .checked_add(edge_count)
                 .ok_or(ZoneImageBuildError::TooManyItems { kind: "edges" })?;
             for (label, child) in &build_node.children {
-                let label_ref = push_blob(&mut labels, label, "labels")?;
-                edges.push(NameEdge {
-                    label: label_ref,
-                    child: *child,
-                });
+                edges.push(NameEdge::new(label, *child, &mut labels)?);
             }
             let first_rrset = build_node.rrsets.first().map(|id| id.0).unwrap_or(u32::MAX);
             nodes.push(NameNode {
@@ -5812,19 +5954,10 @@ impl ZoneImageBuilder {
                 .checked_div(record_count)
                 .unwrap_or_default(),
         };
-        info!(
-            event = "zone_image_build_phase",
-            phase = "compile_complete",
-            zone = %self.origin,
-            rrset_count = stats.rrset_count,
-            record_count = stats.record_count,
-            node_count = stats.node_count,
-            hot_bytes = stats.hot_bytes,
-            cold_bytes = stats.cold_bytes,
-            "ZoneImage build phase"
-        );
-
-        Ok(ZoneImage {
+        #[allow(unused_mut)]
+        let mut image = ZoneImage {
+            #[cfg(feature = "experimental-compact-serving")]
+            compact_direct: Default::default(),
             origin: self.origin,
             serial,
             nodes: nodes.into_boxed_slice(),
@@ -5861,7 +5994,21 @@ impl ZoneImageBuilder {
             rdata: self.rdata.into_boxed_slice(),
             wire: self.wire.into_boxed_slice(),
             stats,
-        })
+        };
+        #[cfg(feature = "experimental-compact-serving")]
+        image.build_compact_direct_index();
+        info!(
+            event = "zone_image_build_phase",
+            phase = "compile_complete",
+            zone = %image.origin,
+            rrset_count = image.stats.rrset_count,
+            record_count = image.stats.record_count,
+            node_count = image.stats.node_count,
+            hot_bytes = image.stats.hot_bytes,
+            cold_bytes = image.stats.cold_bytes,
+            "ZoneImage build phase"
+        );
+        Ok(image)
     }
 
     fn log_phase(&self, phase: &'static str) {
@@ -6935,7 +7082,7 @@ fn build_child_hashes(
             slots_u32.resize(slot_end, u32::MAX);
             for edge_offset in 0..edge_count {
                 let edge = edges[first_edge + edge_offset];
-                let label = blob_from_arena(labels, edge.label);
+                let label = edge.label(labels);
                 let mut slot = child_label_hash(label) & mask;
                 loop {
                     let slot_index = first_slot as usize + slot;
@@ -6955,7 +7102,7 @@ fn build_child_hashes(
             slots_u16.resize(slot_end, u16::MAX);
             for edge_offset in 0..edge_count {
                 let edge = edges[first_edge + edge_offset];
-                let label = blob_from_arena(labels, edge.label);
+                let label = edge.label(labels);
                 let mut slot = child_label_hash(label) & mask;
                 loop {
                     let slot_index = first_slot as usize + slot;

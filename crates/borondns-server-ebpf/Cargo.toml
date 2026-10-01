@@ -12,6 +12,10 @@ crate-type = ["cdylib"]
 [dependencies]
 aya-ebpf = "0.1.1"
 
+[features]
+default = []
+experimental-static-redirect = []
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

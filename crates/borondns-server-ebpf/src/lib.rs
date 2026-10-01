@@ -22,6 +22,42 @@ pub struct RedirectConfig {
 #[map]
 static REDIRECT_CONFIG: Array<RedirectConfig> = Array::with_max_entries(1, 0);
 
+// The loader patches this read-only global before loading the program. A zero
+// family selects the legacy map, so an old loader still handles the new object.
+// Keep the map declaration and fallback for compatibility in both directions.
+#[cfg(feature = "experimental-static-redirect")]
+#[no_mangle]
+static STATIC_REDIRECT_CONFIG: RedirectConfig = RedirectConfig {
+    udp_dest_port_be: 0,
+    address_family: 0,
+    wildcard_address: 0,
+    destination_addr: [0; 16],
+};
+
+#[inline(always)]
+#[cfg(feature = "experimental-static-redirect")]
+fn redirect_config() -> Option<&'static RedirectConfig> {
+    if config_read(&STATIC_REDIRECT_CONFIG.address_family) != 0 {
+        return Some(&STATIC_REDIRECT_CONFIG);
+    }
+    REDIRECT_CONFIG.get(0)
+}
+
+#[inline(always)]
+fn config_read<T: Copy>(field: &T) -> T {
+    #[cfg(feature = "experimental-static-redirect")]
+    {
+        // SAFETY: this is a valid aligned reference to a plain-integer field
+        // in loader-initialized read-only data or a live configuration map.
+        // Volatile prevents LLVM folding the unpatched global initializer.
+        // Read fields on demand, not the entire struct with unused addresses.
+        // SAFETY-ID: UNSAFE-BORONDNS-SERVER-EBPF-LIB-008
+        unsafe { ptr::read_volatile(field) }
+    }
+    #[cfg(not(feature = "experimental-static-redirect"))]
+    *field
+}
+
 #[map]
 static BORONDNS_XSKS: XskMap = XskMap::with_max_entries(XDP_REDIRECT_MAP_CAPACITY, 0);
 
@@ -102,14 +138,18 @@ pub fn borondns_xdp_redirect(ctx: XdpContext) -> u32 {
 fn try_borondns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     let eth = read_at::<EthHdr>(ctx, 0)?;
     let eth_proto = u16::from_be(eth.eth_proto);
-    let Some(config) = REDIRECT_CONFIG.get(0) else {
+    #[cfg(feature = "experimental-static-redirect")]
+    let config = redirect_config();
+    #[cfg(not(feature = "experimental-static-redirect"))]
+    let config = REDIRECT_CONFIG.get(0);
+    let Some(config) = config else {
         return Ok(xdp_action::XDP_PASS);
     };
     let udp_offset = match eth_proto {
         0x0800 => {
             let (udp_offset, destination) = ipv4_udp_info(ctx)?;
-            if config.address_family != 4
-                || (config.wildcard_address == 0
+            if config_read(&config.address_family) != 4
+                || (config_read(&config.wildcard_address) == 0
                     && !ipv4_address_matches(destination, &config.destination_addr))
             {
                 return Ok(xdp_action::XDP_PASS);
@@ -118,8 +158,8 @@ fn try_borondns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
         }
         0x86dd => {
             let (udp_offset, destination) = ipv6_udp_info(ctx)?;
-            if config.address_family != 6
-                || (config.wildcard_address == 0
+            if config_read(&config.address_family) != 6
+                || (config_read(&config.wildcard_address) == 0
                     && !ipv6_address_matches(&destination, &config.destination_addr))
             {
                 return Ok(xdp_action::XDP_PASS);
@@ -130,7 +170,8 @@ fn try_borondns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     };
 
     let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
-    if config.udp_dest_port_be != 0 && udp.dest != config.udp_dest_port_be {
+    let port = config_read(&config.udp_dest_port_be);
+    if port != 0 && udp.dest != port {
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -180,30 +221,30 @@ fn ipv6_udp_info(ctx: &XdpContext) -> Result<(usize, [u8; 16]), ()> {
 
 #[inline(always)]
 fn ipv4_address_matches(packet: [u8; 4], configured: &[u8; 16]) -> bool {
-    packet[0] == configured[0]
-        && packet[1] == configured[1]
-        && packet[2] == configured[2]
-        && packet[3] == configured[3]
+    packet[0] == config_read(&configured[0])
+        && packet[1] == config_read(&configured[1])
+        && packet[2] == config_read(&configured[2])
+        && packet[3] == config_read(&configured[3])
 }
 
 #[inline(always)]
 fn ipv6_address_matches(packet: &[u8; 16], configured: &[u8; 16]) -> bool {
-    packet[0] == configured[0]
-        && packet[1] == configured[1]
-        && packet[2] == configured[2]
-        && packet[3] == configured[3]
-        && packet[4] == configured[4]
-        && packet[5] == configured[5]
-        && packet[6] == configured[6]
-        && packet[7] == configured[7]
-        && packet[8] == configured[8]
-        && packet[9] == configured[9]
-        && packet[10] == configured[10]
-        && packet[11] == configured[11]
-        && packet[12] == configured[12]
-        && packet[13] == configured[13]
-        && packet[14] == configured[14]
-        && packet[15] == configured[15]
+    packet[0] == config_read(&configured[0])
+        && packet[1] == config_read(&configured[1])
+        && packet[2] == config_read(&configured[2])
+        && packet[3] == config_read(&configured[3])
+        && packet[4] == config_read(&configured[4])
+        && packet[5] == config_read(&configured[5])
+        && packet[6] == config_read(&configured[6])
+        && packet[7] == config_read(&configured[7])
+        && packet[8] == config_read(&configured[8])
+        && packet[9] == config_read(&configured[9])
+        && packet[10] == config_read(&configured[10])
+        && packet[11] == config_read(&configured[11])
+        && packet[12] == config_read(&configured[12])
+        && packet[13] == config_read(&configured[13])
+        && packet[14] == config_read(&configured[14])
+        && packet[15] == config_read(&configured[15])
 }
 
 fn read_at<T: PacketPod>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {

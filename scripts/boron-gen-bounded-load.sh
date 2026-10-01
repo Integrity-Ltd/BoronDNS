@@ -289,7 +289,7 @@ if ((udp_socket_send_buffer_bytes > 0)); then
     udp_send_buffer_config="udp_socket_send_buffer_bytes = $udp_socket_send_buffer_bytes"
 fi
 if [[ "$dns_host" != "127.0.0.1" && "$dns_host" != "0.0.0.0" ]]; then
-    if ! python3 - "$dns_host" <<'PY'; then
+    if ! python3 - "$dns_host" <<'PY'
 import ipaddress
 import sys
 
@@ -300,6 +300,7 @@ except ValueError as error:
 if address.version != 4:
     raise SystemExit("the bounded load harness currently requires IPv4 listeners")
 PY
+    then
         exit 64
     fi
     rrl_allowlist_entries+=", \"$dns_host/32\""
@@ -313,7 +314,7 @@ if [[ "$performance_mode" == "ssh" || "$performance_mode" == "external" ]]; then
         fi
         performance_client_source_cidr="$performance_client_address/32"
     fi
-    if ! python3 - "$performance_client_source_cidr" <<'PY'; then
+    if ! python3 - "$performance_client_source_cidr" <<'PY'
 import ipaddress
 import sys
 
@@ -322,6 +323,7 @@ try:
 except ValueError as error:
     raise SystemExit(f"invalid performance client source CIDR: {error}")
 PY
+    then
         exit 64
     fi
     rrl_allowlist_entries+=", \"$performance_client_source_cidr\""
@@ -1342,7 +1344,7 @@ if ((ixfr_churn_interval_ms > 0)); then
         http_get \
             "http://$health_host:$health_port/metrics" \
             >"$artifact_dir/metrics-before-performance.prom"
-        if python3 - "$artifact_dir/metrics-before-performance.prom" <<'PY'; then
+        if python3 - "$artifact_dir/metrics-before-performance.prom" <<'PY'
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as source:
@@ -1354,6 +1356,7 @@ with open(sys.argv[1], encoding="utf-8") as source:
             raise SystemExit(0)
 raise SystemExit(1)
 PY
+        then
             break
         fi
         if ! systemctl_load is-active --quiet "$server_unit"; then

@@ -3954,7 +3954,7 @@ campaign_remove_private_temporary_tree() {
     # narrow lock rooted in the automatic-tree family so the ordinary
     # identity-bound removal path retains its mutation-boundary guarantees.
     # Recursing once keeps all lock-present behavior on the single path below.
-    if ((!lock_state_present)); then
+    if ((! lock_state_present)); then
         [[ "$automatic_cleanup_timeout" =~ ^[1-9][0-9]*$ ]] || {
             printf 'invalid automatic-tree cleanup timeout: %s\n' \
                 "$automatic_cleanup_timeout" >&2
@@ -6549,7 +6549,7 @@ campaign_publish_collection_bundle() {
     campaign_require_owned_real_directory "$root" "$label root" || return 1
     campaign_require_owned_real_directory "$evidence_staging" "$label evidence staging" || return 1
     campaign_require_owned_real_directory "$journal_staging" "$label journal staging" || return 1
-    if ((!content_bound)); then
+    if ((! content_bound)); then
         [[ -f "$status_staging" && ! -L "$status_staging" &&
             "$(stat -c %u "$status_staging")" == "$(id -u)" ]] || return 1
     fi

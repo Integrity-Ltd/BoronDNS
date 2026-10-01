@@ -1,5 +1,256 @@
 #[cfg(target_os = "linux")]
 const LINUX_ERRNO_EAGAIN: i32 = 11;
+
+#[cfg(feature = "experimental-response-writer")]
+struct TestReplyBuffers {
+    bytes: Vec<Vec<u8>>,
+    seals: usize,
+}
+#[cfg(feature = "experimental-response-writer")]
+impl crate::udp::UdpReplyBuffers for TestReplyBuffers {
+    fn buffer(&mut self, index: usize) -> Option<&mut [u8]> {
+        self.bytes.get_mut(index).map(Vec::as_mut_slice)
+    }
+    fn seal(
+        &mut self,
+        index: usize,
+        len: usize,
+        category: Option<QueryLatencyCategory>,
+    ) -> Option<crate::af_xdp::PreparedReply> {
+        assert!(len <= self.bytes[index].len());
+        self.seals += 1;
+        Some(crate::af_xdp::PreparedReply::for_test(index, len, category))
+    }
+}
+
+#[cfg(feature = "experimental-staged-serving")]
+#[test]
+fn staged_udp_batches_preserve_policy_metrics_and_packet_targets() {
+    // Two records produce a compact answer template. The usual single-record
+    // fixture intentionally uses the Records fallback and cannot exercise the
+    // transport-owned writer, even when the serving features are enabled.
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        vec![Rrset::new(
+            DomainName::from_absolute_str("www.example.test.").unwrap(),
+            RecordType::A as u16,
+            1,
+            300,
+            vec![vec![192, 0, 2, 10], vec![192, 0, 2, 11]],
+        )],
+    ));
+    for i in 0..5 {
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str(&format!("zone{i}.test.")).unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+    }
+    let config = ServerConfig::from_toml_str(
+        r#"
+        [server]
+        allow_non_rfc5936_cold_start = true
+        listen_udp = ["127.0.0.1:5300"]
+        listen_tcp = []
+        allow_non_rfc9210_single_transport = true
+        [[tsig_keys]]
+        name = "query-key."
+        algorithm = "hmac-sha256"
+        secret = "dG9wc2VjcmV0"
+        [[zones]]
+        name = "example.test."
+        primaries = ["192.0.2.53:53"]
+        tsig_key = "query-key."
+    "#,
+    )
+    .unwrap();
+    let key = TsigKey::from_base64("query-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+    for mode in 0..3 {
+        let rrl = RrlConfig {
+            enabled: mode > 0,
+            positive_per_second: 0,
+            slip: if mode == 2 { 2 } else { 0 },
+            ..RrlConfig::default()
+        };
+        let mut serial = udp_settings_for_test(RuntimeMetrics::new(), rrl.clone());
+        let mut staged = udp_settings_for_test(RuntimeMetrics::new(), rrl.clone());
+        #[cfg(feature = "experimental-response-writer")]
+        let mut direct = udp_settings_for_test(RuntimeMetrics::new(), rrl);
+        serial.notify_authority = NotifyAuthority::from_config_for_test(&config);
+        staged.notify_authority = NotifyAuthority::from_config_for_test(&config);
+        #[cfg(feature = "experimental-response-writer")]
+        {
+            direct.notify_authority = NotifyAuthority::from_config_for_test(&config);
+        }
+        let mut packets = Vec::new();
+        let mut signatures = HashMap::new();
+        for i in 0..19u16 {
+            let mut packet = query(
+                b"\x03www\x07example\x04test\x00",
+                if i % 7 == 1 { 28 } else { 1 },
+                1,
+            );
+            packet[..2].copy_from_slice(&(100 + i).to_be_bytes());
+            match i % 7 {
+                2 => packet.push(0xff),
+                3 => {
+                    packet.pop();
+                }
+                4 => append_opt(&mut packet, 512, 0x8000, &[]),
+                5 => append_opt(&mut packet, 1232, 0, &edns_option(10, &[1; 3])),
+                6 => {
+                    let signed = key
+                        .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+                        .unwrap();
+                    signatures.insert(100 + i, signed.mac);
+                    packet = signed.message;
+                }
+                _ => {}
+            }
+            let peer: SocketAddr = format!("192.0.2.1:{}", if i == 0 { 0 } else { 53000 + i })
+                .parse()
+                .unwrap();
+            let len = packet.len();
+            #[cfg(feature = "af-xdp")]
+            let target = UdpPacketTarget::AfXdp {
+                frame_index: usize::from(19 - i),
+            };
+            #[cfg(not(feature = "af-xdp"))]
+            let target = UdpPacketTarget::Socket(peer);
+            packets.push(UdpInbound {
+                buffer: packet,
+                len,
+                peer,
+                target,
+            });
+        }
+        let expected: Vec<_> = packets
+            .iter()
+            .filter(|p| p.peer.port() != 0)
+            .filter_map(|p| {
+                handle_udp_datagram_with_prepared_hook(&p.buffer, p.peer, &zones, &serial, &|| {})
+                    .map(|r| (p.target, r.response.into_owned()))
+            })
+            .collect();
+        #[cfg(feature = "experimental-query-preparation")]
+        crate::udp::test_take_unsigned_proof_reuses();
+        let actual = crate::udp::test_staged_udp_batch(&packets, &zones, &staged);
+        #[cfg(feature = "experimental-query-preparation")]
+        assert!(crate::udp::test_take_unsigned_proof_reuses() > 0);
+        assert_eq!(actual.len(), expected.len());
+        let unsigned = |wire: &[u8]| {
+            let id = u16::from_be_bytes([wire[0], wire[1]]);
+            if let Some(mac) = signatures.get(&id) {
+                key.verify_response(wire, mac, current_unix_time())
+                    .unwrap()
+                    .message
+            } else {
+                wire.to_vec()
+            }
+        };
+        for (actual, (target, expected)) in actual.iter().zip(&expected) {
+            assert_eq!(&actual.target, target);
+            assert_eq!(
+                unsigned(actual.response.owned().unwrap()),
+                unsigned(expected)
+            );
+        }
+        let (a, b) = (serial.metrics.snapshot(), staged.metrics.snapshot());
+        assert_eq!(a.queries_received, b.queries_received);
+        assert_eq!(a.rrl_subject, b.rrl_subject);
+        assert_eq!(a.rrl_dropped, b.rrl_dropped);
+        assert_eq!(a.dns_cookie_no_cookie, b.dns_cookie_no_cookie);
+        #[cfg(feature = "experimental-response-writer")]
+        {
+            let mut buffers = TestReplyBuffers {
+                bytes: vec![vec![0xa5; 2048]; 20],
+                seals: 0,
+            };
+            let direct_answers = crate::udp::test_staged_udp_batch_with_replies(
+                &packets,
+                &zones,
+                &direct,
+                &mut buffers,
+            );
+            assert_eq!(direct_answers.len(), expected.len());
+            for (actual, (target, expected)) in direct_answers.iter().zip(&expected) {
+                assert_eq!(&actual.target, target);
+                let bytes = match &actual.response {
+                    crate::udp::UdpResponse::Owned(bytes) => bytes.as_slice(),
+                    crate::udp::UdpResponse::Prepared(reply) => {
+                        let (index, len) = reply.test_location();
+                        assert_eq!(actual.target, UdpPacketTarget::AfXdp { frame_index: index });
+                        let bytes = &buffers.bytes[index][..len];
+                        let id = u16::from_be_bytes([bytes[0], bytes[1]]);
+                        assert!(
+                            !signatures.contains_key(&id),
+                            "TSIG must keep owned signing path"
+                        );
+                        bytes
+                    }
+                };
+                assert_eq!(unsigned(bytes), unsigned(expected));
+            }
+            if mode == 0 {
+                assert!(buffers.seals > 0, "real server direct path must execute");
+            } else {
+                assert_eq!(
+                    buffers.seals, 0,
+                    "RRL drop/slip cannot admit original frame"
+                );
+            }
+            let c = direct.metrics.snapshot();
+            assert_eq!(a.queries_received, c.queries_received);
+            assert_eq!(a.rrl_subject, c.rrl_subject);
+            assert_eq!(a.rrl_dropped, c.rrl_dropped);
+            assert_eq!(a.rrl_truncated, c.rrl_truncated);
+            assert_eq!(a.dns_cookie_no_cookie, c.dns_cookie_no_cookie);
+        }
+        if mode == 0 {
+            let peer: SocketAddr = "192.0.2.1:54000".parse().unwrap();
+            let repeated: Vec<_> = (0..8u16)
+                .map(|i| {
+                    let mut buffer = query(
+                        b"\x03www\x07example\x04test\x00",
+                        RecordType::A as u16,
+                        1,
+                    );
+                    buffer[..2].copy_from_slice(&(500 + i).to_be_bytes());
+                    let len = buffer.len();
+                    UdpInbound {
+                        buffer,
+                        len,
+                        peer,
+                        target: UdpPacketTarget::Socket(peer),
+                    }
+                })
+                .collect();
+            let expected: Vec<_> = repeated
+                .iter()
+                .map(|packet| {
+                    handle_udp_datagram_with_prepared_hook(
+                        packet.payload(),
+                        packet.peer,
+                        &zones,
+                        &serial,
+                        &|| {},
+                    )
+                    .unwrap()
+                    .response
+                    .into_owned()
+                })
+                .collect();
+            let actual = crate::udp::test_staged_udp_batch(&repeated, &zones, &staged);
+            assert_eq!(actual.len(), expected.len());
+            for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                assert_eq!(actual.response.owned().unwrap(), expected);
+                assert_eq!(actual.response.owned().unwrap()[..2], (500 + i as u16).to_be_bytes());
+            }
+        }
+    }
+}
 const LINUX_ERRNO_EBUSY: i32 = 16;
 #[cfg(target_os = "linux")]
 const LINUX_ERRNO_ENOBUFS: i32 = 105;
@@ -51,14 +302,17 @@ fn udp_unsigned_query_still_validates_question_and_trailing_bytes() {
     let mut truncated = valid.clone();
     truncated.pop();
     for packet in [trailing, truncated] {
-        let response = handle_udp_datagram_with_prepared_hook(&packet, peer, &zones, &settings, &|| {})
-            .expect("malformed unsigned query gets FORMERR")
-            .response;
+        let response =
+            handle_udp_datagram_with_prepared_hook(&packet, peer, &zones, &settings, &|| {})
+                .expect("malformed unsigned query gets FORMERR")
+                .response
+                .into_owned();
         assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
     }
     let response = handle_udp_datagram_with_prepared_hook(&valid, peer, &zones, &settings, &|| {})
         .expect("ordinary query still works")
-        .response;
+        .response
+        .into_owned();
     assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
 }
 
@@ -68,22 +322,33 @@ fn lenient_plain_udp_query_keeps_cookie_rotation_metrics_and_answer_bytes() {
     let metrics = RuntimeMetrics::new();
     let mut settings = udp_settings_for_test(metrics.clone(), RrlConfig::default());
     settings.dns_cookie_secrets = DnsCookieSecretStore::new_at(
-        [7; 16], None, Some(std::time::Duration::from_secs(60)),
+        [7; 16],
+        None,
+        Some(std::time::Duration::from_secs(60)),
         std::time::Instant::now() - std::time::Duration::from_secs(120),
     );
     let peer: SocketAddr = "192.0.2.1:53000".parse().unwrap();
     let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
     let response = handle_udp_datagram_with_prepared_hook(&packet, peer, &zones, &settings, &|| {})
-        .expect("plain query response").response;
+        .expect("plain query response")
+        .response
+        .into_owned();
     let secrets = settings.dns_cookie_secrets.current_with_generator(|| {
         panic!("plain query must already have handled the due rotation")
     });
     let mut options = borondns_core::dns::AnswerOptions::udp(settings.max_udp_payload);
     options.dns_cookie = crate::dns_cookie_context(peer.ip(), &secrets, settings.dns_cookie);
     let expected = borondns_core::dns::answer_message_with_notify_hooks(
-        &packet, &zones, options, |_, _| false, |_, _, _| false,
+        &packet,
+        &zones,
+        options,
+        |_, _| false,
+        |_, _, _| false,
     );
-    assert_eq!(borondns_core::dns::DatagramAction::Respond(response), expected);
+    assert_eq!(
+        borondns_core::dns::DatagramAction::Respond(response),
+        expected
+    );
     assert_eq!(metrics.snapshot().dns_cookie_no_cookie, 1);
 }
 
@@ -327,9 +592,7 @@ fn snapshot_refresh_accepts_retained_published_zone_for_metrics() {
     metrics.record_zone_query_response_rcode(&token, 0);
 
     assert_eq!(
-        metrics
-            .zone_query_counts()
-            .get("refreshed.example."),
+        metrics.zone_query_counts().get("refreshed.example."),
         Some(&1)
     );
     assert_eq!(
@@ -385,16 +648,21 @@ fn catalog_metric_pruning_rejects_inflight_records_from_removed_generation() {
     metrics.record_zone_query_response_rcode(&removed_token, 3);
 
     assert!(!metrics.zone_query_counts().contains_key("removed.example."));
-    assert_eq!(metrics.zone_query_counts().get("current.example."), Some(&2));
+    assert_eq!(
+        metrics.zone_query_counts().get("current.example."),
+        Some(&2)
+    );
     assert_eq!(
         metrics
             .zone_query_rcode_counts()
             .get(&("current.example.".to_owned(), 0)),
         Some(&1)
     );
-    assert!(!metrics
-        .zone_query_rcode_counts()
-        .contains_key(&("removed.example.".to_owned(), 3)));
+    assert!(
+        !metrics
+            .zone_query_rcode_counts()
+            .contains_key(&("removed.example.".to_owned(), 3))
+    );
 
     zones.insert_snapshot(ZoneSnapshot::active(removed.clone(), Some(2), Vec::new()));
     let replacement_incarnation = zones
@@ -414,10 +682,7 @@ fn catalog_metric_pruning_rejects_inflight_records_from_removed_generation() {
     metrics.record_zone_query_response_rcode(&replacement_token, 0);
 
     let rcodes = metrics.zone_query_rcode_counts();
-    assert_eq!(
-        rcodes.get(&("removed.example.".to_owned(), 0)),
-        Some(&1)
-    );
+    assert_eq!(rcodes.get(&("removed.example.".to_owned(), 0)), Some(&1));
     assert!(!rcodes.contains_key(&("removed.example.".to_owned(), 2)));
 }
 
@@ -1189,20 +1454,12 @@ fn metrics_and_rrl_recency_scaling_benchmark() {
         };
         for index in 0..cardinality {
             let source = IpAddr::V6(std::net::Ipv6Addr::from(index as u128));
-            metrics.record_dns_cookie_status(
-                DnsCookieRequestStatus::NoCookie,
-                source,
-                settings,
-            );
+            metrics.record_dns_cookie_status(DnsCookieRequestStatus::NoCookie, source, settings);
         }
         let started = std::time::Instant::now();
         for index in 0..TOUCHES {
             let source = IpAddr::V6(std::net::Ipv6Addr::from((index % cardinality) as u128));
-            metrics.record_dns_cookie_status(
-                DnsCookieRequestStatus::NoCookie,
-                source,
-                settings,
-            );
+            metrics.record_dns_cookie_status(DnsCookieRequestStatus::NoCookie, source, settings);
         }
         let cookie_ns_per_touch = started.elapsed().as_nanos() / TOUCHES as u128;
         eprintln!(
@@ -1593,7 +1850,10 @@ async fn udp_query_records_cname_chain_limit_metric() {
 #[test]
 fn udp_allocation_paths_defensively_bound_invalid_internal_batch_sizes() {
     assert_eq!(bounded_udp_batch_size(0), 1);
-    assert_eq!(bounded_udp_batch_size(MAX_UDP_BATCH_SIZE), MAX_UDP_BATCH_SIZE);
+    assert_eq!(
+        bounded_udp_batch_size(MAX_UDP_BATCH_SIZE),
+        MAX_UDP_BATCH_SIZE
+    );
     assert_eq!(
         bounded_udp_batch_size(MAX_UDP_BATCH_SIZE.saturating_add(1)),
         MAX_UDP_BATCH_SIZE
@@ -1725,11 +1985,7 @@ impl ControlledUdpPacketIo {
         }
     }
 
-    fn with_partial_af_xdp_send_error(
-        mut self,
-        queued: usize,
-        kind: std::io::ErrorKind,
-    ) -> Self {
+    fn with_partial_af_xdp_send_error(mut self, queued: usize, kind: std::io::ErrorKind) -> Self {
         self.is_af_xdp = true;
         self.send_error = Some((queued, ControlledUdpIoError::Kind(kind)));
         self
@@ -1749,11 +2005,7 @@ impl ControlledUdpPacketIo {
         self
     }
 
-    fn with_partial_std_send_error(
-        mut self,
-        queued: usize,
-        kind: std::io::ErrorKind,
-    ) -> Self {
+    fn with_partial_std_send_error(mut self, queued: usize, kind: std::io::ErrorKind) -> Self {
         self.send_error = Some((queued, ControlledUdpIoError::Kind(kind)));
         self
     }
@@ -1818,10 +2070,11 @@ impl PacketIo for ControlledUdpPacketIo {
         if outbound.is_empty() {
             return Ok(0);
         }
-        self.captured_responses
-            .lock()
-            .unwrap()
-            .extend(outbound.iter().map(|packet| packet.response.clone()));
+        self.captured_responses.lock().unwrap().extend(
+            outbound
+                .iter()
+                .map(|packet| packet.response.clone().into_owned()),
+        );
         self.send_started.notify_one();
         self.release_send.notified().await;
         let queued = self
@@ -1861,9 +2114,12 @@ fn af_xdp_ignores_legacy_fixed_response_environment() {
                 .env("BORONDNS_BENCH_AF_XDP_FIXED_RESPONSE", value)
                 .output()
                 .unwrap();
-            assert!(output.status.success(), "legacy value {value:?}: {}{}",
+            assert!(
+                output.status.success(),
+                "legacy value {value:?}: {}{}",
                 String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr));
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         return;
     }
@@ -1885,27 +2141,41 @@ fn af_xdp_ignores_legacy_fixed_response_environment() {
                 packet_io,
                 active_example_zone(),
                 udp_settings_for_test(RuntimeMetrics::new(), RrlConfig::default()),
-                0, 1, admission.clone(),
+                0,
+                1,
+                admission.clone(),
                 async move { shutdown_rx.await.unwrap() },
             ));
             recv_started.notified().await;
             release_recv.notify_one();
             send_started.notified().await;
             admission.store(false, Ordering::Release);
-            shutdown_tx.send(tokio::time::Instant::now() + Duration::from_secs(1)).unwrap();
+            shutdown_tx
+                .send(tokio::time::Instant::now() + Duration::from_secs(1))
+                .unwrap();
             release_send.notify_one();
-            tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
             let responses = captured.lock().unwrap();
             assert_eq!(responses.len(), 1);
-            assert!(responses[0].len() >= 12, "query handler must emit a real DNS response, not a canned-frame marker");
+            assert!(
+                responses[0].len() >= 12,
+                "query handler must emit a real DNS response, not a canned-frame marker"
+            );
             assert_eq!(u16::from_be_bytes([responses[0][6], responses[0][7]]), 1);
             assert_eq!(responses[0][3] & 0x0f, 0);
         });
 }
 
 async fn assert_pending_af_xdp_send_recovery_preserves_provenance(error: ControlledUdpIoError) {
-    let packet_io = ControlledUdpPacketIo::with_inbound_count(1)
-        .with_recovering_af_xdp_send_error(1, error, [error, error]);
+    let packet_io = ControlledUdpPacketIo::with_inbound_count(1).with_recovering_af_xdp_send_error(
+        1,
+        error,
+        [error, error],
+    );
     let recv_started = packet_io.recv_started.clone();
     let release_recv = packet_io.release_recv.clone();
     let send_started = packet_io.send_started.clone();
@@ -1946,12 +2216,9 @@ async fn assert_pending_af_xdp_send_recovery_preserves_provenance(error: Control
         release_pending_send.notify_one();
     }
 
-    tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        recv_started.notified(),
-    )
-    .await
-    .expect("worker returns to receive after the pending TX wake recovers");
+    tokio::time::timeout(std::time::Duration::from_secs(1), recv_started.notified())
+        .await
+        .expect("worker returns to receive after the pending TX wake recovers");
     admission_open.store(false, Ordering::Release);
     shutdown_tx
         .send(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
@@ -2175,14 +2442,14 @@ fn dedicated_udp_partial_fatal_send_records_successes_exactly_once() {
     };
     let outbound = vec![
         UdpOutbound {
-            response: accepted_response.clone(),
+            response: accepted_response.clone().into(),
             target: UdpPacketTarget::Socket(receiver_addr),
             query_metrics: Some(query_metrics.clone()),
             #[cfg(feature = "af-xdp")]
             benchmark_fixed_response: false,
         },
         UdpOutbound {
-            response: positive_query_response(),
+            response: positive_query_response().into(),
             target: UdpPacketTarget::Socket(SocketAddr::from(([127, 0, 0, 1], 0))),
             query_metrics: Some(query_metrics),
             #[cfg(feature = "af-xdp")]
@@ -2243,14 +2510,14 @@ fn dedicated_udp_resource_pressure_records_error_and_backoffs_without_double_cou
     let receiver_addr = receiver.local_addr().expect("receiver address");
     let outbound = vec![
         UdpOutbound {
-            response: b"accepted".to_vec(),
+            response: b"accepted".to_vec().into(),
             target: UdpPacketTarget::Socket(receiver_addr),
             query_metrics: None,
             #[cfg(feature = "af-xdp")]
             benchmark_fixed_response: false,
         },
         UdpOutbound {
-            response: b"resource-pressure".to_vec(),
+            response: b"resource-pressure".to_vec().into(),
             target: UdpPacketTarget::Socket(receiver_addr),
             query_metrics: None,
             #[cfg(feature = "af-xdp")]
@@ -2319,17 +2586,14 @@ fn dedicated_udp_wouldblock_retry_exhaustion_surfaces_outer_send_error_without_b
     let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind receiver");
     let receiver_addr = receiver.local_addr().expect("receiver address");
     let outbound = vec![UdpOutbound {
-        response: b"wouldblock".to_vec(),
+        response: b"wouldblock".to_vec().into(),
         target: UdpPacketTarget::Socket(receiver_addr),
         query_metrics: None,
         #[cfg(feature = "af-xdp")]
         benchmark_fixed_response: false,
     }];
     let mut packet_io = super::std_udp_mmsg::StdUdpMmsg::new(4);
-    packet_io.inject_sendmmsg_outcomes_for_test(std::iter::repeat_n(
-        Err(LINUX_ERRNO_EAGAIN),
-        256,
-    ));
+    packet_io.inject_sendmmsg_outcomes_for_test(std::iter::repeat_n(Err(LINUX_ERRNO_EAGAIN), 256));
     let metrics = RuntimeMetrics::new();
     let mut outer_backoffs = Vec::new();
 
@@ -2775,6 +3039,8 @@ async fn std_udp_reuseport_binds_multiple_workers_to_one_effective_port() {
             )),
             #[cfg(feature = "af-xdp")]
             BoundUdpListener::AfXdp { .. } => panic!("standard backend must not bind AF_XDP"),
+            #[cfg(feature = "experimental-xdp-group-loop")]
+            BoundUdpListener::AfXdpGroup { .. } => panic!("standard backend must not bind AF_XDP groups"),
             #[cfg(feature = "af-xdp")]
             BoundUdpListener::AfXdpKernelFallback { .. } => {
                 panic!("standard backend must not bind an AF_XDP kernel fallback")
@@ -3122,7 +3388,10 @@ allow_non_rfc5936_cold_start = true
 
     let first = handle_udp_datagram_with_prepared_hook(&invalid, peer, &zones, &settings, &|| {})
         .expect("initial burst response");
-    assert_eq!(response_category(&first.response), Some(RrlCategory::Error));
+    assert_eq!(
+        response_category(first.response.owned().unwrap()),
+        Some(RrlCategory::Error)
+    );
     assert!(
         handle_udp_datagram_with_prepared_hook(&invalid, peer, &zones, &settings, &|| {}).is_none()
     );
@@ -3158,8 +3427,7 @@ allow_non_rfc5936_cold_start = true
     )
     .unwrap();
     let key = TsigKey::from_base64("query-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
-    let mut unsigned_query =
-        query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    let mut unsigned_query = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
     append_opt(&mut unsigned_query, 512, 0, &edns_option(12, &[]));
     let signed_query = key
         .sign_request(
@@ -3193,7 +3461,10 @@ allow_non_rfc5936_cold_start = true
         .expect("un-padded TSIG response verifies");
     let header = Header::parse(&verified.message).unwrap();
     assert_eq!(header.flags & 0x0200, 0);
-    assert_eq!(response_rcode(&verified.message, &header), Rcode::NoError as u16);
+    assert_eq!(
+        response_rcode(&verified.message, &header),
+        Rcode::NoError as u16
+    );
     assert_eq!(header.qdcount, 1);
     assert_eq!(header.ancount, 1);
     assert_eq!(header.nscount, 0);

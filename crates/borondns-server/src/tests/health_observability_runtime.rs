@@ -1747,6 +1747,47 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
     let gzip_disallowed_body = std::str::from_utf8(gzip_disallowed_body).unwrap();
     assert!(gzip_disallowed_body.contains("borondns_zones_total 2"));
 
+    let global = http_request(addr, "GET", "/metrics?scope=global").await;
+    assert!(global.starts_with("HTTP/1.1 200 OK"));
+    assert!(global.contains("borondns_zones_total 2"));
+    assert!(global.contains("borondns_zones_active 1"));
+    assert!(global.contains("borondns_queries_received_total 2"));
+    assert!(global.contains("borondns_transfer_memory_limit_bytes 67108864"));
+    assert!(global.contains("borondns_af_xdp_"));
+    assert!(!global.contains("zone=\""));
+    assert!(!global.contains("borondns_catalog_member_info"));
+    assert!(!global.contains("borondns_zone_state"));
+    assert!(!global.contains("borondns_zone_shape_"));
+    assert!(!global.contains("borondns_zone_last_success_timestamp_seconds"));
+    // Every global sample must retain its name, labels and value from the full view.
+    let (_, global_body) = split_http_response(global.as_bytes());
+    for line in std::str::from_utf8(global_body).unwrap().lines() {
+        if !line.is_empty() && !line.starts_with('#') {
+            assert!(metrics.lines().any(|full| full == line), "{line}");
+        }
+    }
+    let explicit_all = http_request(addr, "GET", "/metrics?scope=all").await;
+    assert!(explicit_all.starts_with("HTTP/1.1 200 OK"));
+    assert!(explicit_all.contains("borondns_zone_state{zone=\"example.test.\""));
+    for query in ["scope=typo", "scope=", "scope=global&scope=all"] {
+        let invalid = http_request(addr, "GET", &format!("/metrics?{query}")).await;
+        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request"));
+    }
+    let compressed_global = http_request_with_headers(
+        addr,
+        "GET",
+        "/metrics?scope=global",
+        &[("Accept-Encoding", "gzip")],
+    )
+    .await;
+    let (headers, bytes) = split_http_response(&compressed_global);
+    assert!(headers.contains("content-encoding: gzip"));
+    let mut decoder = flate2::read::GzDecoder::new(bytes);
+    let mut decoded = String::new();
+    std::io::Read::read_to_string(&mut decoder, &mut decoded).unwrap();
+    assert!(decoded.contains("borondns_queries_received_total 2"));
+    assert!(!decoded.contains("zone=\""));
+
     let missing = http_request(addr, "GET", "/missing").await;
     assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
     assert!(missing.ends_with(r#"{"error":"not_found","path":"/missing"}"#));
@@ -1764,6 +1805,47 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
         }
     }
 
+    server.abort();
+}
+
+#[tokio::test]
+async fn global_metrics_size_does_not_scale_with_zone_population() {
+    let zones = ZoneStore::new();
+    let state = health_state(zones.clone());
+    let catalog_memberships = state.catalog_manager.memberships_by_catalog.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+    let empty = http_request(addr, "GET", "/metrics?scope=global").await;
+    assert!(empty.starts_with("HTTP/1.1 200 OK"));
+
+    let mut members = HashMap::new();
+    for index in 0..128 {
+        let origin = DomainName::from_absolute_str(&format!("zone{index}.example.")).unwrap();
+        members.insert(origin.to_string(), origin.clone());
+        zones.insert_snapshot(ZoneSnapshot::active(origin, Some(1), Vec::new()));
+    }
+    catalog_memberships
+        .lock()
+        .unwrap()
+        .insert("catalog.example.".to_owned(), members);
+
+    let populated = http_request(addr, "GET", "/metrics?scope=global").await;
+    assert!(populated.starts_with("HTTP/1.1 200 OK"));
+    let (_, empty_body) = split_http_response(empty.as_bytes());
+    let (_, populated_body) = split_http_response(populated.as_bytes());
+    let populated_body = std::str::from_utf8(populated_body).unwrap();
+    assert!(populated_body.contains("borondns_zones_total 128\n"));
+    assert!(populated_body.contains("borondns_zones_active 128\n"));
+    assert_eq!(
+        populated_body
+            .replace("borondns_zones_total 128\n", "borondns_zones_total 0\n")
+            .replace("borondns_zones_active 128\n", "borondns_zones_active 0\n"),
+        std::str::from_utf8(empty_body).unwrap()
+    );
+    let full = http_request(addr, "GET", "/metrics").await;
+    assert!(full.contains("catalog_zone=\"catalog.example.\""));
+    assert!(full.contains("zone=\"zone127.example.\""));
     server.abort();
 }
 
@@ -1810,7 +1892,7 @@ async fn metrics_endpoint_rate_limits_per_source_without_limiting_health() {
         std::future::pending(),
     ));
 
-    let first = http_request(addr, "GET", "/metrics").await;
+    let first = http_request(addr, "GET", "/metrics?scope=global").await;
     assert!(first.starts_with("HTTP/1.1 200 OK"));
 
     let limited = http_request(addr, "GET", "/metrics").await;
